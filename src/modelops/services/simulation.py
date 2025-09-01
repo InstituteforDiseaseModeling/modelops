@@ -3,6 +3,7 @@
 from modelops_contracts import SimulationService, SimReturn, FutureLike
 from typing import Any, List
 import importlib
+from .ipc import to_ipc_tables, from_ipc_tables, validate_sim_return
 
 
 class LocalSimulationService:
@@ -31,8 +32,9 @@ class LocalSimulationService:
         mod = importlib.import_module(module_name)
         func = getattr(mod, func_name)
         
-        # For local execution, directly return the result
-        return func(params, seed)
+        # Call simulation and convert to IPC format
+        result = func(params, seed)
+        return validate_sim_return(result)
     
     def gather(self, futures: List[Any]) -> List[SimReturn]:
         """Gather results from submitted simulations.
@@ -84,7 +86,7 @@ class DaskSimulationService:
         if not workspace:
             raise ValueError(f"Workspace '{workspace_name}' not found. Run 'mops workspace up' first.")
         
-        scheduler_address = workspace.get("scheduler_address")
+        scheduler_address = workspace.scheduler_address
         if not scheduler_address:
             raise ValueError(f"Workspace '{workspace_name}' has no scheduler address")
             
@@ -135,10 +137,12 @@ def _worker_run_sim(fn_ref: str, params: dict, seed: int, bundle_ref: str) -> Si
         bundle_ref: Bundle reference (MVP: ignored, assumes pre-installed)
         
     Returns:
-        Simulation result as SimReturn (dict of named tables)
+        Simulation result as SimReturn (dict of named tables as IPC bytes)
     """
     # TODO: In future, handle bundle loading here
     # For MVP, assume simulation code is pre-installed on workers
+    
+    from .ipc import validate_sim_return
     
     module_name, func_name = fn_ref.split(":")
     mod = importlib.import_module(module_name)
@@ -147,8 +151,5 @@ def _worker_run_sim(fn_ref: str, params: dict, seed: int, bundle_ref: str) -> Si
     # Call the simulation function
     result = func(params, seed)
     
-    # Ensure result conforms to SimReturn type
-    if not isinstance(result, dict):
-        raise TypeError(f"Simulation must return dict, got {type(result)}")
-    
-    return result
+    # Convert to IPC format per contract
+    return validate_sim_return(result)

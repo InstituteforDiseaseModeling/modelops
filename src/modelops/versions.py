@@ -34,10 +34,15 @@ def check_compatibility():
     try:
         import dask
         if dask.__version__ != DASK_VERSION:
-            messages.append(f"Dask {dask.__version__} != required {DASK_VERSION}")
+            messages.append(
+                f"Dask {dask.__version__} != required {DASK_VERSION}. "
+                f"Run 'uv sync' or build images with Makefile to fix version mismatch."
+            )
             is_compatible = False
     except ImportError:
-        messages.append("Dask not installed")
+        messages.append(
+            f"Dask not installed. Run 'uv sync' to install required version {DASK_VERSION}"
+        )
         is_compatible = False
     
     return is_compatible, messages
