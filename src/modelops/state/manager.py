@@ -218,6 +218,52 @@ class StateManager:
             return True
         return False
     
+    # Binding operations (for cross-plane communication)
+    
+    def save_binding(self, binding_type: str, data: Dict[str, Any]):
+        """Save a binding (ClusterBinding, DaskBinding, etc).
+        
+        Args:
+            binding_type: Type of binding (e.g., 'infra', 'dask', 'postgres')
+            data: Binding data dictionary
+        """
+        state = self._read()
+        state.setdefault("bindings", {})[binding_type] = {
+            **data,
+            "created_at": state.get("bindings", {}).get(binding_type, {}).get("created_at", datetime.now().isoformat()),
+            "updated_at": datetime.now().isoformat()
+        }
+        self._write(state)
+    
+    def get_binding(self, binding_type: str) -> Optional[Dict[str, Any]]:
+        """Get a binding by type.
+        
+        Args:
+            binding_type: Type of binding (e.g., 'infra', 'dask', 'postgres')
+            
+        Returns:
+            Binding data or None if not found
+        """
+        state = self._read()
+        return state.get("bindings", {}).get(binding_type)
+    
+    def remove_binding(self, binding_type: str) -> bool:
+        """Remove a binding from state.
+        
+        Args:
+            binding_type: Type of binding to remove
+            
+        Returns:
+            True if binding was removed, False if not found
+        """
+        state = self._read()
+        bindings = state.get("bindings", {})
+        if binding_type in bindings:
+            del bindings[binding_type]
+            self._write(state)
+            return True
+        return False
+    
     # Utility methods
     
     def clear_all(self):

@@ -9,6 +9,8 @@ dependencies = [
     "rich>=14.1.0",
     "typer>=0.16.1",
     "pyyaml>=6.0",
+    "polars>=0.20.0",
+    "pyarrow>=14.0.0",
     "dask[distributed]==2024.8.0",
     "pulumi>=3.100.0",
     "pulumi-kubernetes>=4.5.0",

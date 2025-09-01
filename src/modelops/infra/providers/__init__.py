@@ -1,6 +1,6 @@
-"""Provider abstractions for cloud infrastructure."""
+"""Infrastructure providers for ModelOps."""
 
-from .base import WorkspaceProvider
-from .registry import ProviderRegistry
+# Azure bootstrap is imported directly where needed
+# No registry pattern needed for MVP
 
-__all__ = ["WorkspaceProvider", "ProviderRegistry"]
+__all__ = []

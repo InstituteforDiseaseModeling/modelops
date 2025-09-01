@@ -2,7 +2,32 @@
 
 from dataclasses import dataclass, asdict
 from typing import Optional, Dict, Any
-from ..infra.workspace import WorkspaceOutputs
+
+# WorkspaceOutputs moved inline since workspace.py is for Stage 2
+@dataclass
+class WorkspaceOutputs:
+    """Outputs from a provisioned workspace."""
+    name: str
+    namespace: str
+    scheduler_address: str
+    dashboard_hint: str
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "namespace": self.namespace,
+            "scheduler_address": self.scheduler_address,
+            "dashboard_hint": self.dashboard_hint
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkspaceOutputs":
+        return cls(
+            name=data.get("name", ""),
+            namespace=data.get("namespace", ""),
+            scheduler_address=data.get("scheduler_address", ""),
+            dashboard_hint=data.get("dashboard_hint", "")
+        )
 
 
 @dataclass

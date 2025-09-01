@@ -296,6 +296,152 @@ GPUs, HPA, managed Postgres, Key Vault CSI, private endpoints, Prometheus/Grafan
 
 ---
 
+## 1.5) Abstraction Stack & Typed Bindings
+
+The system follows a strict three-plane architecture with typed bindings flowing between layers:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         INFRA PLANE                                 │
+│                  (Azure-only, Pulumi azure-native)                  │
+│                                                                      │
+│  Creates: Resource Group → ACR (optional) → AKS cluster            │
+│           - System node pool (always-on)                           │
+│           - Workload node pool (labeled modelops.io/role=cpu)      │
+│                                                                      │
+│  Command: mops infra up                                            │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │   ClusterBinding     │
+                    │  ─────────────────   │
+                    │  kubeconfig: str     │
+                    │  acr_login_server?   │
+                    └──────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        WORKSPACE PLANE                              │
+│                  (Kubernetes-only, Pulumi kubernetes)               │
+│                                                                      │
+│  Creates: Namespace → Dask Scheduler → Dask Workers                │
+│           - Uses ClusterBinding.kubeconfig for k8s.Provider        │
+│           - No Azure SDK calls                                     │
+│                                                                      │
+│  Command: mops workspace up                                        │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │    DaskBinding       │
+                    │  ─────────────────   │
+                    │  scheduler_addr: str │
+                    │  dashboard_url: str  │
+                    │  namespace: str      │
+                    └──────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        ADAPTIVE PLANE                               │
+│                  (Kubernetes-only, Pulumi kubernetes)               │
+│                                                                      │
+│  Creates: Per-run Namespace → Postgres? → Adaptive Workers         │
+│           - Uses DaskBinding.scheduler_addr for connection         │
+│           - Provisions PostgresBinding if replicas > 1            │
+│                                                                      │
+│  Command: mops adaptive up                                         │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │    Run Results       │
+                    │  ─────────────────   │
+                    │  trials_completed    │
+                    │  best_loss          │
+                    └──────────────────────┘
+```
+
+### Typed Binding Definitions
+
+```python
+# Infra → Workspace
+class ClusterBinding(BaseModel):
+    """Minimal contract from infra to workspace plane."""
+    kubeconfig: str                      # Secret - the ONLY required field
+    acr_login_server: Optional[str]      # If ACR enabled
+    cluster_name: Optional[str]          # Metadata only
+
+# Workspace → Adaptive  
+class DaskBinding(BaseModel):
+    """Connection info for Dask cluster."""
+    scheduler_addr: str  # tcp://dask-scheduler.modelops-dev:8786
+    dashboard_url: str   # http://dask-scheduler.modelops-dev:8787
+    namespace: str       # Where Dask lives
+
+# Adaptive internal (when replicas > 1)
+class PostgresBinding(BaseModel):
+    """Connection info for central store."""
+    secret_name: str     # K8s secret with PG* env vars
+    namespace: str       # Where Postgres lives
+```
+
+### Command Flow with Bindings
+
+```bash
+# Step 1: Create Azure infrastructure from zero
+$ mops infra up --config ~/.modelops/providers/azure.yaml
+✓ Created AKS cluster: modelops-aks
+→ Output: ClusterBinding(kubeconfig="<base64>...")
+
+# Step 2: Deploy Dask using only the kubeconfig
+$ mops workspace up -f workspace.yaml
+✓ Created workspace: modelops-dev
+→ Output: DaskBinding(scheduler_addr="tcp://dask-scheduler.modelops-dev:8786")
+
+# Step 3: Run optimization using Dask connection
+$ mops adaptive up -f adaptive.yaml  
+✓ Started run: modelops-run-7x9k2
+→ Uses: DaskBinding + creates PostgresBinding internally
+```
+
+### Why This Architecture Works
+
+1. **Clear Responsibility**: 
+   - Infra plane: Azure concerns (VM sizes, AKS versions, role assignments)
+   - Workspace plane: Kubernetes Dask deployment only
+   - Adaptive plane: Kubernetes optimization workers only
+
+2. **Minimal Contract**: 
+   - Workspace needs ONLY `kubeconfig` string from infra
+   - Adaptive needs ONLY `scheduler_addr` from workspace
+   - No plane knows internal details of planes below
+
+3. **State Isolation**: 
+   - Three separate Pulumi stacks: `modelops-infra`, `modelops-workspace`, `modelops-adaptive`
+   - Can destroy adaptive without touching workspace
+   - Can destroy workspace without touching Azure infra
+
+4. **Swappable Infrastructure**:
+   ```python
+   # Skip Azure entirely - use existing cluster
+   binding = ClusterBinding(
+       kubeconfig=Path("~/.kube/config").read_text()
+   )
+   # workspace up works unchanged!
+   ```
+
+5. **Testability**:
+   ```python
+   # Mock any plane for testing
+   mock_cluster = ClusterBinding(kubeconfig=KIND_KUBECONFIG)
+   mock_dask = DaskBinding(scheduler_addr="tcp://localhost:8786", ...)
+   ```
+
+This means the workspace and adaptive planes are **built on but not entangled with** Azure. Only the infra plane knows about Azure; everything above speaks pure Kubernetes.
+
+---
+
 ## 2) Implementation Stages
 
 ### Stage 1: Local/Dask Runtime (Start Here)
