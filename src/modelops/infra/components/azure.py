@@ -4,17 +4,19 @@ Creates all Azure resources from zero for ModelOps deployment.
 """
 
 import base64
+import os
+import re
 import pulumi
 import pulumi_azure_native as azure
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
 
-class AzureModelOpsInfra(pulumi.ComponentResource):
-    """Encapsulates all Azure infrastructure from zero.
+class ModelOpsCluster(pulumi.ComponentResource):
+    """Stack 1: Infrastructure plane - creates Azure cloud resources.
     
     Creates Resource Group, optional ACR, and AKS cluster with labeled node pools.
-    Exports typed outputs for downstream consumption via ClusterBinding.
+    Exports typed outputs for downstream consumption via StackReference.
     """
     
     def __init__(self, name: str, config: Dict[str, Any], 
@@ -26,25 +28,31 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
             config: Provider configuration dictionary from YAML
             opts: Optional Pulumi resource options
         """
-        super().__init__("modelops:infra:azure", name, None, opts)
+        super().__init__("modelops:infra:cluster", name, None, opts)
         
         # Extract configuration with defaults
         subscription_id = config["subscription_id"]
         location = config.get("location", "eastus2")
-        rg_name = config.get("resource_group", "modelops-rg")
+        
+        # Get username for per-user resource group
+        username = self._get_username(config)
+        base_rg = config.get("resource_group", "modelops-rg")
+        rg_name = f"{base_rg}-{username}"
+        
         aks_config = config.get("aks", {})
         acr_config = config.get("acr")
         ssh_config = config.get("ssh", {})
         
-        # Create Resource Group
+        # Create Resource Group with per-user naming
         rg = azure.resources.ResourceGroup(
             f"{name}-rg",
-            resource_group_name=rg_name,
+            resource_group_name=rg_name,  # Per-user RG name
             location=location,
             tags={
                 "managed-by": "modelops",
                 "project": "modelops",
-                "component": name
+                "component": name,
+                "user": username
             },
             opts=pulumi.ResourceOptions(parent=self)
         )
@@ -60,15 +68,18 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
         
         # Create AKS cluster with node pools
         aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey)
+        cluster_name = aks_config.get("name", "modelops-aks")
         
         # Setup ACR pull permissions if ACR exists
         if acr_config and acr:
             self._setup_acr_pull(aks, acr, subscription_id)
         
-        # Get kubeconfig
+        # Get kubeconfig using the *actual* cluster name emitted by the resource
+        # This handles auto-naming correctly
         creds = azure.containerservice.list_managed_cluster_user_credentials_output(
             resource_group_name=rg.name,
-            resource_name=aks.name
+            resource_name=aks.name,  # Use the actual ARM name from the resource
+            opts=pulumi.InvokeOptions(parent=self)
         )
         
         kubeconfig = creds.kubeconfigs[0].value.apply(
@@ -77,25 +88,27 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
         
         # Set component outputs
         self.kubeconfig = kubeconfig
-        self.cluster_name = aks.name
+        self.cluster_name = aks.name  # Use the actual resource name
         self.resource_group = rg.name
         self.location = pulumi.Output.from_input(location)
         self.acr_login_server = acr_login_server if acr_login_server else None
         
-        # Register outputs for state
+        # Register outputs for StackReference access
         self.register_outputs({
             "kubeconfig": pulumi.Output.secret(self.kubeconfig),
             "cluster_name": self.cluster_name,
             "resource_group": self.resource_group,
             "location": self.location,
-            "acr_login_server": self.acr_login_server
+            "acr_login_server": self.acr_login_server,
+            "provider": pulumi.Output.from_input("azure")
         })
     
     def _create_acr(self, name: str, acr_config: Dict[str, Any], 
                     rg: azure.resources.ResourceGroup, location: str) -> azure.containerregistry.Registry:
         """Create Azure Container Registry."""
         return azure.containerregistry.Registry(
-            f"{name}-acr",
+            f"{name}-acr",  # Pulumi resource name
+            # registry_name is the Azure resource name
             registry_name=acr_config["name"],
             resource_group_name=rg.name,
             location=location,
@@ -118,9 +131,10 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
             if key_path.exists():
                 return key_path.read_text().strip()
         
-        # Fallback to ephemeral key for MVP
+        # Generate a valid ephemeral SSH key for MVP
         pulumi.log.warn("Using ephemeral SSH key. Provide ssh.public_key or ssh.public_key_path in production.")
-        return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDTnGnX6pPRnxJ+7k7M3Bgz modelops-ephemeral@azure"
+        # This is a valid but insecure SSH key for testing only
+        return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDPaTXgcq3a8qEWVN9F4kPTXogk0cKAQjWLoyaGtOnostXCoL3pMPmsCyEh2H8xGr7kvTaLQuKcfa5+gOqE+mRwQO3OtMr7K1UoGlEO5V3rZPZLnLrOuWtrCbBVXLxBvlNfWPqRaMQT6N/06xrB2V3aF5YQtpt3zPLbMjU7miPVMvjV0pXQHCioFUDJmnFBcOT/EQlhxMKSqeMmQ+BYXQV7TT3aCrJiM6oC7Pa2h9REd5HDnZ5fwmGOXF3H0gxR8sPEEofV1tRFmacnVzk5tfoT0z0adPNDBoMD7bxs5xB5LQXdV8K9n5RYPsJc1p7Ms8pqXAQUJdGFaHOjKiGJjvPT modelops-ephemeral@azure"
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
                            location: str, aks_config: Dict[str, Any], 
@@ -132,9 +146,10 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
         # Build node pool profiles
         node_pools = self._build_node_pools(aks_config.get("node_pools", []))
         
-        return azure.containerservice.ManagedCluster(
-            f"{name}-aks",
-            resource_name=cluster_name,
+        # Create the AKS cluster
+        # First positional arg IS resource_name in Pulumi Azure Native
+        aks_resource = azure.containerservice.ManagedCluster(
+            cluster_name,  # This becomes the Azure resource name
             resource_group_name=rg.name,
             location=location,
             dns_prefix=f"{cluster_name}-dns",
@@ -165,6 +180,8 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
             },
             opts=pulumi.ResourceOptions(parent=self)
         )
+        
+        return aks_resource
     
     def _build_node_pools(self, node_pools_config: List[Dict[str, Any]]) -> List:
         """Build AKS node pool profiles from configuration."""
@@ -225,6 +242,32 @@ class AzureModelOpsInfra(pulumi.ComponentResource):
             profiles.append(profile)
         
         return profiles
+    
+    def _get_username(self, config: Dict[str, Any]) -> str:
+        """Get username for per-user resource group.
+        
+        Priority: config > environment > error
+        Sanitizes username for Azure resource group naming requirements.
+        """
+        # Check config first
+        if config.get("username"):
+            username = config["username"]
+        else:
+            # Try environment variables
+            import os
+            username = os.environ.get("USER") or os.environ.get("USERNAME")
+            if not username:
+                raise ValueError(
+                    "Username required for per-user resource groups. "
+                    "Set 'username' in config or USER environment variable"
+                )
+        
+        # Sanitize for Azure RG naming (alphanumeric, hyphen, underscore)
+        import re
+        username = re.sub(r'[^a-zA-Z0-9-]', '', username).lower()
+        
+        # Azure RG names have max length, truncate if needed
+        return username[:20]
     
     def _setup_acr_pull(self, aks: azure.containerservice.ManagedCluster,
                        acr: azure.containerregistry.Registry,

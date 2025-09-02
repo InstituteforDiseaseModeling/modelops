@@ -1,0 +1,58 @@
+# Azure provider configuration for ModelOps
+# Usage: mops infra up --config examples/providers/azure.yaml
+
+provider: azure
+subscription_id: "024ed93f-313a-458a-840b-2022dd854d40"  # Replace with your subscription
+location: eastus2
+resource_group: modelops-rg  # Base name - will become modelops-rg-{username}
+
+# Optional: explicitly set username for per-user resource group
+# If not set, uses $USER or $USERNAME from environment
+# username: alice
+
+# AKS cluster configuration
+aks:
+  name: modelops-mvp-aks
+  kubernetes_version: "1.32"
+  node_pools:
+    # System pool - required for AKS system components
+    - name: system
+      vm_size: Standard_DS2_v2
+      count: 1
+      mode: System
+      labels:
+        modelops.io/role: system
+    
+    # CPU worker pool - for Dask workers
+    - name: cpuworkers
+      vm_size: Standard_DS3_v2
+      min: 2
+      max: 5
+      mode: User
+      labels:
+        modelops.io/role: cpu
+        modelops.io/worker-type: cpu
+      taints:
+        - "modelops.io/role=cpu:NoSchedule"
+    
+    # Optional GPU pool (commented out for MVP)
+    # - name: gpuworkers
+    #   vm_size: Standard_NC6s_v3
+    #   min: 0
+    #   max: 2
+    #   mode: User
+    #   labels:
+    #     modelops.io/role: gpu
+    #     modelops.io/worker-type: gpu
+    #   taints:
+    #     - "modelops.io/role=gpu:NoSchedule"
+
+# Optional ACR for private container images
+# Uncomment to create Azure Container Registry
+# acr:
+#   name: modelopsmvpacr  # Must be globally unique
+#   sku: Standard
+
+# Pulumi stack configuration
+stack_name: modelops-mvp
+project_name: modelops-infra

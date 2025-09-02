@@ -16,13 +16,25 @@ app = typer.Typer(
 console = Console()
 
 # Import sub-commands
-from . import infra
+from . import infra, workspace, adaptive
 
 # Register sub-commands
 app.add_typer(
     infra.app,
     name="infra",
     help="Manage infrastructure (Azure, AWS, GCP, local)"
+)
+
+app.add_typer(
+    workspace.app,
+    name="workspace",
+    help="Manage Dask workspaces"
+)
+
+app.add_typer(
+    adaptive.app,
+    name="adaptive",
+    help="Manage adaptive optimization runs"
 )
 
 

@@ -1316,7 +1316,14 @@ def main():
 subscription_id: "00000000-0000-0000-0000-000000000000"
 tenant_id: "11111111-1111-1111-1111-111111111111"
 location: "eastus2"
-resource_group: "modelops-rg"
+resource_group: "modelops-rg"  # Base name - will become modelops-rg-{username}
+
+# Per-User Resource Groups for MVP
+# - Each user gets own RG: modelops-rg-{username}
+# - Prevents conflicts on shared subscriptions
+# - Username from environment (USER/USERNAME) or config
+# - Example: modelops-rg-alice, modelops-rg-bob
+# username: alice  # Optional - defaults to $USER env var
 
 auth:
   use_azure_cli: true  # or false with service_principal below

@@ -51,12 +51,22 @@ def up(
     
     def pulumi_program():
         """Pulumi program that creates infrastructure using ComponentResource."""
+        import pulumi
+        
         if provider_type == "azure":
-            from ..infra.components.azure import AzureModelOpsInfra
+            from ..infra.components.azure import ModelOpsCluster
             # Single component handles all complexity
-            infra = AzureModelOpsInfra("modelops", provider_config)
-            # Component automatically registers outputs
-            return infra
+            cluster = ModelOpsCluster("modelops", provider_config)
+            
+            # Export outputs at the stack level for access via StackReference
+            pulumi.export("kubeconfig", cluster.kubeconfig)
+            pulumi.export("cluster_name", cluster.cluster_name)
+            pulumi.export("resource_group", cluster.resource_group)
+            pulumi.export("location", cluster.location)
+            pulumi.export("acr_login_server", cluster.acr_login_server)
+            pulumi.export("provider", pulumi.Output.from_input("azure"))
+            
+            return cluster
         else:
             raise ValueError(f"Provider '{provider_type}' not yet implemented")
     
@@ -110,7 +120,9 @@ def up(
         console.print(f"  Provider: {provider_type}")
         console.print(f"  Stack: {stack_name}")
         console.print("\nStack outputs saved. Query with:")
-        console.print(f"  pulumi stack output --stack {stack_name}")
+        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_type}")
+        console.print("\nGet kubeconfig:")
+        console.print(f"  pulumi stack output kubeconfig --show-secrets --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_type}")
         console.print("\nNext steps:")
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
@@ -128,15 +140,21 @@ def down(
         help="Provider configuration file (YAML)",
         exists=True
     ),
+    delete_rg: bool = typer.Option(
+        False,
+        "--delete-rg",
+        help="Also delete the resource group (dangerous!)"
+    ),
     yes: bool = typer.Option(
         False,
         "--yes", "-y",
         help="Skip confirmation prompt"
     )
 ):
-    """Destroy infrastructure created by 'infra up'.
+    """Destroy infrastructure, optionally keeping resource group.
     
-    WARNING: This will delete all resources including data!
+    By default, destroys AKS cluster and ACR but preserves the resource group.
+    Use --delete-rg to also delete the resource group.
     """
     # Load configuration
     with open(config) as f:
@@ -149,11 +167,16 @@ def down(
     
     # Confirm destruction
     if not yes:
-        console.print("\n[bold red]⚠️  WARNING: Destructive Operation[/bold red]")
-        console.print(f"This will destroy ALL {provider_type} infrastructure")
-        console.print("including clusters, databases, and all data.")
+        if delete_rg:
+            console.print("\n[bold red]⚠️  WARNING: Complete Destruction[/bold red]")
+            console.print(f"This will destroy the ENTIRE resource group and ALL resources")
+            console.print("This action cannot be undone!")
+        else:
+            console.print("\n[yellow]⚠️  Infrastructure Teardown[/yellow]")
+            console.print(f"This will destroy {provider_type} resources (AKS, ACR)")
+            console.print("but will preserve the resource group for future use.")
         
-        confirm = typer.confirm("\nAre you sure you want to destroy all infrastructure?")
+        confirm = typer.confirm("\nAre you sure you want to proceed?")
         if not confirm:
             console.print("[green]Destruction cancelled[/green]")
             raise typer.Exit(0)
@@ -166,14 +189,48 @@ def down(
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider_type
     
     try:
-        # Need minimal program for destroy (component will be recreated but immediately destroyed)
-        def pulumi_program():
-            if provider_type == "azure":
-                from ..infra.components.azure import AzureModelOpsInfra
-                # Create component just for destroy operation
-                return AzureModelOpsInfra("modelops", provider_config)
-            else:
-                raise ValueError(f"Provider '{provider_type}' not supported")
+        if not delete_rg and provider_type == "azure":
+            # Special handling to preserve resource group
+            def pulumi_program():
+                import pulumi_azure_native as azure
+                from ..infra.components.azure import ModelOpsCluster
+                
+                # First, get the username to determine RG name
+                import os
+                import re
+                username = provider_config.get("username")
+                if not username:
+                    username = os.environ.get("USER") or os.environ.get("USERNAME")
+                    if username:
+                        username = re.sub(r'[^a-zA-Z0-9-]', '', username).lower()[:20]
+                
+                if not username:
+                    raise ValueError("Cannot determine username for resource group")
+                
+                base_rg = provider_config.get("resource_group", "modelops-rg")
+                rg_name = f"{base_rg}-{username}"
+                
+                # Import existing resource group to prevent deletion
+                rg = azure.resources.ResourceGroup.get(
+                    "existing-rg",
+                    rg_name,
+                    opts=pulumi.ResourceOptions(retain_on_delete=True)
+                )
+                
+                # Export that we're keeping it
+                pulumi.export("resource_group_retained", rg.name)
+                
+                # Return empty - we're just preserving the RG
+                return None
+        else:
+            # Normal destroy - everything including RG if requested
+            def pulumi_program():
+                if provider_type == "azure":
+                    from ..infra.components.azure import ModelOpsCluster
+                    # Create component just for destroy operation
+                    return ModelOpsCluster("modelops", provider_config)
+                else:
+                    raise ValueError(f"Provider '{provider_type}' not supported")
         
         # Use same stack configuration as 'up' command
         stack = auto.create_or_select_stack(
@@ -193,7 +250,11 @@ def down(
         console.print(f"\n[yellow]Destroying {provider_type} infrastructure...[/yellow]")
         stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
         
-        console.print("\n[green]✓ Infrastructure destroyed successfully[/green]")
+        if not delete_rg:
+            console.print("\n[green]✓ Infrastructure destroyed, resource group retained[/green]")
+            console.print("Resource group preserved for future deployments")
+        else:
+            console.print("\n[green]✓ All infrastructure including resource group destroyed[/green]")
         
     except Exception as e:
         console.print(f"\n[red]Error destroying infrastructure: {e}[/red]")
@@ -222,7 +283,7 @@ def status(
         raise typer.Exit(0)
     
     try:
-        # Need minimal program to query stack
+        # Need minimal program to query stack (just for outputs)
         def pulumi_program():
             pass
         
@@ -262,6 +323,8 @@ def status(
         if outputs.get("acr_login_server"):
             console.print(f"  ACR: {outputs.get('acr_login_server', {}).value}")
         
+        console.print("\nQuery outputs:")
+        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/azure")
         console.print("\nNext steps:")
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
