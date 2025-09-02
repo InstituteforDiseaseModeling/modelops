@@ -5,7 +5,11 @@ Deploys Dask scheduler and workers on existing Kubernetes cluster.
 
 import pulumi
 import pulumi_kubernetes as k8s
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+import json
+import base64
+import os
+from ...core import StackNaming
 
 
 class DaskWorkspace(pulumi.ComponentResource):
@@ -41,9 +45,40 @@ class DaskWorkspace(pulumi.ComponentResource):
         
         # Default configuration
         config = config or {}
-        namespace = config.get("namespace", "modelops-dask")
-        image = config.get("image", "ghcr.io/dask/dask:latest")
-        worker_count = config.get("worker_count", 3)
+        
+        # Extract environment from config or parse from stack reference
+        env = config.get("environment", "dev")
+        if "-" in infra_stack_ref:
+            # Try to parse environment from stack name
+            parsed = StackNaming.parse_stack_name(infra_stack_ref)
+            if "env" in parsed:
+                env = parsed["env"]
+        
+        # Parse metadata and spec if structured
+        if "metadata" in config and "spec" in config:
+            metadata = config["metadata"]
+            spec = config["spec"]
+            # Use centralized naming for default namespace
+            namespace = metadata.get("namespace", StackNaming.get_namespace("dask", env))
+            scheduler_config = spec.get("scheduler", {})
+            workers_config = spec.get("workers", {})
+        else:
+            # Fallback to flat config with centralized naming
+            namespace = config.get("namespace", StackNaming.get_namespace("dask", env))
+            scheduler_config = config
+            workers_config = config
+        
+        # Extract configuration values
+        scheduler_image = scheduler_config.get("image", "ghcr.io/dask/dask:latest")
+        worker_image = workers_config.get("image", scheduler_image)
+        worker_count = workers_config.get("replicas", config.get("worker_count", 3))
+        
+        # Node selectors
+        scheduler_node_selector = scheduler_config.get("nodeSelector", {})
+        worker_node_selector = workers_config.get("nodeSelector", {})
+        
+        # Tolerations for tainted nodes
+        tolerations = config.get("spec", {}).get("tolerations", [])
         
         # Create namespace
         ns = k8s.core.v1.Namespace(
@@ -57,6 +92,34 @@ class DaskWorkspace(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
+        
+        # Create GHCR pull secret if PAT is provided
+        pull_secrets = []
+        ghcr_pat = os.getenv("GHCR_PAT")
+        if ghcr_pat and "ghcr.io" in scheduler_image:
+            ghcr_secret = k8s.core.v1.Secret(
+                f"{name}-ghcr-creds",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name="ghcr-creds",
+                    namespace=namespace
+                ),
+                type="kubernetes.io/dockerconfigjson",
+                string_data={
+                    ".dockerconfigjson": json.dumps({
+                        "auths": {
+                            "ghcr.io": {
+                                "auth": base64.b64encode(f":{ghcr_pat}".encode()).decode()
+                            }
+                        }
+                    })
+                },
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[ns]
+                )
+            )
+            pull_secrets = [k8s.core.v1.LocalObjectReferenceArgs(name="ghcr-creds")]
         
         # Create Dask scheduler deployment
         scheduler = k8s.apps.v1.Deployment(
@@ -85,7 +148,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="scheduler",
-                                image=image,
+                                image=scheduler_image,
                                 command=["dask-scheduler"],
                                 ports=[
                                     k8s.core.v1.ContainerPortArgs(
@@ -98,23 +161,26 @@ class DaskWorkspace(pulumi.ComponentResource):
                                     )
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests={
-                                        "memory": config.get("scheduler_memory", "2Gi"),
-                                        "cpu": config.get("scheduler_cpu", "1")
-                                    },
-                                    limits={
-                                        "memory": config.get("scheduler_memory", "2Gi"),
-                                        "cpu": config.get("scheduler_cpu", "1")
-                                    }
+                                    requests=scheduler_config.get("resources", {}).get("requests", {
+                                        "memory": "2Gi",
+                                        "cpu": "1"
+                                    }),
+                                    limits=scheduler_config.get("resources", {}).get("limits", {
+                                        "memory": "2Gi",
+                                        "cpu": "1"
+                                    })
                                 ),
                                 env=[
                                     k8s.core.v1.EnvVarArgs(
                                         name="DASK_SCHEDULER__DASHBOARD__ENABLED",
                                         value="true"
                                     )
-                                ]
+                                ] + [k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])]
                             )
-                        ]
+                        ],
+                        node_selector=scheduler_node_selector if scheduler_node_selector else None,
+                        image_pull_secrets=pull_secrets if pull_secrets else None,
+                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations] if tolerations else None
                     )
                 )
             ),
@@ -178,22 +244,22 @@ class DaskWorkspace(pulumi.ComponentResource):
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="worker",
-                                image=image,
+                                image=worker_image,
                                 command=[
                                     "dask-worker",
                                     "tcp://dask-scheduler:8786",
-                                    "--nthreads", str(config.get("worker_threads", 2)),
-                                    "--memory-limit", config.get("worker_memory", "4Gi")
+                                    "--nthreads", str(workers_config.get("threads", 2)),
+                                    "--memory-limit", workers_config.get("resources", {}).get("limits", {}).get("memory", "4Gi")
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests={
-                                        "memory": config.get("worker_memory", "4Gi"),
-                                        "cpu": config.get("worker_cpu", "2")
-                                    },
-                                    limits={
-                                        "memory": config.get("worker_memory", "4Gi"),
-                                        "cpu": config.get("worker_cpu", "2")
-                                    }
+                                    requests=workers_config.get("resources", {}).get("requests", {
+                                        "memory": "4Gi",
+                                        "cpu": "2"
+                                    }),
+                                    limits=workers_config.get("resources", {}).get("limits", {
+                                        "memory": "4Gi",
+                                        "cpu": "2"
+                                    })
                                 ),
                                 env=[
                                     k8s.core.v1.EnvVarArgs(
@@ -208,9 +274,12 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         name="DASK_WORKER__MEMORY__PAUSE",
                                         value="0.98"
                                     )
-                                ]
+                                ] + [k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
                             )
-                        ]
+                        ],
+                        node_selector=worker_node_selector if worker_node_selector else None,
+                        image_pull_secrets=pull_secrets if pull_secrets else None,
+                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations] if tolerations else None
                     )
                 )
             ),
@@ -241,5 +310,6 @@ class DaskWorkspace(pulumi.ComponentResource):
             "dashboard_url": dashboard_url,
             "namespace": namespace,
             "worker_count": worker_count,
-            "image": image
+            "scheduler_image": scheduler_image,
+            "worker_image": worker_image
         })

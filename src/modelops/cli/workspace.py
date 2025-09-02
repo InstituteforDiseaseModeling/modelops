@@ -6,6 +6,7 @@ import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
+from ..core import StackNaming
 
 app = typer.Typer(help="Manage Dask workspaces")
 console = Console()
@@ -47,15 +48,17 @@ def up(
         """Create DaskWorkspace in Stack 2 context."""
         from ..infra.components.workspace import DaskWorkspace
         
-        # Build stack reference for infrastructure
-        # For local backend: just the stack name
-        # For cloud backend: org/project/stack
-        infra_ref = f"{infra_stack}-{env}"
+        # Use centralized naming for infrastructure reference
+        infra_ref = StackNaming.get_infra_stack_ref(env)
+        
+        # Pass environment to workspace config
+        workspace_config["environment"] = env
         
         return DaskWorkspace("dask", infra_ref, workspace_config)
     
-    stack_name = f"modelops-workspace-{env}"
-    project_name = "modelops-workspace"
+    # Use centralized naming for stack and project
+    stack_name = StackNaming.get_stack_name("workspace", env)
+    project_name = StackNaming.get_project_name("workspace")
     
     # Use consistent backend structure
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
@@ -131,8 +134,9 @@ def down(
             console.print("[green]Destruction cancelled[/green]")
             raise typer.Exit(0)
     
-    stack_name = f"modelops-workspace-{env}"
-    project_name = "modelops-workspace"
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("workspace", env)
+    project_name = StackNaming.get_project_name("workspace")
     
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
@@ -180,8 +184,9 @@ def status(
 ):
     """Show workspace status and connection details."""
     
-    stack_name = f"modelops-workspace-{env}"
-    project_name = "modelops-workspace"
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("workspace", env)
+    project_name = StackNaming.get_project_name("workspace")
     
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"

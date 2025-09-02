@@ -8,75 +8,92 @@ ModelOps provides the infrastructure layer ("the hands") for running distributed
 
 ## Architecture
 
-ModelOps manages two execution planes:
+ModelOps implements a three-stack architecture using Pulumi:
 
-1. **Workspace Plane**: Long-lived Dask clusters for simulation execution
-2. **Adaptive Plane**: Ephemeral infrastructure for calibration algorithms (coming soon)
+1. **Infrastructure Stack** (`mops infra`): Creates cloud resources (AKS, resource groups, networking)
+2. **Workspace Stack** (`mops workspace`): Deploys Dask clusters on Kubernetes for simulation execution
+3. **Adaptive Stack** (`mops adaptive`): Manages ephemeral optimization runs (Optuna, MCMC, etc.)
+
+Each stack references outputs from previous stacks using Pulumi StackReferences, enabling clean separation of concerns and independent lifecycle management.
 
 ### Key Components
 
 - **SimulationService**: Implementations for local and distributed execution
-- **Workspace Management**: Pulumi-based infrastructure provisioning
-- **Provider Abstraction**: Cloud-agnostic infrastructure management
-- **State Management**: Local state tracking for provisioned resources
+- **Three-Stack Management**: Pulumi-based infrastructure provisioning
+- **Provider Abstraction**: Cloud-agnostic infrastructure management (Azure MVP, AWS/GCP coming)
+- **Centralized Naming**: Consistent resource naming across environments
 
 ## Installation
 
 ```bash
-# Install in development mode
+# Install with uv (recommended)
+uv pip install -e .
+
+# Or standard pip
 pip install -e .
 
-# Or install with uv
-uv pip install -e .
+# Install required dependencies
+uv pip install numpy  # For example simulations
 ```
 
 ## Quick Start
 
-### 1. Configure a Provider
+### 1. Configure Azure Provider
 
 ```bash
 # Create provider configuration
 mkdir -p ~/.modelops/providers
 
-# For local development (Kind/Minikube)
-cat > ~/.modelops/providers/local.yaml <<EOF
-kind: Provider
-provider: local
-spec:
-  kubeconfig: ~/.kube/config
-  context: kind-kind
+cat > ~/.modelops/providers/azure.yaml <<EOF
+provider: azure
+subscription_id: "YOUR-SUBSCRIPTION-ID"
+location: eastus2
+resource_group: modelops-rg
+aks:
+  name: modelops-aks
+  kubernetes_version: "1.32"
 EOF
 ```
 
-### 2. Provision a Workspace
+### 2. Create Infrastructure (Stack 1)
 
 ```bash
-# Create a Dask workspace
-mops workspace up --name dev --provider local
+# Create Azure infrastructure
+mops infra up --config ~/.modelops/providers/azure.yaml --env dev
 
 # Check status
-mops workspace status
-
-# Get connection details
-mops workspace connect --name dev
+mops infra status --env dev
 ```
 
-### 3. Use SimulationService
+### 3. Deploy Dask Workspace (Stack 2)
+
+```bash
+# Deploy Dask on the infrastructure
+mops workspace up --env dev
+
+# Check status
+mops workspace status --env dev
+
+# Port-forward for local access
+kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786
+```
+
+### 4. Run Simulations
 
 ```python
 from modelops.services import DaskSimulationService
 
-# Connect to workspace
-sim = DaskSimulationService.from_workspace("dev")
+# Connect to Dask
+sim = DaskSimulationService("tcp://localhost:8786")
 
 # Submit simulations
 futures = []
 for i in range(10):
     future = sim.submit(
-        fn_ref="my_module:simulate",
-        params={"beta": 0.5, "gamma": 0.1},
+        fn_ref="examples.simulations:monte_carlo_pi",
+        params={"n_samples": 100000},
         seed=i,
-        bundle_ref="oras://registry/my-sim:latest"
+        bundle_ref=""  # MVP: assumes code is pre-installed
     )
     futures.append(future)
 
@@ -84,34 +101,207 @@ for i in range(10):
 results = sim.gather(futures)
 ```
 
-## CLI Commands
+## Running Simulations
 
-### Workspace Management
+ModelOps provides both local and distributed simulation capabilities. Example simulations are included in `examples/` directory.
+
+### Available Example Simulations
+
+1. **Monte Carlo Pi Estimation** (`monte_carlo_pi`)
+   - Estimates π using random sampling
+   - Configurable sample size
+   - Good for testing parallel execution
+
+2. **Black-Scholes Option Pricing** (`black_scholes_option`)
+   - European option pricing via Monte Carlo
+   - Supports calls and puts
+   - Configurable volatility, strike, maturity
+
+3. **Stochastic Growth Model** (`stochastic_growth_model`)
+   - Simulates asset price paths using GBM
+   - Calculates returns and drawdowns
+   - Useful for financial modeling
+
+### Running Simulations Locally
+
+Test simulations without any infrastructure using the local execution mode:
 
 ```bash
-# Provision workspace
-mops workspace up --name <name> --provider <provider> --min-workers 2 --max-workers 10
+# Set Python path to include the project
+export PYTHONPATH=/path/to/modelops:$PYTHONPATH
 
-# List workspaces
-mops workspace list
+# Run all simulation types locally
+uv run python examples/run_dask_simulation.py --local --test all -n 10
 
-# Get workspace status
-mops workspace status --name <name>
-
-# Destroy workspace
-mops workspace down --name <name>
-
-# Port-forward dashboard
-mops workspace port-forward --name <name>
+# Run specific simulation type
+uv run python examples/run_dask_simulation.py --local --test pi -n 20
+uv run python examples/run_dask_simulation.py --local --test option -n 15
+uv run python examples/run_dask_simulation.py --local --test growth -n 5
 ```
 
-### Configuration
+Options:
+- `--local`: Use LocalSimulationService (no Dask required)
+- `--test [all|pi|option|growth]`: Which simulations to run
+- `-n`: Number of simulations to execute
+
+### Running Simple Functions on Dask
+
+For immediate testing with the existing Dask cluster (no custom images needed):
+
+```bash
+# 1. Port-forward the Dask scheduler
+kubectl port-forward -n modelops-default svc/dask-scheduler 8786:8786
+
+# 2. Run simple pure-Python functions
+uv run python examples/test_dask_simple.py
+```
+
+This runs:
+- Monte Carlo Pi estimation using pure Python
+- Matrix multiplication benchmarks
+- Shows ~15 tasks/second throughput on a single worker
+
+### Running ModelOps Simulations on Dask
+
+To run the full simulation suite on Dask (requires custom worker image):
+
+```bash
+# 1. Port-forward Dask scheduler and dashboard
+kubectl port-forward -n modelops-default svc/dask-scheduler 8786:8786 &
+kubectl port-forward -n modelops-default svc/dask-scheduler 8787:8787 &
+
+# 2. Run distributed simulations (requires custom worker image)
+PYTHONPATH=/path/to/modelops:$PYTHONPATH uv run python examples/run_dask_simulation.py --test all -n 100
+```
+
+**Note**: This currently requires building a custom Dask worker image with ModelOps code installed. See "Custom Worker Images" section below.
+
+### Monitoring with Dask Dashboard
+
+While simulations are running, monitor execution via the Dask dashboard:
+
+```bash
+# Port-forward the dashboard
+kubectl port-forward -n modelops-default svc/dask-scheduler 8787:8787
+
+# Open in browser
+open http://localhost:8787
+```
+
+The dashboard shows:
+- Task progress and timeline
+- Worker CPU and memory usage
+- Task stream and performance metrics
+- Cluster topology
+
+### Debugging and Cluster Status
+
+```bash
+# Check Dask pods
+kubectl get pods -n modelops-default
+
+# View scheduler logs
+kubectl logs -n modelops-default -l app=dask-scheduler
+
+# View worker logs
+kubectl logs -n modelops-default -l app=dask-worker
+
+# Get service endpoints
+kubectl get svc -n modelops-default
+
+# Check worker resource usage
+kubectl top pods -n modelops-default
+```
+
+### Custom Worker Images
+
+To run ModelOps simulations on Dask workers, you need to build a custom image:
+
+```dockerfile
+# docker/dask-worker/Dockerfile
+FROM ghcr.io/dask/dask:2024.8.0-py3.11
+
+# Install dependencies
+RUN pip install numpy modelops-contracts
+
+# Copy ModelOps code
+COPY src/modelops /opt/modelops/src/modelops
+COPY examples /opt/modelops/examples
+
+WORKDIR /opt/modelops
+ENV PYTHONPATH=/opt/modelops/src:/opt/modelops:$PYTHONPATH
+```
+
+Build and use:
+```bash
+# Build image
+docker build -t myregistry/dask-worker:latest docker/dask-worker/
+
+# Update worker deployment
+kubectl set image deployment/dask-workers -n modelops-default \
+  worker=myregistry/dask-worker:latest
+```
+
+## CLI Commands
+
+### Infrastructure Management (Stack 1)
+
+```bash
+# Create infrastructure
+mops infra up --config <config.yaml> --env <env>
+
+# Check status
+mops infra status --env <env>
+
+# Destroy infrastructure (keeps resource group by default)
+mops infra down --config <config.yaml> --env <env>
+
+# Destroy everything including resource group
+mops infra down --config <config.yaml> --env <env> --delete-rg
+```
+
+### Workspace Management (Stack 2)
+
+```bash
+# Deploy Dask workspace
+mops workspace up --env <env> [--config workspace.yaml]
+
+# List all workspaces
+mops workspace list
+
+# Check workspace status
+mops workspace status --env <env>
+
+# Destroy workspace
+mops workspace down --env <env>
+```
+
+### Adaptive Runs (Stack 3)
+
+```bash
+# Start optimization run
+mops adaptive up <config.yaml> --env <env> [--run-id <id>]
+
+# Check run status
+mops adaptive status <run-id>
+
+# View logs
+mops adaptive logs <run-id> [-f]
+
+# List all runs
+mops adaptive list
+
+# Destroy run
+mops adaptive down <run-id>
+```
+
+### Utility Commands
 
 ```bash
 # Show version
 mops version
 
-# Show configuration paths
+# Show configuration
 mops config
 ```
 
@@ -121,74 +311,87 @@ mops config
 
 ```
 src/modelops/
-   cli/              # CLI commands (Typer-based)
-   services/         # SimulationService implementations
-   state/            # Local state management
-   infra/            # Infrastructure provisioning
-      providers/    # Cloud provider abstractions
-   __init__.py
+├── cli/              # CLI commands (Typer-based)
+├── services/         # SimulationService implementations
+├── core/            # Core utilities (naming, etc.)
+├── infra/           # Infrastructure provisioning
+│   └── components/  # Pulumi ComponentResources
+├── examples/        # Example simulations and tests
+└── tests/          # Unit tests
+```
+
+### Environment Setup
+
+```bash
+# Use direnv for automatic environment configuration
+cp .envrc.template .envrc
+direnv allow
+
+# Or manually set Pulumi passphrase
+export PULUMI_CONFIG_PASSPHRASE=dev
 ```
 
 ### Testing
 
 ```bash
-# Run tests
-pytest
+# Run all tests
+uv run pytest
+
+# Run specific test module
+uv run pytest tests/test_naming.py -v
 
 # Run with coverage
-pytest --cov=modelops
+uv run pytest --cov=modelops --cov-report=html
 ```
 
 ### Code Quality
 
 ```bash
 # Type checking
-mypy src/modelops
+uv run mypy src/
 
 # Linting
-ruff check src/
+uv run ruff check src/
 
 # Formatting
-black src/
+uv run black src/
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+**"unknown stack modelops-infra-dev"**
+- The infrastructure wasn't created with the current naming convention
+- Solution: Recreate infrastructure with `mops infra up`
+
+**"ModuleNotFoundError: No module named 'modelops'"**
+- The Dask workers don't have ModelOps code installed
+- Solution: Use `--local` flag or build custom worker image
+
+**"No module named 'numpy'"**
+- Missing required dependencies
+- Solution: `uv pip install numpy`
+
+**Port-forward not working**
+- Check if pods are running: `kubectl get pods -n modelops-default`
+- Check service exists: `kubectl get svc -n modelops-default`
 
 ## Infrastructure Provisioning Flow
 
-ModelOps follows a clean Spec->Compile->Apply pattern:
+ModelOps follows a three-stack pattern with Pulumi:
 
-1. **Spec**: User defines infrastructure in YAML or via CLI
-2. **Parse**: Configuration is validated with Pydantic models
-3. **Compile**: Specs are lowered to intermediate representation (IR)
-4. **Build**: IR is used to create Pulumi programs
-5. **Apply**: Pulumi provisions actual cloud resources
+1. **Stack 1 (Infrastructure)**: Creates cloud resources
+   - Resource groups, AKS clusters, networking
+   - Exports: kubeconfig, cluster details
 
-## Provider Configuration
+2. **Stack 2 (Workspace)**: Deploys Dask using Stack 1's kubeconfig
+   - Dask scheduler and workers
+   - Exports: scheduler address, dashboard URL
 
-Providers are configured via YAML files in `~/.modelops/providers/`:
-
-### Azure Example
-
-```yaml
-kind: Provider
-provider: azure
-spec:
-  subscription_id: xxx-xxx-xxx
-  resource_group: modelops-rg
-  location: eastus
-  aks_cluster: modelops-aks
-auth:
-  method: cli  # Uses Azure CLI authentication
-```
-
-### Local Example
-
-```yaml
-kind: Provider
-provider: local
-spec:
-  kubeconfig: ~/.kube/config
-  context: kind-kind
-```
+3. **Stack 3 (Adaptive)**: Creates optimization jobs using Stack 1 & 2
+   - References Dask scheduler from Stack 2
+   - Manages Optuna, MCMC, and other adaptive algorithms
 
 ## Security
 
@@ -197,15 +400,17 @@ spec:
   - Azure CLI (development)
   - Environment variables (CI/CD)
   - Managed Identity (production)
-- Secrets are stored in Kubernetes secrets, not in config files
+- Secrets stored in Kubernetes secrets
+- Per-user resource groups for isolation
 
 ## Dependencies
 
 - Python >=3.11
-- modelops-contracts (local dependency)
-- Dask for distributed execution
-- Pulumi for infrastructure provisioning (coming soon)
-- Rich & Typer for CLI
+- modelops-contracts (API protocols)
+- Dask 2024.8.0 (distributed execution)
+- Pulumi (infrastructure as code)
+- Kubernetes (container orchestration)
+- NumPy (numerical computations)
 
 ## Related Projects
 

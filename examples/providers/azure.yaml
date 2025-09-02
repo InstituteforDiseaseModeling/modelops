@@ -53,6 +53,7 @@ aks:
 #   name: modelopsmvpacr  # Must be globally unique
 #   sku: Standard
 
-# Pulumi stack configuration
-stack_name: modelops-mvp
-project_name: modelops-infra
+# Note: Stack names are automatically generated based on environment
+# Use --env flag to specify environment (dev, staging, prod)
+# Stack pattern: modelops-infra-{env}
+# Project pattern: modelops-infra

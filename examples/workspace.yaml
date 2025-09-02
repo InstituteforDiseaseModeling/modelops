@@ -1,0 +1,71 @@
+# Dask Workspace Configuration for ModelOps
+# Usage: mops workspace up --config examples/workspace.yaml --env dev
+#
+# Note: Stack names are automatically generated based on environment
+# Stack pattern: modelops-workspace-{env}
+# Namespace pattern: modelops-dask-{env}
+
+apiVersion: modelops/v1
+kind: Workspace
+metadata:
+  name: dev-workspace
+  # Namespace is auto-generated based on environment: modelops-dask-{env}
+
+spec:
+  # Dask Scheduler Configuration
+  scheduler:
+    image: ghcr.io/dask/dask:2024.8.0-py3.11
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1"
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    # Schedule on CPU nodes only
+    nodeSelector:
+      modelops.io/role: cpu
+    # Environment variables for scheduler
+    env:
+      - name: DASK_SCHEDULER__DASHBOARD__ENABLED
+        value: "true"
+      - name: DASK_SCHEDULER__PRELOAD
+        value: "dask_kubernetes"
+
+  # Dask Workers Configuration
+  workers:
+    replicas: 4
+    image: ghcr.io/dask/dask:2024.8.0-py3.11
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2"
+      limits:
+        memory: "4Gi"
+        cpu: "2"
+    # Schedule on CPU nodes only
+    nodeSelector:
+      modelops.io/role: cpu
+    # Worker-specific configuration
+    threads: 2  # Number of threads per worker
+    # Environment variables for workers
+    env:
+      - name: DASK_WORKER__MEMORY__TARGET
+        value: "0.90"  # Spill to disk at 90% memory
+      - name: DASK_WORKER__MEMORY__SPILL
+        value: "0.95"  # Spill aggressively at 95%
+      - name: DASK_WORKER__MEMORY__PAUSE
+        value: "0.98"  # Pause execution at 98%
+
+  # Optional: Authentication for private registries
+  # Uncomment to use GitHub Container Registry with PAT
+  # imagePullSecrets:
+  #   - name: ghcr-creds
+  
+  # Optional: Tolerations for tainted nodes
+  # Uncomment if your CPU nodes have taints
+  # tolerations:
+  #   - key: "modelops.io/role"
+  #     operator: "Equal"
+  #     value: "cpu"
+  #     effect: "NoSchedule"

@@ -10,6 +10,7 @@ import pulumi
 import pulumi_azure_native as azure
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from ...core import StackNaming
 
 
 class ModelOpsCluster(pulumi.ComponentResource):
@@ -33,11 +34,11 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # Extract configuration with defaults
         subscription_id = config["subscription_id"]
         location = config.get("location", "eastus2")
+        env = config.get("environment", "dev")  # Get environment from config
         
         # Get username for per-user resource group
         username = self._get_username(config)
-        base_rg = config.get("resource_group", "modelops-rg")
-        rg_name = f"{base_rg}-{username}"
+        rg_name = StackNaming.get_resource_group_name(env, username)
         
         aks_config = config.get("aks", {})
         acr_config = config.get("acr")
@@ -72,8 +73,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         ssh_pubkey = self._get_ssh_key(ssh_config)
         
         # Create AKS cluster with node pools
-        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey)
-        cluster_name = aks_config.get("name", "modelops-aks")
+        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env)
         
         # Setup ACR pull permissions if ACR exists
         if acr_config and acr:
@@ -143,9 +143,10 @@ class ModelOpsCluster(pulumi.ComponentResource):
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
                            location: str, aks_config: Dict[str, Any], 
-                           ssh_pubkey: str) -> azure.containerservice.ManagedCluster:
+                           ssh_pubkey: str, env: str) -> azure.containerservice.ManagedCluster:
         """Create AKS cluster with configured node pools."""
-        cluster_name = aks_config.get("name", "modelops-aks")
+        # Use centralized naming for AKS cluster
+        cluster_name = StackNaming.get_aks_cluster_name(env)
         k8s_version = aks_config.get("kubernetes_version", "1.32")
         
         # Build node pool profiles

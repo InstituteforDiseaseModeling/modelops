@@ -11,6 +11,7 @@ from pulumi.automation import ProjectSettings, ProjectBackend
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
+from ..core import StackNaming
 
 app = typer.Typer(help="Manage infrastructure (Azure, AWS, GCP, local)")
 console = Console()
@@ -26,6 +27,11 @@ def up(
         file_okay=True,
         dir_okay=False,
         readable=True
+    ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name (dev, staging, prod)"
     )
 ):
     """Create infrastructure from zero based on provider config.
@@ -46,8 +52,12 @@ def up(
         console.print("[red]Error: 'provider' field required in config[/red]")
         raise typer.Exit(1)
     
+    # Add environment to config for components to use
+    provider_config["environment"] = env
+    
     console.print(f"[bold]Creating {provider_type} infrastructure from zero...[/bold]")
     console.print(f"Config: {config}")
+    console.print(f"Environment: {env}")
     
     def pulumi_program():
         """Pulumi program that creates infrastructure using ComponentResource."""
@@ -70,9 +80,9 @@ def up(
         else:
             raise ValueError(f"Provider '{provider_type}' not yet implemented")
     
-    # Create or select Pulumi stack
-    stack_name = provider_config.get("stack_name", "modelops-infra")
-    project_name = provider_config.get("project_name", "modelops-infra")
+    # Use centralized naming for stack and project
+    stack_name = StackNaming.get_stack_name("infra", env)
+    project_name = StackNaming.get_project_name("infra")
     
     # Set up paths for local backend
     pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider_type
@@ -140,6 +150,11 @@ def down(
         help="Provider configuration file (YAML)",
         exists=True
     ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name (dev, staging, prod)"
+    ),
     delete_rg: bool = typer.Option(
         False,
         "--delete-rg",
@@ -181,8 +196,9 @@ def down(
             console.print("[green]Destruction cancelled[/green]")
             raise typer.Exit(0)
     
-    stack_name = provider_config.get("stack_name", "modelops-infra")
-    project_name = provider_config.get("project_name", "modelops-infra")
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("infra", env)
+    project_name = StackNaming.get_project_name("infra")
     
     # Set up paths for local backend (must match 'up' command)
     pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider_type
@@ -230,14 +246,10 @@ def down(
                 raise
         
         if delete_rg and provider_type == "azure":
-            # Compute RG name the same way as in the component
-            import os, re, subprocess
+            # Use centralized naming to compute RG name
+            import os, subprocess
             username = provider_config.get("username") or os.environ.get("USER") or os.environ.get("USERNAME")
-            if not username:
-                raise ValueError("Cannot determine username for resource group deletion")
-            username = re.sub(r'[^a-zA-Z0-9-]', '', username).lower()[:20]
-            base_rg = provider_config.get("resource_group", "modelops-rg")
-            rg_name = f"{base_rg}-{username}"
+            rg_name = StackNaming.get_resource_group_name(env, username)
             
             console.print(f"\n[yellow]Deleting resource group '{rg_name}'...[/yellow]")
             # Use Azure CLI to delete the retained RG
@@ -254,10 +266,10 @@ def down(
 
 @app.command()
 def status(
-    stack_name: str = typer.Option(
-        "modelops-mvp",
-        "--stack", "-s",
-        help="Pulumi stack name"
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name (dev, staging, prod)"
     ),
     provider: str = typer.Option(
         "azure",
@@ -268,6 +280,10 @@ def status(
     """Show current infrastructure status from Pulumi stack."""
     import pulumi.automation as auto
     from pathlib import Path
+    
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("infra", env)
+    project_name = StackNaming.get_project_name("infra")
     
     # Set up paths for local backend
     pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider
@@ -286,12 +302,12 @@ def status(
         # Get stack to query outputs
         stack = auto.create_or_select_stack(
             stack_name=stack_name,
-            project_name="modelops-infra",
+            project_name=project_name,
             program=pulumi_program,
             opts=auto.LocalWorkspaceOptions(
                 work_dir=str(pulumi_dir),
                 project_settings=auto.ProjectSettings(
-                    name="modelops-infra",
+                    name=project_name,
                     runtime="python",
                     backend=auto.ProjectBackend(url=f"file://{backend_dir}")
                 )

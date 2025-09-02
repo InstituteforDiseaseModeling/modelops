@@ -8,6 +8,7 @@ from typing import Optional
 from datetime import datetime
 from rich.console import Console
 from rich.table import Table
+from ..core import StackNaming
 
 app = typer.Typer(help="Manage adaptive optimization runs")
 console = Console()
@@ -65,9 +66,9 @@ def up(
         """Create AdaptiveRun in Stack 3 context."""
         from ..infra.components.adaptive import AdaptiveRun
         
-        # Build stack references
-        infra_ref = f"{infra_stack}-{env}"
-        workspace_ref = f"{workspace_stack}-{env}"
+        # Use centralized naming for stack references
+        infra_ref = StackNaming.get_infra_stack_ref(env)
+        workspace_ref = StackNaming.get_workspace_stack_ref(env)
         
         return AdaptiveRun(
             run_id,
@@ -76,8 +77,9 @@ def up(
             config=run_config
         )
     
-    stack_name = f"modelops-adaptive-{run_id}"
-    project_name = "modelops-adaptive"
+    # Use centralized naming for stack and project
+    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
+    project_name = StackNaming.get_project_name("adaptive")
     
     # Unique backend for each run
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
@@ -138,6 +140,11 @@ def down(
         ...,
         help="Run ID to destroy"
     ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name"
+    ),
     yes: bool = typer.Option(
         False,
         "--yes", "-y",
@@ -159,8 +166,9 @@ def down(
             console.print("[green]Destruction cancelled[/green]")
             raise typer.Exit(0)
     
-    stack_name = f"modelops-adaptive-{run_id}"
-    project_name = "modelops-adaptive"
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
+    project_name = StackNaming.get_project_name("adaptive")
     
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
@@ -207,12 +215,18 @@ def status(
     run_id: str = typer.Argument(
         ...,
         help="Run ID to check"
+    ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name"
     )
 ):
     """Check status of an adaptive run."""
     
-    stack_name = f"modelops-adaptive-{run_id}"
-    project_name = "modelops-adaptive"
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
+    project_name = StackNaming.get_project_name("adaptive")
     
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
@@ -302,7 +316,9 @@ def list():
     
     for run_dir in sorted(run_dirs):
         run_id = run_dir.name
-        stack_name = f"modelops-adaptive-{run_id}"
+        # Parse environment from directory structure or use default
+        env = "dev"  # Default, could be enhanced to parse from stack files
+        stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
         
         # Check if stack exists in backend
         backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
@@ -342,6 +358,11 @@ def logs(
         ...,
         help="Run ID to get logs for"
     ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name"
+    ),
     follow: bool = typer.Option(
         False,
         "--follow", "-f",
@@ -357,7 +378,8 @@ def logs(
     
     This is a convenience wrapper around kubectl logs.
     """
-    stack_name = f"modelops-adaptive-{run_id}"
+    # Use centralized naming
+    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
     
     if not work_dir.exists():
@@ -366,7 +388,7 @@ def logs(
     
     try:
         # Get namespace from stack outputs
-        project_name = "modelops-adaptive"
+        project_name = StackNaming.get_project_name("adaptive")
         backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
         
         def pulumi_program():
