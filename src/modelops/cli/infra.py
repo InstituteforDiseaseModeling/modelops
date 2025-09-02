@@ -189,48 +189,14 @@ def down(
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider_type
     
     try:
-        if not delete_rg and provider_type == "azure":
-            # Special handling to preserve resource group
-            def pulumi_program():
-                import pulumi_azure_native as azure
+        # Always use the same program as `up`. RG has retain_on_delete=True,
+        # so default destroy will keep RG; we delete it explicitly only when requested.
+        def pulumi_program():
+            if provider_type == "azure":
                 from ..infra.components.azure import ModelOpsCluster
-                
-                # First, get the username to determine RG name
-                import os
-                import re
-                username = provider_config.get("username")
-                if not username:
-                    username = os.environ.get("USER") or os.environ.get("USERNAME")
-                    if username:
-                        username = re.sub(r'[^a-zA-Z0-9-]', '', username).lower()[:20]
-                
-                if not username:
-                    raise ValueError("Cannot determine username for resource group")
-                
-                base_rg = provider_config.get("resource_group", "modelops-rg")
-                rg_name = f"{base_rg}-{username}"
-                
-                # Import existing resource group to prevent deletion
-                rg = azure.resources.ResourceGroup.get(
-                    "existing-rg",
-                    rg_name,
-                    opts=pulumi.ResourceOptions(retain_on_delete=True)
-                )
-                
-                # Export that we're keeping it
-                pulumi.export("resource_group_retained", rg.name)
-                
-                # Return empty - we're just preserving the RG
-                return None
-        else:
-            # Normal destroy - everything including RG if requested
-            def pulumi_program():
-                if provider_type == "azure":
-                    from ..infra.components.azure import ModelOpsCluster
-                    # Create component just for destroy operation
-                    return ModelOpsCluster("modelops", provider_config)
-                else:
-                    raise ValueError(f"Provider '{provider_type}' not supported")
+                return ModelOpsCluster("modelops", provider_config)
+            else:
+                raise ValueError(f"Provider '{provider_type}' not supported")
         
         # Use same stack configuration as 'up' command
         stack = auto.create_or_select_stack(
@@ -248,13 +214,38 @@ def down(
         )
         
         console.print(f"\n[yellow]Destroying {provider_type} infrastructure...[/yellow]")
-        stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
         
-        if not delete_rg:
-            console.print("\n[green]✓ Infrastructure destroyed, resource group retained[/green]")
-            console.print("Resource group preserved for future deployments")
+        if delete_rg:
+            # When deleting RG, we need to unprotect it first
+            console.print("[dim]Note: Resource group is protected. Use --delete-rg to force deletion.[/dim]")
+        
+        # Destroy will fail for protected RG unless --delete-rg is used
+        try:
+            stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
+        except auto.CommandError as e:
+            if "protected" in str(e).lower() and not delete_rg:
+                console.print("\n[yellow]Resource group is protected and was not deleted.[/yellow]")
+                console.print("Use --delete-rg flag to force deletion of resource group.")
+            else:
+                raise
+        
+        if delete_rg and provider_type == "azure":
+            # Compute RG name the same way as in the component
+            import os, re, subprocess
+            username = provider_config.get("username") or os.environ.get("USER") or os.environ.get("USERNAME")
+            if not username:
+                raise ValueError("Cannot determine username for resource group deletion")
+            username = re.sub(r'[^a-zA-Z0-9-]', '', username).lower()[:20]
+            base_rg = provider_config.get("resource_group", "modelops-rg")
+            rg_name = f"{base_rg}-{username}"
+            
+            console.print(f"\n[yellow]Deleting resource group '{rg_name}'...[/yellow]")
+            # Use Azure CLI to delete the retained RG
+            subprocess.run(["az", "group", "delete", "-n", rg_name, "--yes", "--no-wait"], check=False)
+            console.print("\n[green]✓ Infrastructure destroyed; resource group deletion initiated[/green]")
         else:
-            console.print("\n[green]✓ All infrastructure including resource group destroyed[/green]")
+            console.print("\n[green]✓ Infrastructure destroyed; resource group retained[/green]")
+            console.print("Resource group preserved for future deployments")
         
     except Exception as e:
         console.print(f"\n[red]Error destroying infrastructure: {e}[/red]")
@@ -264,9 +255,14 @@ def down(
 @app.command()
 def status(
     stack_name: str = typer.Option(
-        "modelops-infra",
+        "modelops-mvp",
         "--stack", "-s",
         help="Pulumi stack name"
+    ),
+    provider: str = typer.Option(
+        "azure",
+        "--provider", "-p",
+        help="Cloud provider (azure, aws, gcp)"
     )
 ):
     """Show current infrastructure status from Pulumi stack."""
@@ -274,8 +270,8 @@ def status(
     from pathlib import Path
     
     # Set up paths for local backend
-    pulumi_dir = Path.home() / ".modelops" / "pulumi" / "azure"
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
+    pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider
     
     if not pulumi_dir.exists() or not backend_dir.exists():
         console.print("[yellow]No infrastructure found[/yellow]")
@@ -324,7 +320,7 @@ def status(
             console.print(f"  ACR: {outputs.get('acr_login_server', {}).value}")
         
         console.print("\nQuery outputs:")
-        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/azure")
+        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider}")
         console.print("\nNext steps:")
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")

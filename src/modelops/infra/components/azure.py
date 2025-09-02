@@ -44,6 +44,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         ssh_config = config.get("ssh", {})
         
         # Create Resource Group with per-user naming
+        # Set protect=True so default `down` doesn't delete the RG
         rg = azure.resources.ResourceGroup(
             f"{name}-rg",
             resource_group_name=rg_name,  # Per-user RG name
@@ -54,7 +55,11 @@ class ModelOpsCluster(pulumi.ComponentResource):
                 "component": name,
                 "user": username
             },
-            opts=pulumi.ResourceOptions(parent=self)
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                protect=True,  # Prevent accidental deletion
+                retain_on_delete=True  # Also retain on replacement
+            )
         )
         
         # Create optional ACR
