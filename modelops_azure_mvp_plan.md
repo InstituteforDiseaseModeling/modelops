@@ -19,22 +19,25 @@ from zero to a working run with a few CLI commands.
 ## The happy path (CLIs you'll use)
 
 ```bash
-# 1) Provision from zero on Azure and deploy the workspace plane (Dask)
-mops workspace up -f workspace.yaml
+# 1) Provision Azure infrastructure from zero (Stack 1)
+mops infra up --config examples/providers/azure.yaml
 
-# 2) Submit a simulation job description to the workspace plane
-mops workspace submit simulation_task.json
+# 2) Deploy Dask workspace using infrastructure from Stack 1 (Stack 2)
+mops workspace up --infra-stack modelops-infra-dev
 
-# 3) Bring up the adaptive plane (workers + central store if needed)
-mops adaptive up -f adaptive.yaml
+# 3) Run adaptive optimization using Stacks 1 & 2 (Stack 3)
+mops adaptive up optuna-config.yaml --run-id exp-001
 
-# 4) Submit an adapter-driven calibration run (e.g., Optuna via Calabaria)
-mops adapter submit calibration_task.json
+# 4) Check status and manage resources
+mops infra status
+mops workspace status --env dev
+mops adaptive status exp-001
 ```
 
-- `workspace.yaml` / `adaptive.yaml` are **cloud-agnostic K8s-level specs** (images, replicas, resources)
-- `simulation_task.json` defines what to run on Dask (function refs, params, bundle ref)
-- `calibration_task.json` defines which **adapter** to use (e.g., Optuna), hyper-params, stopping criteria, and its infra needs
+**Three-Stack Architecture:**
+- **Stack 1 (Infrastructure)**: Creates Azure resources (RG, AKS, optional ACR)
+- **Stack 2 (Workspace)**: Deploys Dask scheduler/workers using StackReference to Stack 1
+- **Stack 3 (Adaptive)**: Runs optimization jobs using StackReferences to Stacks 1 & 2
 
 ## Two planes, one contract
 
@@ -1354,11 +1357,15 @@ ssh:
 ```
 
 **Pulumi stacks & state.**
-- Project: `modelops`
-- Stacks: `modelops:infra:<env>` (RG/ACR/AKS), `modelops:workspace:<env>`, `modelops:adaptive:<run>`  
-- State backend: `azblob://modelops-pulumi-state` (one container per env)
-- **IMPORTANT**: Pulumi stack outputs are the ONLY source of truth - all state queries go through `pulumi stack output`
-- Safety: `mops destroy --all` refuses to delete if state backend lives in same RG slated for deletion
+- Three-stack architecture:
+  - Stack 1: `modelops-infra-<env>` (Resource Group, ACR, AKS cluster)
+  - Stack 2: `modelops-workspace-<env>` (Dask scheduler/workers, references Stack 1)
+  - Stack 3: `modelops-adaptive-<run_id>` (Optimization runs, references Stacks 1 & 2)
+- State backend: Local file backend at `~/.modelops/pulumi/backend/{azure|workspace|adaptive}/`
+- Cross-stack communication: Pulumi StackReferences for passing kubeconfig, endpoints, etc.
+- **IMPORTANT**: All state managed through Pulumi outputs - no custom StateManager or state.json
+- Per-user resource groups: `modelops-rg-<username>` for multi-user isolation on shared subscriptions
+- Resource protection: Resource groups use `protect=True` and `retain_on_delete=True` flags
 
 **Pulumi program (infra, sketch).**
 ```python

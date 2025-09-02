@@ -11,98 +11,112 @@ This document provides the staged implementation plan for ModelOps MVP, emphasiz
 
 ---
 
-## Binding Architecture: ComponentResources + Simple Dataclasses
+## Three-Stack Architecture with Pulumi ComponentResources
 
-### Why Both?
+### Overview
 
-The system uses a **hybrid approach** combining Pulumi ComponentResources with simple dataclass bindings:
+The system implements a clean three-stack architecture using Pulumi ComponentResources and StackReferences:
 
-**ComponentResources** handle infrastructure provisioning:
-- State management via Pulumi
-- Resource dependencies and rollbacks
-- Create/update/delete operations
-- Secret handling during provisioning
+**Stack 1: Infrastructure** (`modelops-infra-<env>`)
+- Creates Azure resources: Resource Group, ACR, AKS cluster
+- Exports: kubeconfig, cluster_name, resource_group, location, acr_login_server
+- Managed via: `mops infra up/down/status`
 
-**Bindings** are simple runtime contracts:
-- Plain frozen dataclasses (immutable)
-- What pods actually need to connect
-- Easy to mock for testing
-- Work with any cluster (not just Pulumi-managed)
+**Stack 2: Workspace** (`modelops-workspace-<env>`)
+- Deploys Dask scheduler and workers on Kubernetes
+- References Stack 1 via StackReference to get kubeconfig
+- Exports: scheduler_address, dashboard_url, namespace, worker_count
+- Managed via: `mops workspace up/down/status`
 
-### The Key Separation
+**Stack 3: Adaptive** (`modelops-adaptive-<run_id>`)
+- Creates optimization runs with adaptive workers
+- References both Stack 1 (kubeconfig) and Stack 2 (Dask endpoints)
+- Exports: namespace, job_name, algorithm, n_trials, status
+- Managed via: `mops adaptive up/down/status`
 
+### State Management
+
+**Local File Backend**:
+- Stack state stored in `~/.modelops/pulumi/backend/{azure|workspace|adaptive}/`
+- Work directories at `~/.modelops/pulumi/{azure|workspace|adaptive}/`
+- No custom StateManager or state.json files
+- All state managed through Pulumi outputs
+
+**Cross-Stack Communication**:
+```python
+# In Stack 2, reference Stack 1
+infra_ref = f"{infra_stack}-{env}"
+stack_ref = pulumi.StackReference(infra_ref)
+kubeconfig = stack_ref.get_output("kubeconfig")
 ```
-ComponentResource.outputs → Extract → Binding → Pass to next plane
-                                         ↓
-                               Can also come from:
-                               - StackReference
-                               - Local file
-                               - Mock object
-```
 
-### Binding Sources
+### Resource Protection
 
-The system supports **three ways** to provide bindings:
+**Per-User Resource Groups**:
+- Named as `modelops-rg-<username>` for multi-user isolation
+- Protected with `protect=True` and `retain_on_delete=True`
+- `mops infra down` preserves RG by default
+- Use `--delete-rg` flag to force deletion
 
-1. **Pulumi StackReference** (production):
-   ```bash
-   mops workspace up --stack-ref org/project/infra-prod
-   ```
-   - Uses `pulumi.StackReference` to read outputs from another stack
-   - Maintains secret handling
-   - Best for production deployments
-
-2. **Explicit files** (development):
-   ```bash
-   mops workspace up --kubeconfig ~/.kube/config
-   ```
-   - Direct path to configuration files
-   - Bypasses Pulumi entirely
-   - Perfect for local development
-
-3. **Local state** (backward compatibility):
-   ```bash
-   mops workspace up  # Uses existing cluster
-   ```
-   - Uses existing Kubernetes cluster
-   - Maintains compatibility with existing workflows
-
-### Example: Complete Flow
+### Example: Complete Flow (Current Implementation)
 
 ```python
-# 1. ComponentResource creates infrastructure
+# Stack 1: Infrastructure creates Azure resources
 class ModelOpsCluster(pulumi.ComponentResource):
     def __init__(self, name: str, config: dict):
-        # Creates Azure resources
-        # Registers outputs for Pulumi state
-        self.register_outputs({"kubeconfig": secret_kubeconfig})
+        # Per-user resource group
+        username = self._get_username(config)
+        rg_name = f"{base_rg}-{username}"
+        
+        # Create RG with protection
+        rg = azure.resources.ResourceGroup(
+            rg_name,
+            resource_group_name=rg_name,
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                protect=True,
+                retain_on_delete=True
+            )
+        )
+        
+        # Create AKS and get kubeconfig using actual resource name
+        aks = self._create_aks_cluster(...)
+        kubeconfig = aks.name.apply(
+            lambda real_name: azure.containerservice.list_managed_cluster_user_credentials_output(
+                resource_group_name=rg.name,
+                resource_name=real_name  # Use actual ARM name
+            )
+        )
+        
+        # Register outputs for StackReference access
+        self.register_outputs({
+            "kubeconfig": pulumi.Output.secret(kubeconfig),
+            "cluster_name": aks.name,
+            "resource_group": rg.name
+        })
 
-# 2. Extract outputs into simple binding
-@dataclass(frozen=True)
-class ClusterBinding:
-    kubeconfig: str  # Just the string, no Pulumi Output
+# Stack 2: Workspace references Stack 1
+class DaskWorkspace(pulumi.ComponentResource):
+    def __init__(self, name: str, infra_stack_ref: str, config: dict):
+        # Get kubeconfig from Stack 1
+        infra = pulumi.StackReference(infra_stack_ref)
+        kubeconfig = infra.get_output("kubeconfig")
+        
+        # Create K8s provider and deploy Dask
+        provider = k8s.Provider("k8s", kubeconfig=kubeconfig)
+        # ... deploy Dask resources ...
 
-# 3. Load binding from any source
-def load_cluster_binding(stack_ref=None, kubeconfig_path=None, state=None):
-    if stack_ref:
-        ref = pulumi.StackReference(stack_ref)
-        return ClusterBinding(kubeconfig=ref.get_output("kubeconfig"))
-    elif kubeconfig_path:
-        return ClusterBinding(kubeconfig=Path(kubeconfig_path).read_text())
-    elif state:
-        raise ValueError("Must provide either stack_ref or kubeconfig_path")
-
-# 4. Pass binding to next plane
-binding = load_cluster_binding(...)
-workspace = create_workspace(binding)  # Works regardless of source!
+# Stack 3: Adaptive references both Stack 1 and 2
+class AdaptiveRun(pulumi.ComponentResource):
+    def __init__(self, run_id: str, infra_ref: str, workspace_ref: str, config: dict):
+        # Get outputs from both stacks
+        infra = pulumi.StackReference(infra_ref)
+        workspace = pulumi.StackReference(workspace_ref)
+        
+        kubeconfig = infra.get_output("kubeconfig")
+        scheduler_addr = workspace.get_output("scheduler_address")
+        # ... deploy adaptive workers ...
 ```
-
-### Why Not Just Pulumi Outputs?
-
-1. **Runtime needs**: Pods can't read `pulumi.Output[T]` - they need strings in env vars
-2. **Testability**: `DaskBinding(scheduler_addr="tcp://localhost:8786")` - no Pulumi needed
-3. **Portability**: Use any existing cluster, not just Pulumi-managed
-4. **Clarity**: Bindings make the contract explicit and documented
 
 ---
 
@@ -349,7 +363,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
 
 ### CLI Integration
 
-#### mops infra up (Hybrid Approach)
+#### mops infra up (Current Implementation)
 ```python
 # modelops/cli/infra.py
 import typer
@@ -367,85 +381,67 @@ app = typer.Typer()
 
 @app.command()
 def up(
-    config: Optional[Path] = typer.Option(None, "--config", help="Provider config file"),
-    stack_ref: Optional[str] = typer.Option(None, "--stack-ref", help="Pulumi stack reference"),
-    kubeconfig: Optional[Path] = typer.Option(None, "--kubeconfig", help="Path to kubeconfig file")
+    config: Path = typer.Option(
+        ...,
+        "--config", "-c",
+        help="Provider configuration file (YAML)"
+    )
 ):
-    """Create or connect to infrastructure (multiple modes supported).
+    """Create infrastructure from zero based on provider config.
     
-    Examples:
-        # Create new Azure infrastructure
+    Example:
         mops infra up --config ~/.modelops/providers/azure.yaml
-        
-        # Use existing Pulumi stack
-        mops infra up --stack-ref org/project/infra-prod
-        
-        # Use local kubeconfig
-        mops infra up --kubeconfig ~/.kube/config
     """
-    # Get outputs from Pulumi stack
+    # Load configuration
+    with open(config) as f:
+        provider_config = yaml.safe_load(f)
     
-    if config:
-        # Mode 1: Create new infrastructure via ComponentResource
-        with open(config) as f:
-            provider_config = yaml.safe_load(f)
-        
-        def program():
+    def pulumi_program():
+        """Pulumi program that creates infrastructure using ComponentResource."""
+        if provider_config.get("provider") == "azure":
+            from ..infra.components.azure import ModelOpsCluster
             # Single component handles all complexity
             cluster = ModelOpsCluster("modelops", provider_config)
-            # Outputs automatically registered by component
+            
+            # Export outputs at the stack level for access via StackReference
+            pulumi.export("kubeconfig", cluster.kubeconfig)
+            pulumi.export("cluster_name", cluster.cluster_name)
+            pulumi.export("resource_group", cluster.resource_group)
+            pulumi.export("location", cluster.location)
+            pulumi.export("acr_login_server", cluster.acr_login_server)
+            
             return cluster
-        
-        stack = auto.create_or_select_stack(
-            stack_name="modelops-infra",
-            project_name="modelops-infra",
-            program=program
-        )
-        
-        typer.echo("Creating infrastructure from zero...")
-        result = stack.up()
-        
-        # Extract outputs into binding
-        binding = ClusterBinding(
-            kubeconfig=result.outputs["kubeconfig"].value,
-            acr_login_server=result.outputs.get("acr_login_server", {}).get("value")
-        )
-        
-    elif stack_ref or kubeconfig:
-        # Mode 2: Use existing infrastructure
-        binding = load_cluster_binding(stack_ref, kubeconfig)
-        typer.echo(f"✓ Loaded existing cluster binding")
     
-    else:
-        # Mode 3: Try to load from state
-        binding = load_cluster_binding(state=state)
-        typer.echo(f"✓ Loaded binding from state")
+    # Create or select Pulumi stack with local backend
+    stack_name = provider_config.get("stack_name", "modelops-infra-dev")
+    project_name = "modelops-infra"
     
-    # Save binding to state for other planes to use
-    # Outputs saved to Pulumi stack automatically
-    typer.echo(f"→ ClusterBinding saved to state")
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path.home() / ".modelops" / "pulumi" / "azure"
+    work_dir.mkdir(parents=True, exist_ok=True)
     
     stack = auto.create_or_select_stack(
-        stack_name="modelops-infra",
-        project_name="modelops-infra",
-        program=program
+        stack_name=stack_name,
+        project_name=project_name,
+        program=pulumi_program,
+        opts=auto.LocalWorkspaceOptions(
+            work_dir=str(work_dir),
+            project_settings=auto.ProjectSettings(
+                name=project_name,
+                runtime="python",
+                backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+            )
+        )
     )
     
     typer.echo("Creating Azure infrastructure from zero...")
     result = stack.up()
     
-    binding = ClusterBinding(
-        kubeconfig=result.outputs["kubeconfig"].value,
-        acr_login_server=result.outputs.get("acr_login_server", {}).get("value")
-    )
-    
-    # Save binding to state
-    # State is now managed via Pulumi stacks
-    # Get outputs from Pulumi stack
-    # Outputs saved to Pulumi stack automatically
-    
-    typer.echo(f"✓ Created AKS cluster: {provider_config['aks']['name']}")
-    typer.echo(f"→ ClusterBinding saved to state")
+    typer.echo(f"✓ Infrastructure created successfully!")
+    typer.echo(f"  Stack: {stack_name}")
+    typer.echo(f"\nGet kubeconfig:")
+    typer.echo(f"  pulumi stack output kubeconfig --show-secrets --stack {stack_name} --cwd {work_dir}")
 
 @app.command()
 def down():
@@ -800,8 +796,7 @@ import yaml
 import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
-# State is now managed via Pulumi stacks
-from ..infra.loaders import load_cluster_binding, load_dask_binding
+from ..infra.components.workspace import DaskWorkspace
 from ..k8s.components.provider import K8sProvider
 from ..workspace.components.dask import DaskWorkspace
 from dataclasses import asdict
@@ -810,70 +805,75 @@ app = typer.Typer()
 
 @app.command()
 def up(
-    spec: Path = typer.Option(..., "-f", "--file", help="Workspace spec YAML"),
-    stack_ref: Optional[str] = typer.Option(None, "--stack-ref", help="Infra stack reference"),
-    kubeconfig: Optional[Path] = typer.Option(None, "--kubeconfig", help="Path to kubeconfig")
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c",
+        help="Workspace configuration file (YAML)"
+    ),
+    infra_stack: str = typer.Option(
+        "modelops-infra",
+        "--infra-stack",
+        help="Infrastructure stack to reference"
+    ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name"
+    )
 ):
-    """Deploy Dask workspace on Kubernetes.
+    """Deploy Dask workspace on existing infrastructure.
     
-    Examples:
-        # Use infrastructure from Pulumi stack
-        mops workspace up -f workspace.yaml --stack-ref org/project/infra-prod
-        
-        # Use local kubeconfig
-        mops workspace up -f workspace.yaml --kubeconfig ~/.kube/config
-        
-        # Use binding from state (default)
-        mops workspace up -f workspace.yaml
+    This creates Stack 2 which references Stack 1 (infrastructure) to get
+    the kubeconfig and deploy Dask scheduler and workers.
+    
+    Example:
+        mops workspace up --env dev
+        mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
-    # Get outputs from Pulumi stack
+    # Load configuration if provided
+    workspace_config = {}
+    if config and config.exists():
+        with open(config) as f:
+            workspace_config = yaml.safe_load(f)
     
-    # Load workspace spec
-    with open(spec) as f:
-        ws_spec = yaml.safe_load(f)
+    def pulumi_program():
+        """Create DaskWorkspace in Stack 2 context."""
+        from ..infra.components.workspace import DaskWorkspace
+        
+        # Build stack reference for infrastructure
+        infra_ref = f"{infra_stack}-{env}"
+        
+        return DaskWorkspace("dask", infra_ref, workspace_config)
     
-    # Load cluster binding from any source
-    cluster_binding = load_cluster_binding(stack_ref, kubeconfig, state)
+    stack_name = f"modelops-workspace-{env}"
+    project_name = "modelops-workspace"
     
-    def program():
-        # Create K8s provider wrapper (cloud-agnostic)
-        k8s_provider = K8sProvider("k8s", cluster_binding.kubeconfig)
-        
-        # Create Dask workspace using wrapped provider
-        workspace = DaskWorkspace("dask", k8s_provider, ws_spec)
-        
-        return workspace
-        provider = k8s.Provider("k8s", kubeconfig=cluster_binding.kubeconfig)
-        
-        # Deploy workspace
-        from ..infra.workspace import create_workspace
-        binding = create_workspace(ws_spec, provider)
-        
-        pulumi.export("scheduler_addr", binding.scheduler_addr)
-        pulumi.export("dashboard_url", binding.dashboard_url)
-        pulumi.export("namespace", binding.namespace)
+    # Use consistent backend structure
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
+    work_dir.mkdir(parents=True, exist_ok=True)
     
-    namespace = ws_spec.metadata.get("namespace", f"modelops-ws-{uuid.uuid4().hex[:8]}")
     stack = auto.create_or_select_stack(
-        stack_name=f"workspace-{namespace}",
-        project_name="modelops-workspace",
-        program=program
+        stack_name=stack_name,
+        project_name=project_name,
+        program=pulumi_program,
+        opts=auto.LocalWorkspaceOptions(
+            work_dir=str(work_dir),
+            project_settings=auto.ProjectSettings(
+                name=project_name,
+                runtime="python",
+                backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+            )
+        )
     )
     
-    typer.echo(f"Creating workspace '{namespace}'...")
+    typer.echo(f"Deploying Dask workspace to environment: {env}")
     result = stack.up()
     
-    binding = DaskBinding(
-        scheduler_addr=result.outputs["scheduler_addr"].value,
-        dashboard_url=result.outputs["dashboard_url"].value,
-        namespace=result.outputs["namespace"].value
-    )
-    
-    # Outputs saved to Pulumi stack automatically
-    
-    typer.echo(f"✓ Workspace created: {namespace}")
-    typer.echo(f"  Scheduler: {binding.scheduler_addr}")
-    typer.echo(f"  Dashboard: {binding.dashboard_url}")
+    outputs = result.outputs
+    typer.echo(f"✓ Workspace deployed successfully!")
+    typer.echo(f"  Scheduler: {outputs.get('scheduler_address', {}).value}")
+    typer.echo(f"  Dashboard: {outputs.get('dashboard_url', {}).value}")
 
 @app.command()
 def down(
@@ -1078,112 +1078,101 @@ import pulumi_kubernetes as k8s
 from pathlib import Path
 from ..components.specs import AdaptiveSpec
 from ..components.provisioners.postgres import provision_postgres
-# State is now managed via Pulumi stacks
-from ..infra.bindings import ClusterBinding, DaskBinding
+from ..infra.components.adaptive import AdaptiveRun
 
 app = typer.Typer()
 
 @app.command()
 def up(
-    file: Path = typer.Option(..., "-f", "--file", help="Adaptive spec YAML")
+    config: Path = typer.Argument(
+        ...,
+        help="Adaptive run configuration file (YAML)"
+    ),
+    run_id: Optional[str] = typer.Option(
+        None,
+        "--run-id", "-r",
+        help="Unique run identifier (auto-generated if not provided)"
+    ),
+    infra_stack: str = typer.Option(
+        "modelops-infra",
+        "--infra-stack",
+        help="Infrastructure stack name (without env suffix)"
+    ),
+    workspace_stack: str = typer.Option(
+        "modelops-workspace",
+        "--workspace-stack",
+        help="Workspace stack name (without env suffix)"
+    ),
+    env: str = typer.Option(
+        "dev",
+        "--env", "-e",
+        help="Environment name"
+    )
 ):
-    """Create adaptive optimization run."""
-    with open(file) as f:
-        spec_dict = yaml.safe_load(f)
+    """Start an adaptive optimization run.
     
-    spec = AdaptiveSpec(**spec_dict)
+    This creates Stack 3 which references both Stack 1 (infrastructure) and
+    Stack 2 (workspace) to deploy adaptive workers that connect to Dask.
     
-    # Auto-generate namespace
-    if not spec.namespace:
-        spec.namespace = f"modelops-run-{uuid.uuid4().hex[:8]}"
+    Example:
+        mops adaptive up optuna-config.yaml
+        mops adaptive up experiment.yaml --run-id exp-001 --env prod
+    """
+    # Generate run ID if not provided
+    if not run_id:
+        from datetime import datetime
+        run_id = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     
-    # Get bindings from state
-    # Get outputs from Pulumi stack
-    # Get bindings from stack outputs
-    infra_ref = pulumi.StackReference("modelops-infra")
-    workspace_ref = pulumi.StackReference(f"modelops-workspace-{spec.workspace_ref.namespace}")
-    cluster_binding = ClusterBinding(kubeconfig=infra_ref.get_output("kubeconfig"))
-    dask_binding = DaskBinding(scheduler_address=workspace_ref.get_output("scheduler_address"))
+    # Load configuration
+    with open(config) as f:
+        run_config = yaml.safe_load(f)
     
-    # Validate replicas vs central store
-    if spec.workers.replicas > 1 and not spec.central_store:
-        typer.echo(
-            "Error: central_store is required when workers.replicas > 1. "
-            "Add a central_store section to your spec or reduce replicas to 1."
+    def pulumi_program():
+        """Create AdaptiveRun in Stack 3 context."""
+        from ..infra.components.adaptive import AdaptiveRun
+        
+        # Build stack references
+        infra_ref = f"{infra_stack}-{env}"
+        workspace_ref = f"{workspace_stack}-{env}"
+        
+        return AdaptiveRun(
+            run_id,
+            infra_stack_ref=infra_ref,
+            workspace_stack_ref=workspace_ref,
+            config=run_config
         )
-        raise typer.Exit(1)
     
-    def program():
-        provider = k8s.Provider("k8s", kubeconfig=cluster_binding.kubeconfig)
-        
-        # Create namespace
-        namespace = k8s.core.v1.Namespace(
-            "adaptive-ns",
-            metadata={"name": spec.namespace},
-            opts=pulumi.ResourceOptions(provider=provider)
-        )
-        
-        # Provision Postgres if needed
-        pg_binding = None
-        if spec.central_store:
-            pg_binding = provision_postgres(
-                spec.namespace,
-                spec.central_store.model_dump(),
-                provider
-            )
-        
-        # Build container spec
-        container_spec = {
-            "name": "worker",
-            "image": spec.workers.image,
-            "command": ["python", "-m", "modelops.runners.adaptive_worker_runner"],
-            "env": [
-                {"name": "DASK_SCHEDULER_ADDRESS", "value": dask_binding.scheduler_addr},
-                {"name": "ADAPTER_PATH", 
-                 "value": spec.algorithm.get("adapter_path", "examples.fake_adapter:FakeAdapter")},
-                {"name": "BATCH_SIZE", "value": str(spec.algorithm.get("batch_size", 4))},
-                {"name": "REPLICATES_PER_PARAM", "value": str(spec.algorithm.get("replicates", 10))}
-            ],
-            "resources": spec.workers.resources.model_dump()
-        }
-        
-        # Add envFrom as sibling of env
-        if pg_binding:
-            container_spec["envFrom"] = [{"secretRef": {"name": pg_binding.secret_name}}]
-        
-        # Adaptive worker deployment
-        deployment = k8s.apps.v1.Deployment(
-            "adaptive-workers",
-            metadata={"name": "adaptive-workers", "namespace": spec.namespace},
-            spec={
-                "replicas": spec.workers.replicas,
-                "selector": {"matchLabels": {"app": "adaptive-worker"}},
-                "template": {
-                    "metadata": {"labels": {"app": "adaptive-worker"}},
-                    "spec": {
-                        "containers": [container_spec],
-                        "nodeSelector": spec.workers.node_selector
-                    }
-                }
-            },
-            opts=pulumi.ResourceOptions(provider=provider, depends_on=[namespace])
-        )
-        
-        pulumi.export("namespace", spec.namespace)
+    stack_name = f"modelops-adaptive-{run_id}"
+    project_name = "modelops-adaptive"
+    
+    # Unique backend for each run
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+    backend_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
+    work_dir.mkdir(parents=True, exist_ok=True)
     
     stack = auto.create_or_select_stack(
-        stack_name=f"adaptive-{spec.namespace}",
-        project_name="modelops-adaptive",
-        program=program
+        stack_name=stack_name,
+        project_name=project_name,
+        program=pulumi_program,
+        opts=auto.LocalWorkspaceOptions(
+            work_dir=str(work_dir),
+            project_settings=auto.ProjectSettings(
+                name=project_name,
+                runtime="python",
+                backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+            )
+        )
     )
     
-    typer.echo(f"Creating adaptive run '{spec.namespace}'...")
+    typer.echo(f"Starting adaptive run: {run_id}")
     result = stack.up()
     
-    typer.echo(f"✓ Adaptive run created: {spec.namespace}")
-    if spec.central_store:
-        typer.echo(f"  Postgres: provisioned with PVC")
-    typer.echo(f"  Workers: {spec.workers.replicas}")
+    outputs = result.outputs
+    typer.echo(f"✓ Adaptive run started!")
+    typer.echo(f"  Run ID: {run_id}")
+    typer.echo(f"  Namespace: {outputs.get('namespace', {}).value}")
+    typer.echo(f"  Job: {outputs.get('job_name', {}).value}")
 
 @app.command()
 def down(
