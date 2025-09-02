@@ -49,7 +49,10 @@ def up(
         from ..infra.components.workspace import DaskWorkspace
         
         # Use centralized naming for infrastructure reference
-        infra_ref = StackNaming.get_infra_stack_ref(env)
+        # For file backends, the organization is always "organization" (Pulumi constant)
+        infra_project = StackNaming.get_project_name("infra")
+        infra_stack = StackNaming.get_infra_stack_ref(env)
+        infra_ref = f"organization/{infra_project}/{infra_stack}"
         
         # Pass environment to workspace config
         workspace_config["environment"] = env
@@ -60,8 +63,8 @@ def up(
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    # Use consistent backend structure
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
+    # Use the same backend as infrastructure (Azure backend) for stack references to work
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
     backend_dir.mkdir(parents=True, exist_ok=True)
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -138,7 +141,7 @@ def down(
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
     
     if not work_dir.exists():
@@ -188,7 +191,7 @@ def status(
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
     
     if not work_dir.exists() or not backend_dir.exists():
@@ -246,7 +249,7 @@ def status(
 def list():
     """List all workspaces across environments."""
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "workspace"
+    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
     
     if not backend_dir.exists():
         console.print("[yellow]No workspaces found[/yellow]")

@@ -69,7 +69,8 @@ class DaskWorkspace(pulumi.ComponentResource):
             workers_config = config
         
         # Extract configuration values
-        scheduler_image = scheduler_config.get("image", "ghcr.io/dask/dask:latest")
+        # Use specific version that matches our client (2024.8.0)
+        scheduler_image = scheduler_config.get("image", "ghcr.io/dask/dask:2024.8.0")
         worker_image = workers_config.get("image", scheduler_image)
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
         
@@ -79,6 +80,11 @@ class DaskWorkspace(pulumi.ComponentResource):
         
         # Tolerations for tainted nodes
         tolerations = config.get("spec", {}).get("tolerations", [])
+        # Add default toleration for modelops.io/role taint
+        if not tolerations:
+            tolerations = [
+                {"key": "modelops.io/role", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+            ]
         
         # Create namespace
         ns = k8s.core.v1.Namespace(
@@ -170,12 +176,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "1"
                                     })
                                 ),
-                                env=[
-                                    k8s.core.v1.EnvVarArgs(
-                                        name="DASK_SCHEDULER__DASHBOARD__ENABLED",
-                                        value="true"
-                                    )
-                                ] + [k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])]
+                                env=[k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])]
                             )
                         ],
                         node_selector=scheduler_node_selector if scheduler_node_selector else None,
@@ -261,20 +262,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "2"
                                     })
                                 ),
-                                env=[
-                                    k8s.core.v1.EnvVarArgs(
-                                        name="DASK_WORKER__MEMORY__TARGET",
-                                        value="0.90"  # Spill to disk at 90% memory
-                                    ),
-                                    k8s.core.v1.EnvVarArgs(
-                                        name="DASK_WORKER__MEMORY__SPILL",
-                                        value="0.95"
-                                    ),
-                                    k8s.core.v1.EnvVarArgs(
-                                        name="DASK_WORKER__MEMORY__PAUSE",
-                                        value="0.98"
-                                    )
-                                ] + [k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
+                                env=[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
                             )
                         ],
                         node_selector=worker_node_selector if worker_node_selector else None,

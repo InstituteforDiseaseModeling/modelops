@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Simple test of Dask without custom modules.
+"""Simple test of Dask without custom modules (e.g. the simulation service).
 
 This test runs pure Python functions that don't require modelops imports.
 """

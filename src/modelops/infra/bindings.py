@@ -2,6 +2,8 @@
 
 These bindings are the typed contracts between infrastructure
 planes as described in the architecture.
+
+TODO: deprecated? should fold in later?
 """
 
 from dataclasses import dataclass
