@@ -386,23 +386,35 @@ class PostgresBinding(BaseModel):
     namespace: str       # Where Postgres lives
 ```
 
-### Command Flow with Bindings
+### Command Flow with Stack References
 
 ```bash
 # Step 1: Create Azure infrastructure from zero
 $ mops infra up --config ~/.modelops/providers/azure.yaml
+✓ Created Stack: modelops-infra
 ✓ Created AKS cluster: modelops-aks
-→ Output: ClusterBinding(kubeconfig="<base64>...")
+→ Outputs saved to stack (query with: pulumi stack output --stack modelops-infra)
 
-# Step 2: Deploy Dask using only the kubeconfig
+# Step 2: Deploy Dask using StackReference to get kubeconfig
 $ mops workspace up -f workspace.yaml
-✓ Created workspace: modelops-dev
-→ Output: DaskBinding(scheduler_addr="tcp://dask-scheduler.modelops-dev:8786")
+✓ Created Stack: modelops-workspace
+✓ Referenced: modelops-infra (via StackReference)
+✓ Deployed Dask to namespace: modelops-dev
+→ Outputs saved to stack (query with: pulumi stack output --stack modelops-workspace)
 
-# Step 3: Run optimization using Dask connection
-$ mops adaptive up -f adaptive.yaml  
-✓ Started run: modelops-run-7x9k2
-→ Uses: DaskBinding + creates PostgresBinding internally
+# Step 3: Run optimization using StackReferences
+$ mops adaptive up -f adaptive.yaml --run-id abc123
+✓ Created Stack: modelops-adaptive-abc123
+✓ Referenced: modelops-workspace (for scheduler_addr)
+✓ Referenced: modelops-infra (for kubeconfig)
+✓ Started adaptive workers
+→ Outputs saved to stack (query with: pulumi stack output --stack modelops-adaptive-abc123)
+
+# Check status anytime
+$ pulumi stack output --stack modelops-workspace
+scheduler_addr: tcp://dask-scheduler.modelops-dev:8786
+dashboard_url: http://dask-scheduler.modelops-dev:8787
+namespace: modelops-dev
 ```
 
 ### Why This Architecture Works
@@ -439,6 +451,392 @@ $ mops adaptive up -f adaptive.yaml
    ```
 
 This means the workspace and adaptive planes are **built on but not entangled with** Azure. Only the infra plane knows about Azure; everything above speaks pure Kubernetes.
+
+---
+
+## 1.6) ComponentResources and Bindings: Clean Separation
+
+The system uses **Pulumi ComponentResources** for infrastructure provisioning and **simple dataclass bindings** as runtime DTOs (Data Transfer Objects). Bindings are NOT persisted - they're just typed containers for passing data within a program.
+
+### ComponentResources: Infrastructure Provisioning
+
+ComponentResources encapsulate cloud provisioning complexity and register outputs to the Pulumi stack:
+
+```python
+# Infrastructure provisioning with ComponentResource
+class ModelOpsCluster(pulumi.ComponentResource):
+    """Encapsulates all Azure infrastructure from zero."""
+    def __init__(self, name: str, config: dict, opts=None):
+        super().__init__("modelops:infra:cluster", name, None, opts)
+        
+        # Creates child resources:
+        # - ResourceGroup, ACR, AKS with node pools
+        # Pulumi manages state, dependencies, rollbacks
+        
+        # Register outputs to STACK (not custom state!)
+        self.register_outputs({
+            "kubeconfig": pulumi.Output.secret(kubeconfig),
+            "cluster_endpoint": aks.fqdn,
+            "acr_login_server": acr.login_server
+        })
+```
+
+### Bindings: Runtime DTOs Only
+
+Bindings are simple data containers used WITHIN a Pulumi program to pass data
+between functions. They are NOT saved anywhere:
+
+```python
+# Simple dataclasses for type safety and clarity
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class ClusterBinding:
+    """Runtime DTO for cluster connection info."""
+    kubeconfig: str  # Just the string value
+    
+@dataclass(frozen=True)  
+class DaskBinding:
+    """Runtime DTO for Dask connection info."""
+    scheduler_addr: str  # tcp://dask-scheduler.namespace:8786
+    dashboard_url: str   # http://dask-scheduler.namespace:8787
+    namespace: str
+
+@dataclass(frozen=True)
+class PostgresBinding:
+    """Runtime DTO for Postgres connection info."""
+    secret_name: str  # K8s secret name
+    namespace: str
+```
+
+### The Flow: Stack Outputs → Bindings → Functions
+
+```python
+# Inside a Pulumi program (e.g., workspace up)
+def program():
+    # 1. Get outputs from another stack
+    infra = pulumi.StackReference("modelops-infra")
+    kubeconfig = infra.get_output("kubeconfig")
+    
+    # 2. Create binding DTO (temporary, in-memory only)
+    binding = ClusterBinding(kubeconfig=kubeconfig)
+    
+    # 3. Pass binding to functions that need it
+    k8s_provider = create_k8s_provider(binding)
+    workspace = create_dask_workspace(k8s_provider)
+    
+    # 4. Register outputs to THIS stack
+    pulumi.export("scheduler_addr", workspace.scheduler_addr)
+    pulumi.export("dashboard_url", workspace.dashboard_url)
+    # Note: binding is NOT saved - only outputs are!
+```
+
+### Why Bindings as DTOs?
+
+1. **Type safety**: Functions know exactly what data they need
+2. **Testing**: Easy to create mock bindings for tests
+3. **Clarity**: Explicit contracts between functions
+4. **No persistence**: Bindings are ephemeral - only stack outputs persist
+
+### Stack Outputs Are The Only State
+
+```python
+# Getting connection info - always from stack outputs
+def get_dask_connection():
+    """Get Dask connection from stack outputs."""
+    stack = auto.select_stack("modelops-workspace")
+    outputs = stack.outputs()
+    
+    # Create binding DTO from outputs (for type safety)
+    return DaskBinding(
+        scheduler_addr=outputs["scheduler_addr"].value,
+        dashboard_url=outputs["dashboard_url"].value,
+        namespace=outputs["namespace"].value
+    )
+
+# Using in adaptive plane
+def create_adaptive_workers():
+    # Get binding from stack outputs
+    dask = get_dask_connection()
+    
+    # Use binding to configure workers
+    env = {
+        "DASK_SCHEDULER_ADDRESS": dask.scheduler_addr
+    }
+    # Deploy workers...
+```
+
+### No StateManager, No state.json
+
+The old approach with StateManager is completely replaced:
+
+```python
+# OLD (removed):
+state = StateManager()
+state.save_binding("infra", binding.to_dict())  # ❌ No more!
+
+# NEW (Pulumi-native):
+self.register_outputs({
+    "kubeconfig": pulumi.Output.secret(kubeconfig),  # ✓ Saved to stack
+    "cluster_endpoint": cluster_endpoint             # ✓ Queryable anytime
+})
+```
+
+### Summary
+
+- **ComponentResources** → Create infrastructure, save outputs to Pulumi stack
+- **Stack Outputs** → The ONLY persistent state (managed by Pulumi)
+- **Bindings** → Temporary DTOs for passing data within programs
+- **StackReferences** → How stacks read each other's outputs
+- **No custom state** → Everything flows through Pulumi stacks
+
+---
+
+## 1.7) Stack Architecture - How Information Flows
+
+The system uses **three independent Pulumi stacks** that reference each other's outputs. No custom state management needed - Pulumi handles it all.
+
+### The Three-Stack Pattern
+
+```
+Stack 1: modelops-infra
+├── Creates: Azure resources (RG, AKS, ACR)
+├── Component: ModelOpsCluster
+└── Outputs: kubeconfig, cluster_endpoint, acr_url
+
+Stack 2: modelops-workspace  
+├── Creates: Dask on Kubernetes
+├── Component: DaskWorkspace
+├── Depends on: Stack 1's kubeconfig (via StackReference)
+└── Outputs: scheduler_addr, dashboard_url, namespace
+
+Stack 3: modelops-adaptive-{run-id}
+├── Creates: Adaptive workers, Postgres
+├── Component: AdaptiveRun  
+├── Depends on: Stack 2's scheduler_addr (via StackReference)
+└── Outputs: run_status, results_location
+```
+
+### How StackReferences Connect Stacks
+
+```python
+# Stack 1: Infrastructure (standalone)
+class ModelOpsCluster(pulumi.ComponentResource):
+    def __init__(self, name: str, config: dict):
+        super().__init__("modelops:infra:cluster", name, None)
+        
+        # Creates Azure resources
+        aks = azure.containerservice.ManagedCluster(...)
+        
+        # Get kubeconfig
+        creds = azure.containerservice.list_managed_cluster_user_credentials_output(...)
+        kubeconfig = creds.kubeconfigs[0].value.apply(lambda b: base64.b64decode(b))
+        
+        # Register outputs for OTHER stacks to reference
+        self.register_outputs({
+            "kubeconfig": pulumi.Output.secret(kubeconfig),
+            "cluster_endpoint": aks.fqdn,
+            "acr_login_server": acr.login_server if acr else None
+        })
+
+# Stack 2: Workspace (depends on Stack 1)
+class DaskWorkspace(pulumi.ComponentResource):
+    def __init__(self, name: str, infra_stack_ref: str):
+        super().__init__("modelops:workspace:dask", name, None)
+        
+        # Reference Stack 1 to get kubeconfig
+        infra = pulumi.StackReference(infra_stack_ref)
+        kubeconfig = infra.get_output("kubeconfig")  # This is the connection!
+        
+        # Create K8s provider using kubeconfig from Stack 1
+        k8s_provider = pulumi_kubernetes.Provider(
+            "k8s-provider",
+            kubeconfig=kubeconfig  # Using Stack 1's output
+        )
+        
+        # Now create Dask resources on that cluster
+        namespace = k8s.core.v1.Namespace(
+            "dask-namespace",
+            opts=pulumi.ResourceOptions(provider=k8s_provider)
+        )
+        
+        # Deploy Dask scheduler and workers...
+        
+        # Register outputs for Stack 3 to reference
+        self.register_outputs({
+            "scheduler_addr": f"tcp://dask-scheduler.{namespace.metadata.name}:8786",
+            "dashboard_url": f"http://dask-scheduler.{namespace.metadata.name}:8787",
+            "namespace": namespace.metadata.name
+        })
+
+# Stack 3: Adaptive (depends on Stack 2)
+class AdaptiveRun(pulumi.ComponentResource):
+    def __init__(self, name: str, workspace_stack_ref: str, run_config: dict):
+        super().__init__("modelops:adaptive:run", name, None)
+        
+        # Reference Stack 2 to get Dask connection info
+        workspace = pulumi.StackReference(workspace_stack_ref)
+        scheduler_addr = workspace.get_output("scheduler_addr")
+        namespace = workspace.get_output("namespace")
+        
+        # Also need kubeconfig - get from infra stack
+        infra_stack_ref = workspace_stack_ref.replace("-workspace", "-infra")
+        infra = pulumi.StackReference(infra_stack_ref)
+        kubeconfig = infra.get_output("kubeconfig")
+        
+        # Create adaptive workers that connect to Dask
+        # ... deployment logic ...
+        
+        self.register_outputs({
+            "run_id": name,
+            "status": "running",
+            "trials_completed": 0
+        })
+```
+
+### Where Pulumi Stores Stack State
+
+```bash
+# Local file backend (default for MVP)
+~/.modelops/pulumi/backend/
+├── modelops-infra/
+│   └── .pulumi/
+│       └── stacks/
+│           └── modelops-infra.json     # Stack 1 state & outputs
+├── modelops-workspace/
+│   └── .pulumi/
+│       └── stacks/
+│           └── modelops-workspace.json  # Stack 2 state & outputs
+└── modelops-adaptive-abc123/
+    └── .pulumi/
+        └── stacks/
+            └── modelops-adaptive-abc123.json  # Stack 3 state
+
+# Each stack's JSON contains:
+{
+  "outputs": {
+    "kubeconfig": {
+      "value": "apiVersion: v1\nkind: Config\n...",
+      "secret": true  # Encrypted at rest
+    },
+    "cluster_endpoint": {
+      "value": "modelops-aks.eastus2.azure.com"
+    }
+  },
+  "resources": [...],  # All managed resources
+  "version": 3         # Stack format version
+}
+```
+
+### Complete Flow: From Zero to Running
+
+```
+Step 1: Create Infrastructure
+────────────────────────────
+$ mops infra up --config azure.yaml
+
+→ Creates Stack: modelops-infra
+→ Runs: ModelOpsCluster component
+→ Creates: AKS cluster in Azure
+→ Stores outputs in: ~/.modelops/pulumi/backend/modelops-infra/
+
+Step 2: Deploy Workspace
+────────────────────────
+$ mops workspace up
+
+→ Creates Stack: modelops-workspace  
+→ References: modelops-infra via StackReference("file://~/.modelops/pulumi/backend/modelops-infra")
+→ Gets: kubeconfig from Stack 1
+→ Deploys: Dask on the AKS cluster
+→ Stores outputs in: ~/.modelops/pulumi/backend/modelops-workspace/
+
+Step 3: Run Adaptive Job
+────────────────────────
+$ mops adaptive up --run-id abc123
+
+→ Creates Stack: modelops-adaptive-abc123
+→ References: modelops-workspace for scheduler_addr
+→ References: modelops-infra for kubeconfig  
+→ Deploys: Adaptive workers that connect to Dask
+→ Stores outputs in: ~/.modelops/pulumi/backend/modelops-adaptive-abc123/
+```
+
+### Querying Stack Information
+
+```bash
+# Check infrastructure status
+$ pulumi stack output --stack modelops-infra
+cluster_endpoint: modelops-aks.eastus2.azure.com
+acr_login_server: modelopsacr.azurecr.io
+
+# Get workspace connection info
+$ pulumi stack output --stack modelops-workspace
+scheduler_addr: tcp://dask-scheduler.modelops:8786
+dashboard_url: http://dask-scheduler.modelops:8787
+namespace: modelops
+
+# Check run status
+$ pulumi stack output --stack modelops-adaptive-abc123
+run_id: abc123
+status: running
+trials_completed: 42
+
+# Get kubeconfig for kubectl
+$ pulumi stack output kubeconfig --stack modelops-infra --show-secrets > kubeconfig.yaml
+$ export KUBECONFIG=./kubeconfig.yaml
+$ kubectl get pods -n modelops
+
+# Port-forward to Dask dashboard
+$ kubectl port-forward -n modelops svc/dask-scheduler 8787:8787
+```
+
+### Using Automation API in Python
+
+```python
+from pulumi import automation as auto
+
+# Get infrastructure info
+infra_stack = auto.select_stack("modelops-infra")
+outputs = infra_stack.outputs()
+cluster_endpoint = outputs["cluster_endpoint"].value
+
+# Get workspace info
+workspace_stack = auto.select_stack("modelops-workspace")  
+outputs = workspace_stack.outputs()
+scheduler = outputs["scheduler_addr"].value
+print(f"Dask scheduler at: {scheduler}")
+
+# List all stacks
+ws = auto.LocalWorkspace()
+stacks = ws.list_stacks()
+for stack in stacks:
+    print(f"Stack: {stack.name}, Last updated: {stack.last_update}")
+```
+
+### Key Benefits of Stack-Based Architecture
+
+1. **No custom state management** - Pulumi handles everything
+2. **Encrypted secrets** - kubeconfig automatically encrypted
+3. **Version history** - `pulumi stack history` shows all changes
+4. **Easy rollback** - `pulumi stack export/import` for disaster recovery
+5. **Clean dependencies** - StackReferences make dependencies explicit
+6. **Independent lifecycle** - Each stack can be updated/destroyed independently
+
+### Destroying Stacks (Reverse Order)
+
+```bash
+# Destroy run (leaves Dask running)
+$ mops adaptive down --run-id abc123
+→ Destroys Stack: modelops-adaptive-abc123
+
+# Destroy workspace (leaves cluster running)  
+$ mops workspace down
+→ Destroys Stack: modelops-workspace
+
+# Destroy infrastructure (removes everything)
+$ mops infra down
+→ Destroys Stack: modelops-infra
+```
 
 ---
 
@@ -572,10 +970,10 @@ modelops/
 │  │  ├── local.py                   # LocalSimulationService (wraps fn_ref, calls ipc.to_ipc)
 │  │  └── dask.py                    # DaskSimulationService + _worker_run_sim uses ipc.to_ipc
 │  │
-│  ├── state/                        # Minimal local state (used later)
-│  │  ├── __init__.py
-│  │  ├── manager.py                 # JSON ~/.modelops/state.json
-│  │  └── models.py                  # WorkspaceState dataclass
+│  ├── state/                        # DEPRECATED - Use Pulumi stack outputs
+│  │  ├── __init__.py                # (Will be removed in refactor)
+│  │  ├── manager.py                 # (Legacy - replaced by stack outputs)
+│  │  └── models.py                  # (Legacy - replaced by stack outputs)
 │  │
 │  └── versions.py                   # DASK/Python pin + doctor helper
 │
@@ -952,7 +1350,7 @@ ssh:
 - Project: `modelops`
 - Stacks: `modelops:infra:<env>` (RG/ACR/AKS), `modelops:workspace:<env>`, `modelops:adaptive:<run>`  
 - State backend: `azblob://modelops-pulumi-state` (one container per env)
-- **IMPORTANT**: Pulumi state is the source of truth for cloud resources; `~/.modelops/state.json` only stores metadata (scheduler addresses, run slugs) for CLI convenience
+- **IMPORTANT**: Pulumi stack outputs are the ONLY source of truth - all state queries go through `pulumi stack output`
 - Safety: `mops destroy --all` refuses to delete if state backend lives in same RG slated for deletion
 
 **Pulumi program (infra, sketch).**

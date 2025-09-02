@@ -4,11 +4,9 @@ __version__ = "0.1.0"
 
 # Make key components available at package level
 from .services import LocalSimulationService, DaskSimulationService
-from .state import StateManager
 
 __all__ = [
     "LocalSimulationService",
-    "DaskSimulationService", 
-    "StateManager",
+    "DaskSimulationService",
     "__version__"
 ]

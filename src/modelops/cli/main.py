@@ -37,13 +37,13 @@ def version():
 def config():
     """Show configuration paths and status."""
     config_dir = Path.home() / ".modelops"
-    state_file = config_dir / "state.json"
     providers_dir = config_dir / "providers"
+    pulumi_dir = config_dir / "pulumi"
     
     console.print("[bold]ModelOps Configuration:[/bold]")
     console.print(f"  Config directory: {config_dir}")
-    console.print(f"  State file: {state_file} {'✓' if state_file.exists() else '✗'}")
     console.print(f"  Providers directory: {providers_dir} {'✓' if providers_dir.exists() else '✗'}")
+    console.print(f"  Pulumi state directory: {pulumi_dir} {'✓' if pulumi_dir.exists() else '✗'}")
     
     if providers_dir.exists():
         providers = list(providers_dir.glob("*.yaml"))

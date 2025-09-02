@@ -66,32 +66,6 @@ class DaskSimulationService:
         from dask.distributed import Client
         self.client = Client(scheduler_address)
     
-    @classmethod
-    def from_workspace(cls, workspace_name: str = "default") -> 'DaskSimulationService':
-        """Create from a provisioned ModelOps workspace.
-        
-        Args:
-            workspace_name: Name of the workspace to connect to
-            
-        Returns:
-            DaskSimulationService connected to the workspace
-            
-        Raises:
-            ValueError: If workspace not found
-        """
-        from ..state.manager import StateManager
-        state = StateManager()
-        workspace = state.get_workspace(workspace_name)
-        
-        if not workspace:
-            raise ValueError(f"Workspace '{workspace_name}' not found. Run 'mops workspace up' first.")
-        
-        scheduler_address = workspace.scheduler_address
-        if not scheduler_address:
-            raise ValueError(f"Workspace '{workspace_name}' has no scheduler address")
-            
-        return cls(scheduler_address)
-    
     def submit(self, fn_ref: str, params: dict, seed: int, *, bundle_ref: str) -> FutureLike:
         """Submit a simulation to Dask cluster.
         
