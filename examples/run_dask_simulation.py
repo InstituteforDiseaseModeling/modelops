@@ -8,10 +8,13 @@ This script demonstrates how to:
 
 Usage:
     # First, port-forward the Dask scheduler:
-    kubectl port-forward -n modelops-default svc/dask-scheduler 8786:8786
+    kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786
     
     # Then run this script:
     python examples/run_dask_simulation.py
+    
+    # Or specify a different namespace:
+    python examples/run_dask_simulation.py --namespace modelops-dask-prod
 """
 
 import sys
@@ -257,6 +260,16 @@ def main():
         default=10,
         help="Number of simulations to run"
     )
+    parser.add_argument(
+        "--show-warnings",
+        action="store_true",
+        help="Show Dask version mismatch warnings (default: suppressed but logged)"
+    )
+    parser.add_argument(
+        "--namespace",
+        default="modelops-dask-dev",
+        help="Kubernetes namespace where Dask is deployed (default: modelops-dask-dev)"
+    )
     
     args = parser.parse_args()
     
@@ -266,17 +279,17 @@ def main():
         service = LocalSimulationService()
     else:
         print(f"Connecting to Dask scheduler at {args.scheduler}")
-        print("(Make sure to run: kubectl port-forward -n modelops-default svc/dask-scheduler 8786:8786)")
+        print(f"(Make sure to run: kubectl port-forward -n {args.namespace} svc/dask-scheduler 8786:8786)")
         
         try:
-            service = DaskSimulationService(args.scheduler)
+            service = DaskSimulationService(args.scheduler, silence_warnings=not args.show_warnings)
             # Test connection by getting client info
             print(f"Connected! Cluster has {len(service.client.scheduler_info()['workers'])} workers")
         except Exception as e:
             print(f"\nError connecting to Dask: {e}")
             print("\nTips:")
-            print("1. Check if Dask is running: kubectl get pods -n modelops-default")
-            print("2. Port-forward the scheduler: kubectl port-forward -n modelops-default svc/dask-scheduler 8786:8786")
+            print(f"1. Check if Dask is running: kubectl get pods -n {args.namespace}")
+            print(f"2. Port-forward the scheduler: kubectl port-forward -n {args.namespace} svc/dask-scheduler 8786:8786")
             print("3. Or use --local flag to test with local execution")
             return 1
     

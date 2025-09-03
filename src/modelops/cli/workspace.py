@@ -5,12 +5,14 @@ import yaml
 import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
-from rich.console import Console
 from ..core import StackNaming
 from .utils import handle_pulumi_error
+from .display import (
+    console, success, warning, error, info, section,
+    workspace_info, workspace_commands, dim
+)
 
 app = typer.Typer(help="Manage Dask workspaces")
-console = Console()
 
 
 @app.command()
@@ -95,35 +97,23 @@ def up(
             )
         )
         
-        console.print(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
-        console.print(f"Infrastructure stack: {infra_stack}-{env}")
-        console.print(f"Workspace stack: {stack_name}\n")
+        info(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
+        info(f"Infrastructure stack: {infra_stack}-{env}")
+        info(f"Workspace stack: {stack_name}\n")
         
-        console.print("[yellow]Creating Dask resources...[/yellow]")
-        result = stack.up(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
+        info("[yellow]Creating Dask resources...[/yellow]")
+        result = stack.up(on_output=dim)
         
         outputs = result.outputs
         
-        console.print("\n[green]✓ Workspace deployed successfully![/green]")
-        console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
-        console.print(f"  Workers: {outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'}")
-        
-        console.print(f"\n[bold]Port-forward commands:[/bold]")
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask-infra'
-        console.print(f"  # For Dask client connections:")
-        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786")
-        console.print(f"  # For dashboard:")
-        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
-        
-        console.print(f"\n[bold]Access URLs (after port-forwarding):[/bold]")
-        console.print(f"  Scheduler: tcp://localhost:8786")
-        console.print(f"  Dashboard: [cyan]http://localhost:8787[/cyan]")
+        success("\nWorkspace deployed successfully!")
+        workspace_info(outputs, env, stack_name)
         
     except auto.CommandError as e:
         handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"\n[red]Error deploying workspace: {e}[/red]")
+        error(f"\nError deploying workspace: {e}")
         handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
@@ -147,13 +137,13 @@ def down(
     Kubernetes cluster intact.
     """
     if not yes:
-        console.print("\n[bold yellow]⚠️  Warning[/bold yellow]")
-        console.print(f"This will destroy the Dask workspace in environment: {env}")
-        console.print("All running Dask jobs will be terminated.")
+        warning("\nWarning")
+        info(f"This will destroy the Dask workspace in environment: {env}")
+        info("All running Dask jobs will be terminated.")
         
         confirm = typer.confirm("\nAre you sure you want to destroy the workspace?")
         if not confirm:
-            console.print("[green]Destruction cancelled[/green]")
+            success("Destruction cancelled")
             raise typer.Exit(0)
     
     # Use centralized naming
@@ -164,7 +154,7 @@ def down(
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
     
     if not work_dir.exists():
-        console.print(f"[yellow]No workspace found for environment: {env}[/yellow]")
+        warning(f"No workspace found for environment: {env}")
         raise typer.Exit(0)
     
     try:
@@ -186,16 +176,16 @@ def down(
             )
         )
         
-        console.print(f"\n[yellow]Destroying workspace: {stack_name}...[/yellow]")
-        stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
+        info(f"\n[yellow]Destroying workspace: {stack_name}...[/yellow]")
+        stack.destroy(on_output=dim)
         
-        console.print("\n[green]✓ Workspace destroyed successfully[/green]")
+        success("\nWorkspace destroyed successfully")
         
     except auto.CommandError as e:
         handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
-        console.print(f"\n[red]Error destroying workspace: {e}[/red]")
+        error(f"\nError destroying workspace: {e}")
         handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
@@ -218,8 +208,8 @@ def status(
     work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
     
     if not work_dir.exists() or not backend_dir.exists():
-        console.print(f"[yellow]No workspace found for environment: {env}[/yellow]")
-        console.print("\nRun 'mops workspace up' to create a workspace")
+        warning(f"No workspace found for environment: {env}")
+        info("\nRun 'mops workspace up' to create a workspace")
         raise typer.Exit(0)
     
     try:
@@ -244,33 +234,18 @@ def status(
         outputs = stack.outputs()
         
         if not outputs:
-            console.print(f"[yellow]Workspace stack exists but has no outputs[/yellow]")
-            console.print("The workspace may not be fully deployed.")
+            warning("Workspace stack exists but has no outputs")
+            info("The workspace may not be fully deployed.")
             raise typer.Exit(0)
         
-        console.print(f"\n[bold]Workspace Status[/bold]")
-        console.print(f"  Environment: {env}")
-        console.print(f"  Stack: {stack_name}")
-        console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
-        console.print(f"  Workers: {outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'}")
+        section("Workspace Status")
+        workspace_info(outputs, env, stack_name)
         
-        console.print(f"\n[bold]Port-forward commands:[/bold]")
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask-infra'
-        console.print(f"  # For Dask client connections:")
-        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786")
-        console.print(f"  # For dashboard:")
-        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
-        
-        console.print(f"\n[bold]Access URLs (after port-forwarding):[/bold]")
-        console.print(f"  Scheduler: tcp://localhost:8786")
-        console.print(f"  Dashboard: [cyan]http://localhost:8787[/cyan]")
-        
-        console.print(f"\n[bold]Useful commands:[/bold]")
-        console.print(f"  Logs: kubectl logs -n {namespace} -l app=dask-scheduler")
-        console.print(f"  Workers: kubectl get pods -n {namespace} -l app=dask-worker")
+        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else StackNaming.get_namespace("dask", env)
+        workspace_commands(namespace)
         
     except Exception as e:
-        console.print(f"[red]Error querying workspace status: {e}[/red]")
+        error(f"Error querying workspace status: {e}")
         raise typer.Exit(1)
 
 

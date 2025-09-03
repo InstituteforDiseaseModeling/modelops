@@ -4,7 +4,8 @@
 MOPS := uv run mops
 PROVIDER_DIR := ~/.modelops/providers
 WORKSPACE_NAME := default
-NAMESPACE ?= modelops-dask-infra
+ENV ?= dev
+NAMESPACE ?= modelops-dask-$(ENV)
 
 # === Docker Variables ===
 # Default to public GHCR for easy distribution
@@ -256,7 +257,7 @@ release:
 
 ## Update cluster with new images (Pulumi-managed)
 update-cluster:
-	@echo "⚠️  Dask deployments are managed by Pulumi - kubectl updates will be reverted"
+	@echo "⚠ Dask deployments are managed by Pulumi - kubectl updates will be reverted"
 	@echo ""
 	@echo "To update cluster with new images:"
 	@echo "  1. Build and push: make build"

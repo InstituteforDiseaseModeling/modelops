@@ -3,7 +3,14 @@
 from modelops_contracts import SimulationService, SimReturn, FutureLike
 from typing import Any, List
 import importlib
+import logging
+import warnings
+from contextlib import redirect_stderr
+import io
 from .ipc import to_ipc_tables, from_ipc_tables, validate_sim_return
+
+# Logger for capturing Dask warnings
+dask_logger = logging.getLogger("modelops.dask.warnings")
 
 
 class LocalSimulationService:
@@ -57,14 +64,34 @@ class DaskSimulationService:
     distributed execution across multiple workers.
     """
     
-    def __init__(self, scheduler_address: str):
+    def __init__(self, scheduler_address: str, silence_warnings: bool = True):
         """Initialize connection to Dask cluster.
         
         Args:
             scheduler_address: Address of Dask scheduler (e.g., "tcp://localhost:8786")
+            silence_warnings: Whether to suppress version mismatch warnings (default: True).
+                            Warnings are still logged to 'modelops.dask.warnings' logger.
         """
         from dask.distributed import Client
-        self.client = Client(scheduler_address)
+        
+        if silence_warnings:
+            # Capture warnings to log them
+            stderr_buffer = io.StringIO()
+            with warnings.catch_warnings(record=True) as warning_list:
+                warnings.simplefilter("always")
+                with redirect_stderr(stderr_buffer):
+                    self.client = Client(scheduler_address)
+                
+                # Log any warnings that were generated
+                stderr_output = stderr_buffer.getvalue()
+                if stderr_output:
+                    dask_logger.info(f"Dask connection warnings (suppressed):\n{stderr_output}")
+                
+                for w in warning_list:
+                    dask_logger.warning(f"{w.category.__name__}: {w.message}")
+        else:
+            # Normal connection with warnings visible
+            self.client = Client(scheduler_address)
     
     def submit(self, fn_ref: str, params: dict, seed: int, *, bundle_ref: str) -> FutureLike:
         """Submit a simulation to Dask cluster.

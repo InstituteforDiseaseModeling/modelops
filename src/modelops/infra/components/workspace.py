@@ -46,13 +46,9 @@ class DaskWorkspace(pulumi.ComponentResource):
         # Default configuration
         config = config or {}
         
-        # Extract environment from config or parse from stack reference
+        # Extract environment from config (passed from CLI)
+        # Don't try to parse from stack ref as it contains full path
         env = config.get("environment", "dev")
-        if "-" in infra_stack_ref:
-            # Try to parse environment from stack name
-            parsed = StackNaming.parse_stack_name(infra_stack_ref)
-            if "env" in parsed:
-                env = parsed["env"]
         
         # Parse metadata and spec if structured
         if "metadata" in config and "spec" in config:
