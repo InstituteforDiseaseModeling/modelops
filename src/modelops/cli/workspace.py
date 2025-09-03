@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 from rich.console import Console
 from ..core import StackNaming
+from .utils import handle_pulumi_error
 
 app = typer.Typer(help="Manage Dask workspaces")
 console = Console()
@@ -47,6 +48,7 @@ def up(
     def pulumi_program():
         """Create DaskWorkspace in Stack 2 context."""
         from ..infra.components.workspace import DaskWorkspace
+        import pulumi
         
         # Use centralized naming for infrastructure reference
         # For file backends, the organization is always "organization" (Pulumi constant)
@@ -57,7 +59,16 @@ def up(
         # Pass environment to workspace config
         workspace_config["environment"] = env
         
-        return DaskWorkspace("dask", infra_ref, workspace_config)
+        # Create the workspace component
+        workspace = DaskWorkspace("dask", infra_ref, workspace_config)
+        
+        # Export outputs at stack level for visibility
+        pulumi.export("scheduler_address", workspace.scheduler_address)
+        pulumi.export("dashboard_url", workspace.dashboard_url)
+        pulumi.export("namespace", workspace.namespace)
+        pulumi.export("worker_count", workspace.worker_count)
+        
+        return workspace
     
     # Use centralized naming for stack and project
     stack_name = StackNaming.get_stack_name("workspace", env)
@@ -94,18 +105,26 @@ def up(
         outputs = result.outputs
         
         console.print("\n[green]✓ Workspace deployed successfully![/green]")
-        console.print(f"  Scheduler: {outputs.get('scheduler_address', {}).value if outputs.get('scheduler_address') else 'unknown'}")
-        console.print(f"  Dashboard: {outputs.get('dashboard_url', {}).value if outputs.get('dashboard_url') else 'unknown'}")
         console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
         console.print(f"  Workers: {outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'}")
         
-        console.print(f"\n[bold]Port-forward dashboard:[/bold]")
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask'
+        console.print(f"\n[bold]Port-forward commands:[/bold]")
+        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask-infra'
+        console.print(f"  # For Dask client connections:")
+        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786")
+        console.print(f"  # For dashboard:")
         console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
-        console.print(f"\nThen visit: http://localhost:8787")
         
+        console.print(f"\n[bold]Access URLs (after port-forwarding):[/bold]")
+        console.print(f"  Scheduler: tcp://localhost:8786")
+        console.print(f"  Dashboard: [cyan]http://localhost:8787[/cyan]")
+        
+    except auto.CommandError as e:
+        handle_pulumi_error(e, str(work_dir), stack_name)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error deploying workspace: {e}[/red]")
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -172,8 +191,12 @@ def down(
         
         console.print("\n[green]✓ Workspace destroyed successfully[/green]")
         
+    except auto.CommandError as e:
+        handle_pulumi_error(e, str(work_dir), stack_name)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error destroying workspace: {e}[/red]")
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -228,15 +251,21 @@ def status(
         console.print(f"\n[bold]Workspace Status[/bold]")
         console.print(f"  Environment: {env}")
         console.print(f"  Stack: {stack_name}")
-        console.print(f"  Scheduler: {outputs.get('scheduler_address', {}).value if outputs.get('scheduler_address') else 'unknown'}")
-        console.print(f"  Dashboard: {outputs.get('dashboard_url', {}).value if outputs.get('dashboard_url') else 'unknown'}")
         console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
         console.print(f"  Workers: {outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'}")
-        console.print(f"  Image: {outputs.get('image', {}).value if outputs.get('image') else 'unknown'}")
         
-        console.print(f"\n[bold]Connection commands:[/bold]")
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask'
-        console.print(f"  Port-forward: kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
+        console.print(f"\n[bold]Port-forward commands:[/bold]")
+        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else 'modelops-dask-infra'
+        console.print(f"  # For Dask client connections:")
+        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786")
+        console.print(f"  # For dashboard:")
+        console.print(f"  kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
+        
+        console.print(f"\n[bold]Access URLs (after port-forwarding):[/bold]")
+        console.print(f"  Scheduler: tcp://localhost:8786")
+        console.print(f"  Dashboard: [cyan]http://localhost:8787[/cyan]")
+        
+        console.print(f"\n[bold]Useful commands:[/bold]")
         console.print(f"  Logs: kubectl logs -n {namespace} -l app=dask-scheduler")
         console.print(f"  Workers: kubectl get pods -n {namespace} -l app=dask-worker")
         

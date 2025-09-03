@@ -41,7 +41,6 @@ class ModelOpsCluster(pulumi.ComponentResource):
         rg_name = StackNaming.get_resource_group_name(env, username)
         
         aks_config = config.get("aks", {})
-        acr_config = config.get("acr")
         ssh_config = config.get("ssh", {})
         
         # Create Resource Group with per-user naming
@@ -63,21 +62,11 @@ class ModelOpsCluster(pulumi.ComponentResource):
             )
         )
         
-        # Create optional ACR
-        acr_login_server = None
-        if acr_config:
-            acr = self._create_acr(name, acr_config, rg, location)
-            acr_login_server = acr.login_server
-        
         # Get or generate SSH key
         ssh_pubkey = self._get_ssh_key(ssh_config)
         
         # Create AKS cluster with node pools
         aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env)
-        
-        # Setup ACR pull permissions if ACR exists
-        if acr_config and acr:
-            self._setup_acr_pull(aks, acr, subscription_id)
         
         # Get kubeconfig using the *actual* cluster name emitted by the resource
         # This handles auto-naming correctly
@@ -96,7 +85,6 @@ class ModelOpsCluster(pulumi.ComponentResource):
         self.cluster_name = aks.name  # Use the actual resource name
         self.resource_group = rg.name
         self.location = pulumi.Output.from_input(location)
-        self.acr_login_server = acr_login_server if acr_login_server else None
         
         # Register outputs for StackReference access
         self.register_outputs({
@@ -104,25 +92,8 @@ class ModelOpsCluster(pulumi.ComponentResource):
             "cluster_name": self.cluster_name,
             "resource_group": self.resource_group,
             "location": self.location,
-            "acr_login_server": self.acr_login_server,
             "provider": pulumi.Output.from_input("azure")
         })
-    
-    def _create_acr(self, name: str, acr_config: Dict[str, Any], 
-                    rg: azure.resources.ResourceGroup, location: str) -> azure.containerregistry.Registry:
-        """Create Azure Container Registry."""
-        return azure.containerregistry.Registry(
-            f"{name}-acr",  # Pulumi resource name
-            # registry_name is the Azure resource name
-            registry_name=acr_config["name"],
-            resource_group_name=rg.name,
-            location=location,
-            sku=azure.containerregistry.SkuArgs(
-                name=acr_config.get("sku", "Standard")
-            ),
-            admin_user_enabled=False,  # Use managed identity
-            opts=pulumi.ResourceOptions(parent=self)
-        )
     
     def _get_ssh_key(self, ssh_config: Dict[str, Any]) -> str:
         """Get SSH public key from config or generate ephemeral."""
@@ -139,6 +110,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # Generate a valid ephemeral SSH key for MVP
         pulumi.log.warn("Using ephemeral SSH key. Provide ssh.public_key or ssh.public_key_path in production.")
         # This is a valid but insecure SSH key for testing only
+        # TODO/PLACEHOLDER: integrate real key generation
         return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDPaTXgcq3a8qEWVN9F4kPTXogk0cKAQjWLoyaGtOnostXCoL3pMPmsCyEh2H8xGr7kvTaLQuKcfa5+gOqE+mRwQO3OtMr7K1UoGlEO5V3rZPZLnLrOuWtrCbBVXLxBvlNfWPqRaMQT6N/06xrB2V3aF5YQtpt3zPLbMjU7miPVMvjV0pXQHCioFUDJmnFBcOT/EQlhxMKSqeMmQ+BYXQV7TT3aCrJiM6oC7Pa2h9REd5HDnZ5fwmGOXF3H0gxR8sPEEofV1tRFmacnVzk5tfoT0z0adPNDBoMD7bxs5xB5LQXdV8K9n5RYPsJc1p7Ms8pqXAQUJdGFaHOjKiGJjvPT modelops-ephemeral@azure"
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
@@ -274,24 +246,3 @@ class ModelOpsCluster(pulumi.ComponentResource):
         
         # Azure RG names have max length, truncate if needed
         return username[:20]
-    
-    def _setup_acr_pull(self, aks: azure.containerservice.ManagedCluster,
-                       acr: azure.containerregistry.Registry,
-                       subscription_id: str):
-        """Setup AcrPull role assignment for AKS to pull from ACR."""
-        # Get kubelet identity
-        principal_id = aks.identity_profile.apply(
-            lambda profile: profile["kubeletidentity"]["object_id"] if profile else None
-        )
-        
-        # AcrPull role definition ID
-        acr_pull_role = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
-        
-        azure.authorization.RoleAssignment(
-            f"{aks.name}-acr-pull",
-            principal_id=principal_id,
-            principal_type="ServicePrincipal",
-            role_definition_id=acr_pull_role,
-            scope=acr.id,
-            opts=pulumi.ResourceOptions(parent=self)
-        )

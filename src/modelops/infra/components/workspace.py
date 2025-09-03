@@ -99,33 +99,13 @@ class DaskWorkspace(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Create GHCR pull secret if PAT is provided
+        # No image pull secrets needed for public GHCR images
         pull_secrets = []
-        ghcr_pat = os.getenv("GHCR_PAT")
-        if ghcr_pat and "ghcr.io" in scheduler_image:
-            ghcr_secret = k8s.core.v1.Secret(
-                f"{name}-ghcr-creds",
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name="ghcr-creds",
-                    namespace=namespace
-                ),
-                type="kubernetes.io/dockerconfigjson",
-                string_data={
-                    ".dockerconfigjson": json.dumps({
-                        "auths": {
-                            "ghcr.io": {
-                                "auth": base64.b64encode(f":{ghcr_pat}".encode()).decode()
-                            }
-                        }
-                    })
-                },
-                opts=pulumi.ResourceOptions(
-                    provider=k8s_provider,
-                    parent=self,
-                    depends_on=[ns]
-                )
-            )
-            pull_secrets = [k8s.core.v1.LocalObjectReferenceArgs(name="ghcr-creds")]
+        
+        # Optional: Could still support private registries if needed
+        # ghcr_pat = os.getenv("GHCR_PAT")
+        # if ghcr_pat and "ghcr.io" in scheduler_image:
+        #     ... (secret creation code)
         
         # Create Dask scheduler deployment
         scheduler = k8s.apps.v1.Deployment(

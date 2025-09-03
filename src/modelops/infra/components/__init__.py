@@ -6,6 +6,7 @@ cloud resources and expose typed outputs for cross-plane communication.
 
 from .workspace import DaskWorkspace
 from .adaptive import AdaptiveRun
+from .registry import ContainerRegistry
 
 # Only import Azure if azure dependencies are installed
 try:
@@ -13,4 +14,4 @@ try:
 except ImportError:
     ModelOpsCluster = None
 
-__all__ = ["ModelOpsCluster", "DaskWorkspace", "AdaptiveRun"]
+__all__ = ["ModelOpsCluster", "DaskWorkspace", "AdaptiveRun", "ContainerRegistry"]

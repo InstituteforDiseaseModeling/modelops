@@ -3,7 +3,7 @@ name = "modelops"
 version = "0.1.0"
 description = "Infrastructure orchestration for ML experimentation"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "modelops-contracts",
     "rich>=14.1.0",
@@ -15,12 +15,14 @@ dependencies = [
     "pulumi>=3.100.0",
     "pulumi-kubernetes>=4.5.0",
     "kubernetes>=28.0.0",
+    "pulumi-azure-native>=3.7.1",
+    "numpy>=2.3.2",
 ]
 
 [project.optional-dependencies]
-azure = [
-    "pulumi-azure-native>=2.20.0",
-]
+# Azure dependencies are in main for MVP
+# Future: aws = ["pulumi-aws>=..."]
+# Future: gcp = ["pulumi-gcp>=..."]
 
 [project.scripts]
 mops = "modelops.cli.main:main"
@@ -31,3 +33,12 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 modelops-contracts = { path = "../modelops-contracts" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+]
+
+[tool.hatch.build]
+packages = ["src/modelops", "examples"]

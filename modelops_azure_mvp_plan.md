@@ -597,28 +597,57 @@ self.register_outputs({
 
 ## 1.7) Stack Architecture - How Information Flows
 
-The system uses **three independent Pulumi stacks** that reference each other's outputs. No custom state management needed - Pulumi handles it all.
+The system uses **independent Pulumi stacks** that reference each other's outputs. No custom state management needed - Pulumi handles it all.
 
-### The Three-Stack Pattern
+### The Four-Stack Pattern with Container Registry
 
 ```
 Stack 1: modelops-infra
-├── Creates: Azure resources (RG, AKS, ACR)
+├── Creates: Azure resources (RG, AKS)
 ├── Component: ModelOpsCluster
-└── Outputs: kubeconfig, cluster_endpoint, acr_url
+└── Outputs: kubeconfig, cluster_endpoint, resource_group
 
-Stack 2: modelops-workspace  
+Stack 2: modelops-registry  
+├── Creates: Container Registry (ACR/ECR/GCR)
+├── Component: ContainerRegistry
+├── Independent lifecycle (can be shared across environments)
+└── Outputs: login_server, registry_name, requires_auth
+
+Stack 3: modelops-workspace  
 ├── Creates: Dask on Kubernetes
 ├── Component: DaskWorkspace
-├── Depends on: Stack 1's kubeconfig (via StackReference)
+├── Depends on: Stack 1's kubeconfig + Stack 2's registry (via StackReferences)
 └── Outputs: scheduler_addr, dashboard_url, namespace
 
-Stack 3: modelops-adaptive-{run-id}
+Stack 4: modelops-adaptive-{run-id}
 ├── Creates: Adaptive workers, Postgres
 ├── Component: AdaptiveRun  
-├── Depends on: Stack 2's scheduler_addr (via StackReference)
+├── Depends on: Stack 3's scheduler_addr (via StackReference)
 └── Outputs: run_status, results_location
 ```
+
+### Why Separate Container Registry?
+
+The Container Registry is intentionally separated from the infrastructure stack
+for several engineering reasons:
+
+1. **Single Responsibility Principle**: The registry manages container images,
+   while the cluster manages compute. Clear separation of concerns.
+
+2. **Reusability**: A single registry can serve multiple clusters/environments,
+   avoiding image duplication and reducing storage costs.
+
+3. **Independent Lifecycle**: Registries often outlive clusters. You can
+   destroy/recreate clusters without losing your image history.
+
+4. **Provider Flexibility**: Easy to use external registries (DockerHub, GHCR)
+   or switch between providers without touching cluster code.
+
+5. **Cost Optimization**: Share one registry across dev/staging/prod instead of
+   one per environment.
+
+6. **Security Boundary**: Registry access control is independent from cluster
+   access, allowing fine-grained permissions.
 
 ### How StackReferences Connect Stacks
 
@@ -638,11 +667,27 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # Register outputs for OTHER stacks to reference
         self.register_outputs({
             "kubeconfig": pulumi.Output.secret(kubeconfig),
-            "cluster_endpoint": aks.fqdn,
-            "acr_login_server": acr.login_server if acr else None
+            "cluster_name": aks.name,
+            "resource_group": rg.name
         })
 
-# Stack 2: Workspace (depends on Stack 1)
+# Stack 2: Container Registry (independent)
+class ContainerRegistry(pulumi.ComponentResource):
+    def __init__(self, name: str, config: dict):
+        super().__init__("modelops:infra:registry", name, None)
+        
+        # Creates registry (ACR/ECR/GCR/external)
+        if config["provider"] == "azure":
+            acr = azure.containerregistry.Registry(...)
+            self.login_server = acr.login_server
+        
+        # Register outputs for workspace stack to reference
+        self.register_outputs({
+            "login_server": self.login_server,
+            "registry_name": self.registry_name
+        })
+
+# Stack 3: Workspace (depends on Stack 1 and 2)
 class DaskWorkspace(pulumi.ComponentResource):
     def __init__(self, name: str, infra_stack_ref: str):
         super().__init__("modelops:workspace:dask", name, None)

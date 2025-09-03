@@ -16,6 +16,32 @@ ModelOps is a Kubernetes-native runtime for simulation-based methods, providing 
 
 ## Architecture
 
+### Resource Naming Strategy
+
+ModelOps uses centralized naming through the `StackNaming` class to ensure consistency across all resources:
+
+**Container Registry (ACR)**:
+- **Development**: Per-user registries using pattern `modelops{env}acr{username}` (e.g., `modelopsdevacrvsp`)
+  - Provides isolation between developers
+  - Avoids naming conflicts during experimentation
+- **Production**: Org-level with random suffix `modelops{env}acr{random}` (e.g., `modelopsprodacr7x9k`)
+  - Shared across team for cost efficiency
+  - Random suffix ensures global uniqueness (ACR requirement)
+- **Configuration**: Set `per_user_registry: false` to force org-level in dev
+
+**Resource Groups**:
+- Pattern: `modelops-{env}-rg-{username}` for per-user isolation
+- Example: `modelops-dev-rg-vsb`
+- Ensures developers don't interfere with each other's resources
+
+**Why This Approach**:
+1. **Global Uniqueness**: ACR names must be unique across ALL Azure subscriptions worldwide
+2. **Developer Isolation**: Each developer gets independent resources in dev/staging
+3. **Cost Optimization**: Production uses shared resources to minimize costs
+4. **Flexibility**: Can override with explicit names when needed via config
+
+All naming is centralized in `src/modelops/core/naming.py` to maintain consistency.
+
 ### Core Seams
 
 The system follows a seams-first architecture with strict separation of concerns:

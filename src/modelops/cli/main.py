@@ -16,13 +16,19 @@ app = typer.Typer(
 console = Console()
 
 # Import sub-commands
-from . import infra, workspace, adaptive
+from . import infra, workspace, adaptive, registry
 
 # Register sub-commands
 app.add_typer(
     infra.app,
     name="infra",
     help="Manage infrastructure (Azure, AWS, GCP, local)"
+)
+
+app.add_typer(
+    registry.app,
+    name="registry",
+    help="Manage container registries"
 )
 
 app.add_typer(

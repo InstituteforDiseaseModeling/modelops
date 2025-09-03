@@ -286,10 +286,10 @@ def main():
             test_monte_carlo_pi(service, args.num_sims)
         
         if args.test in ["all", "option"]:
-            test_option_pricing(service, min(args.num_sims * 2, 20))
+            test_option_pricing(service, args.num_sims)
         
         if args.test in ["all", "growth"]:
-            test_stochastic_growth(service, min(args.num_sims // 2, 5))
+            test_stochastic_growth(service, args.num_sims)
         
         print(f"\n{'='*60}")
         print("All tests completed successfully!")

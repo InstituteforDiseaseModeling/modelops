@@ -14,7 +14,7 @@ metadata:
 spec:
   # Dask Scheduler Configuration
   scheduler:
-    image: ghcr.io/dask/dask:2024.8.0-py3.11
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
     resources:
       requests:
         memory: "2Gi"
@@ -35,7 +35,7 @@ spec:
   # Dask Workers Configuration
   workers:
     replicas: 4
-    image: ghcr.io/dask/dask:2024.8.0-py3.11
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
     resources:
       requests:
         memory: "4Gi"

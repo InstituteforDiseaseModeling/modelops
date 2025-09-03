@@ -4,16 +4,40 @@
 MOPS := uv run mops
 PROVIDER_DIR := ~/.modelops/providers
 WORKSPACE_NAME := default
+NAMESPACE ?= modelops-dask-infra
 
 # === Docker Variables ===
+# Default to public GHCR for easy distribution
 REGISTRY ?= ghcr.io
-ORG ?= modelops
+ORG ?= institutefordiseasemodeling
+PROJECT ?= modelops
+
+# Automatic versioning from git
+GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+VERSION ?= $(GIT_SHA)
 TAG ?= latest
 PYTHON_VERSION ?= 3.11
 
+# === Azure Container Registry (Future/Private Use) ===
+# Uncomment below to use private ACR instead of GHCR
+# -include .modelops.env
+# MODELOPS_REGISTRY_SERVER ?= $(shell uv run mops registry env --format make 2>/dev/null | grep MODELOPS_REGISTRY_SERVER | cut -d= -f2)
+# ifneq ($(MODELOPS_REGISTRY_SERVER),)
+#   REGISTRY = $(MODELOPS_REGISTRY_SERVER)
+#   ORG = modelops
+# endif
+
 # Image names
-SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/dask-scheduler:$(TAG)
-WORKER_IMAGE = $(REGISTRY)/$(ORG)/dask-worker:$(TAG)
+SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
+WORKER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
+
+# GHCR Configuration
+GHCR_USER ?= $(shell git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' || echo "user")
+
+# Platform configuration for multi-architecture builds
+# For Azure AKS, we only need AMD64 (x86_64) architecture
+PLATFORMS ?= linux/amd64
+BUILDX_BUILDER ?= modelops-multiarch
 
 # Build context is parent directory to access sibling repos, 
 # like ../modelops-contracts and ../calabaria (TODO/POST-MVP)
@@ -29,19 +53,17 @@ help:
 	@echo ""
 	@echo "Development Commands:"
 	@echo "  make install           # Install dependencies with uv"
-	@echo "  make test             # Run tests"
-	@echo "  make lint             # Run linters"
-	@echo "  make workspace-up     # Create local workspace"
-	@echo "  make workspace-down   # Destroy local workspace"
-	@echo "  make workspace-status # Show workspace status"
+	@echo "  make test              # Run tests"
+	@echo "  make lint              # Run linters"
 	@echo ""
 	@echo "Docker Commands:"
-	@echo "  make build            # Build all Docker images"
-	@echo "  make build-worker     # Build worker image only"
-	@echo "  make build-scheduler  # Build scheduler image only"
-	@echo "  make push            # Push images to registry"
-	@echo "  make update-cluster  # Update cluster with new images"
-	@echo "  make test-images     # Test Docker images locally"
+	@echo "  make build            # Build and push AMD64 images (use -j2 for parallel)"
+	@echo "  make build-mac        # Build images for dev Mac (Apple Silicon/ARM64)"
+	@echo "  make build-multiarch  # Build both images (use -j2 for parallel)"
+	@echo "  make setup-buildx     # Setup Docker buildx for multi-arch"
+	@echo "  make release          # Tag and push release version"
+	@echo "  make update-cluster   # Update cluster with new images"
+	@echo "  make test-images      # Test Docker images locally"
 	@echo ""
 	@echo "Prerequisites for Docker:"
 	@echo "  - ../modelops-contracts must exist"
@@ -50,8 +72,8 @@ help:
 	@echo ""
 	@echo "Configuration:"
 	@echo "  REGISTRY=$(REGISTRY)  # Container registry"
-	@echo "  ORG=$(ORG)           # Organization name"
-	@echo "  TAG=$(TAG)           # Image tag"
+	@echo "  ORG=$(ORG)            # Organization name"
+	@echo "  TAG=$(TAG)            # Image tag"
 
 ## Install dependencies
 install:
@@ -66,99 +88,217 @@ lint:
 	uv run ruff check src/
 	uv run mypy src/ || true
 
-## Create local workspace
-workspace-up:
-	$(MOPS) workspace up --name $(WORKSPACE_NAME) --provider orbstack
-
-## Destroy local workspace
-workspace-down:
-	$(MOPS) workspace down --name $(WORKSPACE_NAME)
-
-## Show workspace status
-workspace-status:
-	$(MOPS) workspace status --name $(WORKSPACE_NAME)
-
 # === Docker Targets ===
 
-.PHONY: build build-scheduler build-worker push push-scheduler push-worker
-.PHONY: update-cluster clean-images show-images test-images
+.PHONY: build build-scheduler build-worker build-multiarch build-mac setup-buildx
+.PHONY: ghcr-login release update-cluster clean-images show-images test-images check-visibility make-public
 
-## Build all Docker images
-build: build-scheduler build-worker
+## Build all Docker images (multi-architecture for deployment)
+build: build-multiarch check-visibility
+	@echo "✓ Built and pushed images with version: $(VERSION)"
+
+## Setup Docker buildx for multi-architecture builds
+setup-buildx:
+	@echo "Setting up Docker buildx builder: $(BUILDX_BUILDER)"
+	@docker buildx create --name $(BUILDX_BUILDER) --driver docker-container --use 2>/dev/null || docker buildx use $(BUILDX_BUILDER)
+	@docker buildx inspect --bootstrap
+	@echo "✓ Buildx ready for platforms: $(PLATFORMS)"
+
+## Build images for local Mac (Apple Silicon native)
+build-mac:
+	@echo "Building for local mac dev architecture (Apple Silicon)..."
+	$(MAKE) build-scheduler build-worker
+	@echo "✓ Built local images with version: $(VERSION)"
+
+## Build and push multi-arch scheduler image
+build-multiarch-scheduler: setup-buildx ghcr-login
+	@echo "Building multi-arch scheduler image for platforms: $(PLATFORMS)"
+	@docker buildx build \
+		--platform $(PLATFORMS) \
+		-f docker/Dockerfile.scheduler \
+		-t $(SCHEDULER_IMAGE):$(TAG) \
+		-t $(SCHEDULER_IMAGE):$(VERSION) \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
+		$(BUILD_CONTEXT)
+	@echo "✓ Scheduler image built and pushed: $(SCHEDULER_IMAGE):$(TAG)"
+
+## Build and push multi-arch worker image
+build-multiarch-worker: setup-buildx ghcr-login
+	@echo "Building multi-arch worker image for platforms: $(PLATFORMS)"
+	@docker buildx build \
+		--platform $(PLATFORMS) \
+		-f docker/Dockerfile.worker \
+		-t $(WORKER_IMAGE):$(TAG) \
+		-t $(WORKER_IMAGE):$(VERSION) \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
+		$(BUILD_CONTEXT)
+	@echo "✓ Worker image built and pushed: $(WORKER_IMAGE):$(TAG)"
+
+## Build and push both multi-architecture images (can be parallelized with -j)
+build-multiarch: build-multiarch-scheduler build-multiarch-worker
+	@echo "✓ All multi-arch images built and pushed for: $(PLATFORMS)"
+	@echo "  $(SCHEDULER_IMAGE):$(TAG)"
+	@echo "  $(SCHEDULER_IMAGE):$(VERSION)"
+	@echo "  $(WORKER_IMAGE):$(TAG)"
+	@echo "  $(WORKER_IMAGE):$(VERSION)"
 
 ## Build Dask scheduler image
 build-scheduler:
-	@echo "Building Dask scheduler image: $(SCHEDULER_IMAGE)"
+	@echo "Building Dask scheduler image: $(SCHEDULER_IMAGE):$(TAG)"
 	@echo "Note: Requires ../modelops-contracts and ../calabaria to exist"
 	docker build \
 		-f docker/Dockerfile.scheduler \
-		-t $(SCHEDULER_IMAGE) \
+		-t $(SCHEDULER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		$(BUILD_CONTEXT)
 
 ## Build Dask worker image  
 build-worker:
-	@echo "Building Dask worker image: $(WORKER_IMAGE)"
+	@echo "Building Dask worker image: $(WORKER_IMAGE):$(TAG)"
 	@echo "Note: Requires ../modelops-contracts and ../calabaria to exist"
 	docker build \
 		-f docker/Dockerfile.worker \
-		-t $(WORKER_IMAGE) \
+		-t $(WORKER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		$(BUILD_CONTEXT)
 
-## Push scheduler image to registry
-push-scheduler:
-	docker push $(SCHEDULER_IMAGE)
+## Login to GitHub Container Registry
+ghcr-login:
+	@if [ "$(REGISTRY)" = "ghcr.io" ]; then \
+		if [ -z "$(GHCR_PAT)" ]; then \
+			echo "⚠️  GHCR_PAT not set, trying gh auth token..."; \
+			GH_TOKEN=$$(gh auth token 2>/dev/null); \
+			if [ -n "$$GH_TOKEN" ]; then \
+				echo "$$GH_TOKEN" | docker login ghcr.io -u $(GHCR_USER) --password-stdin; \
+			else \
+				echo "❌ No GHCR_PAT or gh auth found. Please:"; \
+				echo "   export GHCR_PAT=<your-github-pat>"; \
+				echo "   or run: gh auth login"; \
+				exit 1; \
+			fi; \
+		else \
+			echo "$(GHCR_PAT)" | docker login ghcr.io -u $(GHCR_USER) --password-stdin; \
+		fi; \
+		echo "✓ Logged into GHCR"; \
+	fi
 
-## Push worker image to registry
-push-worker:
-	docker push $(WORKER_IMAGE)
+# === Azure ACR Login (Preserved for Future Use) ===
+# acr-login:
+# 	@REGISTRY_NAME=$$(uv run mops registry env --format make 2>/dev/null | grep MODELOPS_REGISTRY_NAME | cut -d= -f2); \
+# 	if [ -z "$$REGISTRY_NAME" ]; then \
+# 		echo "Error: No registry found. Run 'mops registry create' first"; \
+# 		exit 1; \
+# 	fi; \
+# 	echo "Logging into Azure Container Registry: $$REGISTRY_NAME"; \
+# 	TOKEN=$$(az acr login -n $$REGISTRY_NAME --expose-token -o json 2>/dev/null | jq -r '.accessToken'); \
+# 	if [ -z "$$TOKEN" ]; then \
+# 		echo "Error: Failed to get ACR token. Check Azure login with 'az login'"; \
+# 		exit 1; \
+# 	fi; \
+# 	echo "$$TOKEN" | docker login $(REGISTRY) -u 00000000-0000-0000-0000-000000000000 --password-stdin && \
+# 	echo "✓ Successfully logged into $(REGISTRY)"
 
-## Push all images to registry
-push: push-scheduler push-worker
+## Check if GHCR packages are public (and warn if not)
+check-visibility:
+	@echo "Checking GHCR package visibility..."
+	@if [ -z "$(GHCR_PAT)" ]; then \
+		echo "⚠️  GHCR_PAT not set, skipping visibility check"; \
+		echo "   Set GHCR_PAT to enable automatic visibility checking"; \
+	else \
+		PRIVATE_PKGS=$$(curl -s -H "Authorization: Bearer $(GHCR_PAT)" \
+			-H "X-GitHub-Api-Version: 2022-11-28" \
+			"https://api.github.com/orgs/$(ORG)/packages?package_type=container&visibility=private" \
+			| jq -r '.[].name' 2>/dev/null | grep -E "$(PROJECT)-dask-(scheduler|worker)" || true); \
+		if [ -n "$$PRIVATE_PKGS" ]; then \
+			echo "❌ The following packages are PRIVATE and need to be made public:"; \
+			echo "$$PRIVATE_PKGS" | sed 's/^/   - /'; \
+			echo ""; \
+			echo "To fix this, go to: https://github.com/orgs/$(ORG)/packages"; \
+			echo "Click on each package → Settings → Change visibility → Make public"; \
+			exit 1; \
+		else \
+			echo "✓ All ModelOps packages are public"; \
+		fi; \
+	fi
 
-## Update cluster with new images
+# Alias for backward compatibility
+make-public: check-visibility
+
+
+## Tag a release version
+release:
+	@if [ -z "$(RELEASE_VERSION)" ]; then \
+		echo "Usage: make release RELEASE_VERSION=v1.0.0"; \
+		exit 1; \
+	fi
+	docker tag $(SCHEDULER_IMAGE):$(TAG) $(SCHEDULER_IMAGE):$(RELEASE_VERSION)
+	docker tag $(WORKER_IMAGE):$(TAG) $(WORKER_IMAGE):$(RELEASE_VERSION)
+	docker push $(SCHEDULER_IMAGE):$(RELEASE_VERSION)
+	docker push $(WORKER_IMAGE):$(RELEASE_VERSION)
+	@echo "✓ Released version $(RELEASE_VERSION)"
+
+# === Azure ACR Targets (Preserved for Future Use) ===
+# verify-push:
+# 	@echo "Verifying images in registry..."
+# 	@REGISTRY_NAME=$$(uv run mops registry env --format make 2>/dev/null | grep MODELOPS_REGISTRY_NAME | cut -d= -f2); \
+# 	if [ -n "$$REGISTRY_NAME" ]; then \
+# 		echo "\nImages in $$REGISTRY_NAME:"; \
+# 		az acr repository list --name $$REGISTRY_NAME 2>/dev/null || echo "No repositories found"; \
+# 		echo "\nScheduler tags:"; \
+# 		az acr repository show-tags --name $$REGISTRY_NAME --repository modelops/dask-scheduler 2>/dev/null || echo "No scheduler image"; \
+# 		echo "\nWorker tags:"; \
+# 		az acr repository show-tags --name $$REGISTRY_NAME --repository modelops/dask-worker 2>/dev/null || echo "No worker image"; \
+# 	else \
+# 		echo "No Azure registry configured - using $(REGISTRY)"; \
+# 	fi
+
+## Update cluster with new images (Pulumi-managed)
 update-cluster:
-	@echo "Updating cluster with new images..."
-	kubectl set image deployment/dask-scheduler -n modelops-default \
-		scheduler=$(SCHEDULER_IMAGE)
-	kubectl set image deployment/dask-workers -n modelops-default \
-		worker=$(WORKER_IMAGE)
-	kubectl rollout status deployment/dask-scheduler -n modelops-default
-	kubectl rollout status deployment/dask-workers -n modelops-default
+	@echo "⚠️  Dask deployments are managed by Pulumi - kubectl updates will be reverted"
+	@echo ""
+	@echo "To update cluster with new images:"
+	@echo "  1. Build and push: make build"
+	@echo "  2. Restart workspace:"
+	@echo "     uv run mops workspace down"
+	@echo "     uv run mops workspace up --config examples/workspace.yaml"
+	@echo ""
+	@echo "Latest images: $(SCHEDULER_IMAGE):$(TAG), $(WORKER_IMAGE):$(TAG)"
 
 ## Clean Docker images
 clean-images:
-	docker rmi $(SCHEDULER_IMAGE) $(WORKER_IMAGE) || true
+	docker rmi $(SCHEDULER_IMAGE):$(TAG) $(WORKER_IMAGE):$(TAG) || true
+	docker rmi $(SCHEDULER_IMAGE):$(VERSION) $(WORKER_IMAGE):$(VERSION) || true
 
 ## Show current images in cluster
 show-images:
-	@echo "Current images in cluster:"
-	@kubectl get deployment -n modelops-default -o wide | grep dask || true
+	@echo "Current images in cluster (namespace: $(NAMESPACE)):"
+	@kubectl get deployment -n $(NAMESPACE) -o wide | grep dask || true
 
 ## Test Docker images locally
-# TODO: test calabaria too?
 test-images:
 	@echo "Testing worker image imports..."
-	docker run --rm $(WORKER_IMAGE) python -c \
-		"import modelops; import modelops_contracts; print('✓ All imports successful')"
+	docker run --rm $(WORKER_IMAGE):$(TAG) python -c \
+		"import modelops; import modelops_contracts; import calabaria; print('✓ All imports successful')"
 
 # === Combined Workflows ===
 
 .PHONY: dev-setup dev-test dev-deploy
 
-## Complete development setup
-dev-setup: install workspace-up
-	@echo "Development environment ready!"
-	@echo "Dashboard available at: http://localhost:8787"
-
 ## Build and test everything
 dev-test: test test-images
 	@echo "All tests passed!"
 
-## Build and deploy to local cluster
-dev-deploy: build update-cluster
-	@echo "New images deployed to cluster!"
+## Build and deploy workflow
+dev-deploy: build
+	@echo "✓ Images built and pushed ($(VERSION))"
+	@echo "To deploy: uv run mops workspace down && uv run mops workspace up --config examples/workspace.yaml"
+
+## Build and deploy multi-arch images
+dev-deploy-multiarch: build-multiarch
+	@echo "✓ Multi-arch images built and pushed ($(VERSION))"
+	@echo "To deploy: uv run mops workspace down && uv run mops workspace up --config examples/workspace.yaml"
 
 # === Simulation Examples ===
 

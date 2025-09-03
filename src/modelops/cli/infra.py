@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 from rich.console import Console
 from ..core import StackNaming
+from .utils import handle_pulumi_error
 
 app = typer.Typer(help="Manage infrastructure (Azure, AWS, GCP, local)")
 console = Console()
@@ -137,8 +138,12 @@ def up(
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
+    except auto.CommandError as e:
+        handle_pulumi_error(e, str(work_dir), stack_name)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error creating infrastructure: {e}[/red]")
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -259,8 +264,12 @@ def down(
             console.print("\n[green]✓ Infrastructure destroyed; resource group retained[/green]")
             console.print("Resource group preserved for future deployments")
         
+    except auto.CommandError as e:
+        handle_pulumi_error(e, str(work_dir), stack_name)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error destroying infrastructure: {e}[/red]")
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -341,6 +350,10 @@ def status(
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
+    except auto.CommandError as e:
+        handle_pulumi_error(e, str(work_dir), stack_name)
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error querying infrastructure status: {e}[/red]")
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
