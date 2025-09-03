@@ -4,7 +4,6 @@ Provider-agnostic infrastructure provisioning using ComponentResources.
 """
 
 import typer
-import yaml
 import pulumi
 import pulumi.automation as auto
 from pulumi.automation import ProjectSettings, ProjectBackend
@@ -12,10 +11,17 @@ from pathlib import Path
 from typing import Optional
 from rich.console import Console
 from ..core import StackNaming
+from ..core.paths import ensure_work_dir, get_backend_url
+from ..core.config import ModelOpsConfig
+from ..components import AzureProviderConfig
 from .utils import handle_pulumi_error
 
 app = typer.Typer(help="Manage infrastructure (Azure, AWS, GCP, local)")
 console = Console()
+
+
+# Note: We can't call these at module import time, so we use None as default
+# and resolve inside the function
 
 
 @app.command()
@@ -29,8 +35,8 @@ def up(
         dir_okay=False,
         readable=True
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name (dev, staging, prod)"
     )
@@ -44,30 +50,28 @@ def up(
     Example:
         mops infra up --config ~/.modelops/providers/azure.yaml
     """
-    # Load configuration
-    with open(config) as f:
-        provider_config = yaml.safe_load(f)
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
     
-    provider_type = provider_config.get("provider")
-    if not provider_type:
-        console.print("[red]Error: 'provider' field required in config[/red]")
-        raise typer.Exit(1)
+    # Load and validate configuration
+    provider_config = AzureProviderConfig.from_yaml(config)
     
-    # Add environment to config for components to use
-    provider_config["environment"] = env
-    
-    console.print(f"[bold]Creating {provider_type} infrastructure from zero...[/bold]")
+    console.print(f"[bold]Creating {provider_config.provider} infrastructure from zero...[/bold]")
     console.print(f"Config: {config}")
     console.print(f"Environment: {env}")
+    console.print(f"Resource Group: {provider_config.resource_group}-{env}-rg-{provider_config.username}")
     
     def pulumi_program():
         """Pulumi program that creates infrastructure using ComponentResource."""
         import pulumi
         
-        if provider_type == "azure":
+        if provider_config.provider == "azure":
             from ..infra.components.azure import ModelOpsCluster
-            # Single component handles all complexity
-            cluster = ModelOpsCluster("modelops", provider_config)
+            # Pass validated config dict to component with environment
+            config_dict = provider_config.to_pulumi_config()
+            config_dict["environment"] = env
+            cluster = ModelOpsCluster("modelops", config_dict)
             
             # Export outputs at the stack level for access via StackReference
             pulumi.export("kubeconfig", cluster.kubeconfig)
@@ -79,17 +83,15 @@ def up(
             
             return cluster
         else:
-            raise ValueError(f"Provider '{provider_type}' not yet implemented")
+            raise ValueError(f"Provider '{provider_config.provider}' not yet implemented")
     
     # Use centralized naming for stack and project
     stack_name = StackNaming.get_stack_name("infra", env)
     project_name = StackNaming.get_project_name("infra")
     
-    # Set up paths for local backend
-    pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider_type
-    pulumi_dir.mkdir(parents=True, exist_ok=True)
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider_type
-    backend_dir.mkdir(parents=True, exist_ok=True)
+    # Use paths.py for consistent directory management
+    work_dir = ensure_work_dir("infra")
+    backend_url = get_backend_url()
     
     try:
         stack = auto.create_or_select_stack(
@@ -97,23 +99,17 @@ def up(
             project_name=project_name,
             program=pulumi_program,
             opts=auto.LocalWorkspaceOptions(
-                work_dir=str(pulumi_dir),
+                work_dir=str(work_dir),
                 project_settings=ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=ProjectBackend(url=f"file://{backend_dir}")
+                    backend=ProjectBackend(url=backend_url)
                 )
             )
         )
         
-        # Set provider configuration
-        if provider_type == "azure":
-            if "subscription_id" in provider_config:
-                stack.set_config("azure:subscription_id", 
-                               auto.ConfigValue(provider_config["subscription_id"]))
-            if "location" in provider_config:
-                stack.set_config("azure:location", 
-                               auto.ConfigValue(provider_config["location"]))
+        # Note: Azure Native provider gets configuration from environment/CLI
+        # No need to set config keys - the provider will use Azure CLI credentials
         
         # Run pulumi up
         console.print("\n[yellow]Creating resources (this may take several minutes)...[/yellow]")
@@ -128,22 +124,22 @@ def up(
             raise typer.Exit(1)
         
         console.print("\n[green]✓ Infrastructure created successfully![/green]")
-        console.print(f"  Provider: {provider_type}")
+        console.print(f"  Provider: {provider_config.provider}")
         console.print(f"  Stack: {stack_name}")
         console.print("\nStack outputs saved. Query with:")
-        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_type}")
+        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_config.provider}")
         console.print("\nGet kubeconfig:")
-        console.print(f"  pulumi stack output kubeconfig --show-secrets --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_type}")
+        console.print(f"  pulumi stack output kubeconfig --show-secrets --stack {stack_name} --cwd ~/.modelops/pulumi/{provider_config.provider}")
         console.print("\nNext steps:")
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error creating infrastructure: {e}[/red]")
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -155,8 +151,8 @@ def down(
         help="Provider configuration file (YAML)",
         exists=True
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name (dev, staging, prod)"
     ),
@@ -176,14 +172,12 @@ def down(
     By default, destroys AKS cluster and ACR but preserves the resource group.
     Use --delete-rg to also delete the resource group.
     """
-    # Load configuration
-    with open(config) as f:
-        provider_config = yaml.safe_load(f)
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
     
-    provider_type = provider_config.get("provider")
-    if not provider_type:
-        console.print("[red]Error: 'provider' field required in config[/red]")
-        raise typer.Exit(1)
+    # Load and validate configuration
+    provider_config = AzureProviderConfig.from_yaml(config)
     
     # Confirm destruction
     if not yes:
@@ -193,7 +187,7 @@ def down(
             console.print("This action cannot be undone!")
         else:
             console.print("\n[yellow]⚠️  Infrastructure Teardown[/yellow]")
-            console.print(f"This will destroy {provider_type} resources (AKS, ACR)")
+            console.print(f"This will destroy {provider_config.provider} resources (AKS, ACR)")
             console.print("but will preserve the resource group for future use.")
         
         confirm = typer.confirm("\nAre you sure you want to proceed?")
@@ -205,19 +199,21 @@ def down(
     stack_name = StackNaming.get_stack_name("infra", env)
     project_name = StackNaming.get_project_name("infra")
     
-    # Set up paths for local backend (must match 'up' command)
-    pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider_type
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider_type
+    # Use paths.py for consistent directory management
+    work_dir = ensure_work_dir("infra")
+    backend_url = get_backend_url()
     
     try:
         # Always use the same program as `up`. RG has retain_on_delete=True,
         # so default destroy will keep RG; we delete it explicitly only when requested.
         def pulumi_program():
-            if provider_type == "azure":
+            if provider_config.provider == "azure":
                 from ..infra.components.azure import ModelOpsCluster
-                return ModelOpsCluster("modelops", provider_config)
+                config_dict = provider_config.to_pulumi_config()
+                config_dict["environment"] = env
+                return ModelOpsCluster("modelops", config_dict)
             else:
-                raise ValueError(f"Provider '{provider_type}' not supported")
+                raise ValueError(f"Provider '{provider_config.provider}' not supported")
         
         # Use same stack configuration as 'up' command
         stack = auto.create_or_select_stack(
@@ -225,16 +221,16 @@ def down(
             project_name=project_name,
             program=pulumi_program,
             opts=auto.LocalWorkspaceOptions(
-                work_dir=str(pulumi_dir),
+                work_dir=str(work_dir),
                 project_settings=ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=ProjectBackend(url=f"file://{backend_dir}")
+                    backend=ProjectBackend(url=backend_url)
                 )
             )
         )
         
-        console.print(f"\n[yellow]Destroying {provider_type} infrastructure...[/yellow]")
+        console.print(f"\n[yellow]Destroying {provider_config.provider} infrastructure...[/yellow]")
         
         if delete_rg:
             # When deleting RG, we need to unprotect it first
@@ -250,11 +246,10 @@ def down(
             else:
                 raise
         
-        if delete_rg and provider_type == "azure":
+        if delete_rg and provider_config.provider == "azure":
             # Use centralized naming to compute RG name
-            import os, subprocess
-            username = provider_config.get("username") or os.environ.get("USER") or os.environ.get("USERNAME")
-            rg_name = StackNaming.get_resource_group_name(env, username)
+            import subprocess
+            rg_name = StackNaming.get_resource_group_name(env, provider_config.username)
             
             console.print(f"\n[yellow]Deleting resource group '{rg_name}'...[/yellow]")
             # Use Azure CLI to delete the retained RG
@@ -265,40 +260,44 @@ def down(
             console.print("Resource group preserved for future deployments")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error destroying infrastructure: {e}[/red]")
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
 
 
 @app.command()
 def status(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name (dev, staging, prod)"
     ),
-    provider: str = typer.Option(
-        "azure",
+    provider: Optional[str] = typer.Option(
+        None,
         "--provider", "-p",
         help="Cloud provider (azure, aws, gcp)"
     )
 ):
     """Show current infrastructure status from Pulumi stack."""
     import pulumi.automation as auto
-    from pathlib import Path
+    
+    # Resolve defaults from config if not provided
+    from .utils import resolve_env, resolve_provider
+    env = resolve_env(env)
+    provider = resolve_provider(provider)
     
     # Use centralized naming
     stack_name = StackNaming.get_stack_name("infra", env)
     project_name = StackNaming.get_project_name("infra")
     
-    # Set up paths for local backend
-    pulumi_dir = Path.home() / ".modelops" / "pulumi" / provider
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / provider
+    # Use paths.py for consistent directory management
+    work_dir = ensure_work_dir("infra")
+    backend_url = get_backend_url()
     
-    if not pulumi_dir.exists() or not backend_dir.exists():
+    if not work_dir.exists():
         console.print("[yellow]No infrastructure found[/yellow]")
         console.print("\nRun 'mops infra up --config <file>' to create infrastructure")
         raise typer.Exit(0)
@@ -314,15 +313,18 @@ def status(
             project_name=project_name,
             program=pulumi_program,
             opts=auto.LocalWorkspaceOptions(
-                work_dir=str(pulumi_dir),
-                project_settings=auto.ProjectSettings(
+                work_dir=str(work_dir),
+                project_settings=ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=ProjectBackend(url=backend_url)
                 )
             )
         )
         
+        # Refresh stack to get current state from backend
+        # Without refresh, outputs show stale/cached data
+        stack.refresh(on_output=lambda _: None)
         outputs = stack.outputs()
         
         if not outputs:
@@ -342,15 +344,15 @@ def status(
             console.print(f"  [red]✗[/red] Kubeconfig missing")
         
         console.print("\nQuery outputs:")
-        console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider}")
+        console.print(f"  pulumi stack output --stack {stack_name} --cwd {work_dir}")
         console.print("\nNext steps:")
         console.print("  1. Run 'mops workspace up' to deploy Dask")
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error querying infrastructure status: {e}[/red]")
-        handle_pulumi_error(e, str(pulumi_dir), stack_name)
+        handle_pulumi_error(e, str(work_dir), stack_name)
         raise typer.Exit(1)

@@ -1,40 +1,42 @@
-"""ModelOps components and configuration models."""
+"""Configuration specification models for ModelOps."""
 
-from .config_base import ConfigModel
-
-from .specs import (
-    # Common models
+from .common import (
     ResourceRequirements,
     EnvVar,
     Toleration,
-    
-    # Azure models
+)
+
+from .azure import (
     AzureProviderConfig,
     AKSConfig,
     NodePool,
     ACRConfig,
     Taint,
-    
-    # Workspace models
+    PoolMode,
+    TaintEffect,
+    ACRSku,
+)
+
+from .workspace import (
     WorkspaceConfig,
 )
 
 __all__ = [
-    # Base
-    "ConfigModel",
-    
-    # Common
+    # Common models
     "ResourceRequirements",
     "EnvVar",
     "Toleration",
     
-    # Azure
+    # Azure models
     "AzureProviderConfig",
-    "AKSConfig",
+    "AKSConfig", 
     "NodePool",
     "ACRConfig",
     "Taint",
+    "PoolMode",
+    "TaintEffect",
+    "ACRSku",
     
-    # Workspace
+    # Workspace models
     "WorkspaceConfig",
 ]

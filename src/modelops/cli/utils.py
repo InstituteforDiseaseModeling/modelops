@@ -2,10 +2,72 @@
 
 import re
 from pathlib import Path
+from typing import Optional
 from rich.console import Console
 import pulumi.automation as auto
+import typer
 
 console = Console()
+
+
+def get_config_or_exit(command_name: str = None):
+    """Get config instance or exit with helpful message.
+    
+    Args:
+        command_name: Optional command name for better error context
+        
+    Returns:
+        ModelOpsConfig instance
+        
+    Raises:
+        typer.Exit: If config not found
+    """
+    from ..core.config import ModelOpsConfig, ConfigNotFoundError
+    
+    try:
+        return ModelOpsConfig.get_instance()
+    except ConfigNotFoundError:
+        console.print("[red]Error: Configuration not initialized[/red]")
+        console.print("Run 'mops config init' to create configuration")
+        if command_name:
+            console.print(f"[dim](Required for 'mops {command_name}')[/dim]")
+        raise typer.Exit(1)
+
+
+def resolve_env(env: Optional[str]) -> str:
+    """Resolve environment from parameter or config defaults.
+    
+    Args:
+        env: Environment parameter from CLI (may be None)
+        
+    Returns:
+        Resolved environment string
+        
+    Raises:
+        typer.Exit: If config not found
+    """
+    if env is None:
+        config = get_config_or_exit()
+        return config.defaults.environment
+    return env
+
+
+def resolve_provider(provider: Optional[str]) -> str:
+    """Resolve provider from parameter or config defaults.
+    
+    Args:
+        provider: Provider parameter from CLI (may be None)
+        
+    Returns:
+        Resolved provider string
+        
+    Raises:
+        typer.Exit: If config not found
+    """
+    if provider is None:
+        config = get_config_or_exit()
+        return config.defaults.provider
+    return provider
 
 
 def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:

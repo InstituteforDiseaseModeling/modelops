@@ -163,26 +163,31 @@ class ContainerRegistry(pulumi.ComponentResource):
         cluster_name = infra.require_output("cluster_name")
         resource_group = infra.require_output("resource_group")
         
-        # We need the cluster's kubelet identity
-        # This requires querying the cluster resource
-        cluster = azure.containerservice.get_managed_cluster(
+        # Use get_managed_cluster_output for proper Output handling
+        # This is critical: using non-Output version with Output args will fail at runtime
+        cluster = azure.containerservice.get_managed_cluster_output(
             resource_name=cluster_name,
             resource_group_name=resource_group
         )
         
-        # Get kubelet identity
-        principal_id = cluster.identity_profile["kubeletidentity"]["object_id"]
+        # Get kubelet identity using apply() for Output transformation
+        principal_id = cluster.identity_profile.apply(
+            lambda ip: ip["kubeletidentity"]["object_id"]
+        )
         
         # AcrPull role definition ID
-        acr_pull_role = f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        acr_pull_role = pulumi.Output.from_input(
+            f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        )
         
-        # Create role assignment with deterministic GUID
-        # Azure requires a GUID for RoleAssignment names
-        # Generate deterministic UUID from scope and principal to ensure idempotency
-        role_assignment_guid = str(uuid.uuid5(
+        # Generate deterministic UUID inside Output.apply() for proper handling
+        # This ensures the UUID is computed with resolved Output values
+        role_assignment_guid = pulumi.Output.all(
+            self.registry_id, principal_id
+        ).apply(lambda args: str(uuid.uuid5(
             uuid.NAMESPACE_DNS,
-            f"{self.registry_id}-{principal_id}-acrpull"
-        ))
+            f"{args[0]}-{args[1]}-acrpull"
+        )))
         
         return azure.authorization.RoleAssignment(
             f"{self.registry_name}-cluster-pull",
@@ -203,13 +208,8 @@ class ContainerRegistry(pulumi.ComponentResource):
         if config.get("username"):
             username = config["username"]
         else:
-            import os
-            username = os.environ.get("USER") or os.environ.get("USERNAME")
-            if not username:
-                raise ValueError(
-                    "Username required for per-user resources. "
-                    "Set 'username' in config or USER environment variable"
-                )
+            from ...core.config import get_username
+            username = get_username()
         
         # Sanitize for Azure naming (alphanumeric only for ACR)
         import re

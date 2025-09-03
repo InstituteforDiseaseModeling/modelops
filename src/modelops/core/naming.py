@@ -19,7 +19,9 @@ class StackNaming:
     """
     
     PROJECT_PREFIX = "modelops"
-    # Organization name for file backend (Pulumi constant for local backends)
+    
+    # Pulumi file backend requires org to be "organization"
+    # See: https://github.com/pulumi/pulumi/issues/11390
     ORG = "organization"
     
     @staticmethod
@@ -63,7 +65,9 @@ class StackNaming:
         
         Args:
             env: Environment name (dev, staging, prod)
-            username: Optional username for per-user resource groups
+            username: Optional username for per-user resource groups.
+                     This is typically the local system username (not Azure AD).
+                     Provides isolation between developers on same subscription
             
         Returns:
             Resource group name like 'modelops-dev-rg-alice'
@@ -223,6 +227,7 @@ class StackNaming:
             result["run_id"] = "-".join(parts[3:])
         
         return result
+    
     
     @staticmethod
     def ref(component: str, env: str, run_id: Optional[str] = None) -> str:

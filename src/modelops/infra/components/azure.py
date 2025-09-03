@@ -32,7 +32,11 @@ class ModelOpsCluster(pulumi.ComponentResource):
         super().__init__("modelops:infra:cluster", name, None, opts)
         
         # Extract configuration with defaults
-        subscription_id = config["subscription_id"]
+        # Get subscription ID from config or environment
+        subscription_id = config.get("subscription_id") or os.environ.get("AZURE_SUBSCRIPTION_ID")
+        if not subscription_id:
+            raise ValueError("Azure subscription ID required: set in config or AZURE_SUBSCRIPTION_ID env var")
+        
         location = config.get("location", "eastus2")
         env = config.get("environment", "dev")  # Get environment from config
         
@@ -43,23 +47,13 @@ class ModelOpsCluster(pulumi.ComponentResource):
         aks_config = config.get("aks", {})
         ssh_config = config.get("ssh", {})
         
-        # Create Resource Group with per-user naming
-        # Set protect=True so default `down` doesn't delete the RG
-        rg = azure.resources.ResourceGroup(
-            f"{name}-rg",
-            resource_group_name=rg_name,  # Per-user RG name
+        # Create or get existing Resource Group (idempotent)
+        rg = self._ensure_resource_group(
+            name=name,
+            rg_name=rg_name,
             location=location,
-            tags={
-                "managed-by": "modelops",
-                "project": "modelops",
-                "component": name,
-                "user": username
-            },
-            opts=pulumi.ResourceOptions(
-                parent=self,
-                protect=True,  # Prevent accidental deletion
-                retain_on_delete=True  # Also retain on replacement
-            )
+            subscription_id=subscription_id,
+            username=username
         )
         
         # Get or generate SSH key
@@ -112,6 +106,64 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # This is a valid but insecure SSH key for testing only
         # TODO/PLACEHOLDER: integrate real key generation
         return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDPaTXgcq3a8qEWVN9F4kPTXogk0cKAQjWLoyaGtOnostXCoL3pMPmsCyEh2H8xGr7kvTaLQuKcfa5+gOqE+mRwQO3OtMr7K1UoGlEO5V3rZPZLnLrOuWtrCbBVXLxBvlNfWPqRaMQT6N/06xrB2V3aF5YQtpt3zPLbMjU7miPVMvjV0pXQHCioFUDJmnFBcOT/EQlhxMKSqeMmQ+BYXQV7TT3aCrJiM6oC7Pa2h9REd5HDnZ5fwmGOXF3H0gxR8sPEEofV1tRFmacnVzk5tfoT0z0adPNDBoMD7bxs5xB5LQXdV8K9n5RYPsJc1p7Ms8pqXAQUJdGFaHOjKiGJjvPT modelops-ephemeral@azure"
+    
+    def _ensure_resource_group(self, name: str, rg_name: str, location: str,
+                              subscription_id: str, username: str) -> azure.resources.ResourceGroup:
+        """Create or get existing resource group (idempotent).
+        
+        This method handles the case where a resource group already exists in Azure
+        but may not be in the Pulumi state. It attempts to use an existing RG if found,
+        otherwise creates a new one.
+        """
+        rg_id = f"/subscriptions/{subscription_id}/resourceGroups/{rg_name}"
+        
+        # Try to check if resource group exists in Azure
+        try:
+            # Attempt to get the existing resource group
+            existing_rg_result = azure.resources.get_resource_group(
+                resource_group_name=rg_name,
+                opts=pulumi.InvokeOptions(parent=self)
+            )
+            
+            # If we get here, the RG exists in Azure
+            # Use ResourceGroup.get to import it into our state
+            pulumi.log.info(f"Resource group '{rg_name}' already exists, importing into state")
+            
+            rg = azure.resources.ResourceGroup.get(
+                f"{name}-rg",
+                id=rg_id,
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    protect=True,  # Prevent accidental deletion
+                    retain_on_delete=True  # Retain on replacement
+                )
+            )
+            
+            return rg
+            
+        except Exception as e:
+            # Resource group doesn't exist or we can't access it
+            # Create a new one
+            pulumi.log.info(f"Creating new resource group: {rg_name}")
+            
+            rg = azure.resources.ResourceGroup(
+                f"{name}-rg",
+                resource_group_name=rg_name,
+                location=location,
+                tags={
+                    "managed-by": "modelops",
+                    "project": "modelops",
+                    "component": name,
+                    "user": username
+                },
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    protect=True,  # Prevent accidental deletion
+                    retain_on_delete=True  # Also retain on replacement
+                )
+            )
+            
+            return rg
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
                            location: str, aks_config: Dict[str, Any], 
@@ -202,7 +254,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
                     max_count=pool["max"],
                     count=pool.get("count", pool["min"]),
                     node_labels=pool.get("labels", {}),
-                    node_taints=pool.get("taints", [])
+                    node_taints=self._format_taints_for_azure(pool.get("taints", []))
                 )
             else:
                 # Fixed size pool
@@ -215,12 +267,40 @@ class ModelOpsCluster(pulumi.ComponentResource):
                     enable_auto_scaling=False,
                     count=pool.get("count", 1),
                     node_labels=pool.get("labels", {}),
-                    node_taints=pool.get("taints", [])
+                    node_taints=self._format_taints_for_azure(pool.get("taints", []))
                 )
             
             profiles.append(profile)
         
         return profiles
+    
+    def _format_taints_for_azure(self, taints: list) -> list:
+        """Format taints for Azure API.
+        
+        Converts Taint objects or strings to Azure's expected string format.
+        Azure expects strings like 'key=value:Effect' or 'key:Effect'.
+        """
+        formatted = []
+        for taint in taints:
+            if isinstance(taint, str):
+                # Already in string format
+                formatted.append(taint)
+            elif hasattr(taint, 'to_azure_format'):
+                # It's a Taint object with formatting method
+                formatted.append(taint.to_azure_format())
+            elif isinstance(taint, dict):
+                # Dict format from YAML
+                key = taint.get('key', '')
+                value = taint.get('value', '')
+                effect = taint.get('effect', 'NoSchedule')
+                if value:
+                    formatted.append(f"{key}={value}:{effect}")
+                else:
+                    formatted.append(f"{key}:{effect}")
+            else:
+                # Try to convert to string
+                formatted.append(str(taint))
+        return formatted
     
     def _get_username(self, config: Dict[str, Any]) -> str:
         """Get username for per-user resource group.
@@ -232,14 +312,9 @@ class ModelOpsCluster(pulumi.ComponentResource):
         if config.get("username"):
             username = config["username"]
         else:
-            # Try environment variables
-            import os
-            username = os.environ.get("USER") or os.environ.get("USERNAME")
-            if not username:
-                raise ValueError(
-                    "Username required for per-user resource groups. "
-                    "Set 'username' in config or USER environment variable"
-                )
+            # Get username from config or system
+            from ...core.config import get_username
+            username = get_username()
         
         # Sanitize for Azure RG naming (alphanumeric, hyphen, underscore)
         import re

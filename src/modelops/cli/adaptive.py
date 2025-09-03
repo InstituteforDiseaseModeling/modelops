@@ -9,7 +9,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from ..core import StackNaming
-from ..core.paths import BACKEND_DIR, WORK_DIRS, ensure_work_dir
+from ..core.paths import ensure_work_dir, get_backend_url
 
 app = typer.Typer(help="Manage adaptive optimization runs")
 console = Console()
@@ -31,17 +31,17 @@ def up(
         help="Unique run identifier (auto-generated if not provided)"
     ),
     infra_stack: str = typer.Option(
-        "modelops-infra",
+        StackNaming.get_project_name("infra"),
         "--infra-stack",
-        help="Infrastructure stack name (without env suffix)"
+        help=f"Infrastructure stack name (default: {StackNaming.get_project_name('infra')}, auto-appends env for default)"
     ),
     workspace_stack: str = typer.Option(
-        "modelops-workspace",
+        StackNaming.get_project_name("workspace"),
         "--workspace-stack",
-        help="Workspace stack name (without env suffix)"
+        help=f"Workspace stack name (default: {StackNaming.get_project_name('workspace')}, auto-appends env for default)"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
@@ -55,6 +55,10 @@ def up(
         mops adaptive up optuna-config.yaml
         mops adaptive up experiment.yaml --run-id exp-001 --env prod
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     # Generate run ID if not provided
     if not run_id:
         run_id = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
@@ -67,7 +71,7 @@ def up(
         """Create AdaptiveRun in Stack 3 context."""
         from ..infra.components.adaptive import AdaptiveRun
         
-        # Use centralized naming for fully-qualified stack references
+        # Always use StackNaming.ref for consistency
         infra_ref = StackNaming.ref("infra", env)
         workspace_ref = StackNaming.ref("workspace", env)
         
@@ -82,11 +86,11 @@ def up(
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    # Use unified backend for cross-stack references
-    backend_dir = BACKEND_DIR
-    backend_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
+    # Use paths.py for consistent directory management
+    base_dir = ensure_work_dir("adaptive")
+    work_dir = base_dir / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
+    backend_url = get_backend_url()
     
     try:
         stack = auto.create_or_select_stack(
@@ -98,7 +102,7 @@ def up(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -141,8 +145,8 @@ def down(
         ...,
         help="Run ID to destroy"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     ),
@@ -157,6 +161,10 @@ def down(
     This removes all resources associated with the run including
     any Postgres database and persistent volumes.
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     if not yes:
         console.print(f"\n[bold yellow]⚠️  Warning[/bold yellow]")
         console.print(f"This will destroy adaptive run: {run_id}")
@@ -171,8 +179,9 @@ def down(
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    backend_dir = BACKEND_DIR
-    work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
+    base_dir = ensure_work_dir("adaptive")
+    work_dir = base_dir / run_id
+    backend_url = get_backend_url()
     
     if not work_dir.exists():
         console.print(f"[yellow]Run not found: {run_id}[/yellow]")
@@ -192,7 +201,7 @@ def down(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -217,20 +226,24 @@ def status(
         ...,
         help="Run ID to check"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
 ):
     """Check status of an adaptive run."""
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
     
     # Use centralized naming
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    backend_dir = BACKEND_DIR
-    work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
+    base_dir = ensure_work_dir("adaptive")
+    work_dir = base_dir / run_id
+    backend_url = get_backend_url()
     
     if not work_dir.exists():
         console.print(f"[yellow]Run not found: {run_id}[/yellow]")
@@ -250,11 +263,14 @@ def status(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
         
+        # Refresh stack to get current state from backend
+        # Without refresh, outputs show stale/cached data
+        stack.refresh(on_output=lambda _: None)
         outputs = stack.outputs()
         
         if not outputs:
@@ -294,7 +310,9 @@ def status(
 def list_runs():
     """List all adaptive runs."""
     
-    adaptive_dir = Path.home() / ".modelops" / "pulumi" / "adaptive"
+    # Use paths.py to get adaptive directory
+    from ..core.paths import WORK_DIRS
+    adaptive_dir = WORK_DIRS["adaptive"]
     
     if not adaptive_dir.exists():
         console.print("[yellow]No adaptive runs found[/yellow]")
@@ -322,8 +340,8 @@ def list_runs():
         stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
         
         # Check if stack exists in backend
-        backend_dir = BACKEND_DIR
-        stack_file = backend_dir / ".pulumi" / "stacks" / f"{stack_name}.json"
+        from ..core.paths import BACKEND_DIR
+        stack_file = BACKEND_DIR / ".pulumi" / "stacks" / f"{stack_name}.json"
         
         if stack_file.exists():
             # Try to get basic info
@@ -359,8 +377,8 @@ def logs(
         ...,
         help="Run ID to get logs for"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     ),
@@ -379,9 +397,14 @@ def logs(
     
     This is a convenience wrapper around kubectl logs.
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     # Use centralized naming
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
-    work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
+    base_dir = ensure_work_dir("adaptive")
+    work_dir = base_dir / run_id
     
     if not work_dir.exists():
         console.print(f"[yellow]Run not found: {run_id}[/yellow]")
@@ -390,7 +413,7 @@ def logs(
     try:
         # Get namespace from stack outputs
         project_name = StackNaming.get_project_name("adaptive")
-        backend_dir = BACKEND_DIR
+        backend_url = get_backend_url()
         
         def pulumi_program():
             pass
@@ -404,11 +427,13 @@ def logs(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
         
+        # Refresh to get current state
+        stack.refresh(on_output=lambda _: None)
         outputs = stack.outputs()
         
         if not outputs:

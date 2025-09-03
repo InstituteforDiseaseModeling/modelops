@@ -1,25 +1,46 @@
-"""Centralized path management for ModelOps Pulumi stacks.
+"""Centralized path management for ModelOps.
 
-This module defines all paths used by Pulumi stacks to ensure consistency
-and prevent backend mismatches that break StackReferences.
+This module defines all paths used by ModelOps to ensure consistency
+across all components. All path definitions should come from here.
 """
 
 from pathlib import Path
 
-# Single unified backend for ALL stacks (critical for StackReferences to work)
-BACKEND_DIR = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-BACKEND_URL = f"file://{BACKEND_DIR}"
+# Configuration file
+CONFIG_FILE = Path.home() / ".modelops" / "config.yaml"
 
-# Working directories for each component
+# Base directories
+MODELOPS_HOME = Path.home() / ".modelops"
+PULUMI_HOME = MODELOPS_HOME / "pulumi"
+
+# Unified backend for all stacks (required for StackReferences to work)
+BACKEND_DIR = PULUMI_HOME / "backend"
+
+# Clean component structure
 WORK_DIRS = {
-    "infra": Path.home() / ".modelops" / "pulumi" / "azure",
-    "workspace": Path.home() / ".modelops" / "pulumi" / "workspace",
-    "adaptive": Path.home() / ".modelops" / "pulumi" / "adaptive",
-    "registry": Path.home() / ".modelops" / "pulumi" / "registry",
+    "infra": PULUMI_HOME / "infra",
+    "workspace": PULUMI_HOME / "workspace",
+    "adaptive": PULUMI_HOME / "adaptive",
+    "registry": PULUMI_HOME / "registry",
 }
 
-# Provider configuration directory
-PROVIDER_DIR = Path.home() / ".modelops" / "providers"
+# Provider configurations
+PROVIDER_DIR = MODELOPS_HOME / "providers"
+
+
+def get_backend_url() -> str:
+    """Get backend URL from config or use default local path.
+    
+    Returns:
+        Backend URL string, either from config or default file:// path
+    """
+    from .config import ModelOpsConfig
+    config = ModelOpsConfig.get_instance()
+    if config.pulumi.backend_url:
+        return config.pulumi.backend_url
+    ensure_backend()
+    return f"file://{BACKEND_DIR}"
+
 
 def ensure_work_dir(component: str) -> Path:
     """Ensure working directory exists for a component.
@@ -39,6 +60,7 @@ def ensure_work_dir(component: str) -> Path:
     work_dir = WORK_DIRS[component]
     work_dir.mkdir(parents=True, exist_ok=True)
     return work_dir
+
 
 def ensure_backend() -> Path:
     """Ensure backend directory exists.

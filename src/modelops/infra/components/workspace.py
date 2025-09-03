@@ -10,6 +10,7 @@ import json
 import base64
 import os
 from ...core import StackNaming
+from ...versions import DASK_IMAGE
 
 
 class DaskWorkspace(pulumi.ComponentResource):
@@ -65,10 +66,18 @@ class DaskWorkspace(pulumi.ComponentResource):
             workers_config = config
         
         # Extract configuration values
-        # Use specific version that matches our client (2024.8.0)
-        scheduler_image = scheduler_config.get("image", "ghcr.io/dask/dask:2024.8.0")
+        # Use centralized version to prevent drift between specs and runtime
+        scheduler_image = scheduler_config.get("image", DASK_IMAGE)
         worker_image = workers_config.get("image", scheduler_image)
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
+        
+        # Convert K8s memory format to Dask format (4Gi -> 4GiB)
+        # Dask expects GiB/MiB notation, not K8s Gi/Mi
+        memory_limit = workers_config.get("resources", {}).get("limits", {}).get("memory", "4Gi")
+        if memory_limit.endswith("Gi"):
+            memory_limit = memory_limit[:-2] + "GiB"
+        elif memory_limit.endswith("Mi"):
+            memory_limit = memory_limit[:-2] + "MiB"
         
         # Node selectors
         scheduler_node_selector = scheduler_config.get("nodeSelector", {})
@@ -127,11 +136,26 @@ class DaskWorkspace(pulumi.ComponentResource):
                         }
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
+                        # Security: Run containers as non-root to prevent privilege escalation
+                        # Default K8s behavior runs as root (uid 0), enabling container escape attacks
+                        security_context=k8s.core.v1.PodSecurityContextArgs(
+                            run_as_non_root=True,
+                            run_as_user=1000,
+                            fs_group=1000
+                        ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="scheduler",
                                 image=scheduler_image,
                                 command=["dask-scheduler"],
+                                # Security: Drop all Linux capabilities to minimize attack surface
+                                # Dask doesn't need special kernel capabilities for normal operation
+                                security_context=k8s.core.v1.SecurityContextArgs(
+                                    allow_privilege_escalation=False,
+                                    run_as_non_root=True,
+                                    run_as_user=1000,
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                ),
                                 ports=[
                                     k8s.core.v1.ContainerPortArgs(
                                         container_port=8786,
@@ -218,15 +242,30 @@ class DaskWorkspace(pulumi.ComponentResource):
                         }
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
+                        # Security: Run containers as non-root to prevent privilege escalation
+                        # Workers process untrusted code, so security isolation is critical
+                        security_context=k8s.core.v1.PodSecurityContextArgs(
+                            run_as_non_root=True,
+                            run_as_user=1000,
+                            fs_group=1000
+                        ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="worker",
                                 image=worker_image,
+                                # Security: Drop all capabilities and prevent privilege escalation
+                                # Workers don't need kernel capabilities for computation tasks
+                                security_context=k8s.core.v1.SecurityContextArgs(
+                                    allow_privilege_escalation=False,
+                                    run_as_non_root=True,
+                                    run_as_user=1000,
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                ),
                                 command=[
                                     "dask-worker",
                                     "tcp://dask-scheduler:8786",
                                     "--nthreads", str(workers_config.get("threads", 2)),
-                                    "--memory-limit", workers_config.get("resources", {}).get("limits", {}).get("memory", "4Gi")
+                                    "--memory-limit", memory_limit
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
                                     requests=workers_config.get("resources", {}).get("requests", {

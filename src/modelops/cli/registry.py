@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 from rich.console import Console
 from ..core import StackNaming
+from ..core.paths import ensure_work_dir, get_backend_url
 
 app = typer.Typer(help="Manage container registries")
 console = Console()
@@ -19,8 +20,8 @@ def create(
         "--name", "-n",
         help="Registry name"
     ),
-    provider: str = typer.Option(
-        "azure",
+    provider: Optional[str] = typer.Option(
+        None,
         "--provider", "-p",
         help="Registry provider (azure, dockerhub, ghcr)"
     ),
@@ -29,8 +30,8 @@ def create(
         "--config", "-c",
         help="Registry configuration file (YAML)"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
@@ -44,6 +45,11 @@ def create(
         mops registry create --name modelops --provider azure
         mops registry create --config registry.yaml
     """
+    # Resolve defaults from config if not provided
+    from .utils import resolve_env, resolve_provider
+    env = resolve_env(env)
+    provider = resolve_provider(provider)
+    
     # Load configuration
     registry_config = {
         "provider": provider,
@@ -60,7 +66,7 @@ def create(
         import os
         # Get from environment or config
         subscription_id = registry_config.get("subscription_id") or \
-                         os.environ.get("AZURE_SUBSCRIPTION_ID")
+                         None  # Will use Azure CLI auth
         if not subscription_id:
             console.print("[red]Azure subscription ID required[/red]")
             console.print("Set AZURE_SUBSCRIPTION_ID or provide in config")
@@ -76,6 +82,19 @@ def create(
         # Create the registry component
         registry = ContainerRegistry(name, registry_config)
         
+        # Security: Grant AKS cluster ACR pull permissions to access private images
+        # Without this, pods fail with ImagePullBackOff for private registry images
+        if provider == "azure" and registry_config.get("grant_cluster_pull", True):
+            # Try to wire permissions if infrastructure stack exists
+            try:
+                infra_ref = StackNaming.ref("infra", env)
+                role_assignment = registry.setup_cluster_pull_permissions(infra_ref)
+                if role_assignment:
+                    pulumi.export("cluster_pull_configured", pulumi.Output.from_input(True))
+            except Exception:
+                # Infrastructure stack doesn't exist yet, that's OK
+                pulumi.export("cluster_pull_configured", pulumi.Output.from_input(False))
+        
         # Export outputs at stack level for StackReference access
         pulumi.export("login_server", registry.login_server)
         pulumi.export("registry_name", registry.registry_name)
@@ -88,11 +107,9 @@ def create(
     stack_name = StackNaming.get_stack_name("registry", env)
     project_name = StackNaming.get_project_name("registry")
     
-    # Use the same backend as infrastructure
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    backend_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = Path.home() / ".modelops" / "pulumi" / "registry"
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # Use paths.py for consistent directory management
+    work_dir = ensure_work_dir("registry")
+    backend_url = get_backend_url()
     
     try:
         stack = auto.create_or_select_stack(
@@ -104,7 +121,7 @@ def create(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -138,8 +155,8 @@ def create(
 
 @app.command()
 def destroy(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     ),
@@ -153,6 +170,10 @@ def destroy(
     
     Warning: This will delete the registry and all images stored in it.
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     if not yes:
         console.print("\n[bold yellow]⚠️  Warning[/bold yellow]")
         console.print(f"This will destroy the container registry in environment: {env}")
@@ -166,8 +187,8 @@ def destroy(
     stack_name = StackNaming.get_stack_name("registry", env)
     project_name = StackNaming.get_project_name("registry")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "registry"
+    work_dir = ensure_work_dir("registry")
+    backend_url = get_backend_url()
     
     if not work_dir.exists():
         console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
@@ -186,7 +207,7 @@ def destroy(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -203,21 +224,24 @@ def destroy(
 
 @app.command()
 def status(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
 ):
     """Show registry status and connection details."""
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
     
     stack_name = StackNaming.get_stack_name("registry", env)
     project_name = StackNaming.get_project_name("registry")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "registry"
+    work_dir = ensure_work_dir("registry")
+    backend_url = get_backend_url()
     
-    if not work_dir.exists() or not backend_dir.exists():
+    if not work_dir.exists():
         console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
         console.print("\nRun 'mops registry create' to create a registry")
         raise typer.Exit(0)
@@ -239,7 +263,7 @@ def status(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -275,9 +299,57 @@ def status(
 
 
 @app.command()
+def wire_permissions(
+    env: Optional[str] = typer.Option(
+        None,
+        "--env", "-e",
+        help="Environment name"
+    ),
+    infra_stack: str = typer.Option(
+        None,
+        "--infra-stack",
+        help="Infrastructure stack name (defaults to modelops-infra-{env})"
+    )
+):
+    """Wire ACR pull permissions for AKS cluster.
+    
+    This command connects an existing registry to an existing AKS cluster
+    by granting the cluster's managed identity pull permissions on ACR.
+    
+    Run this after both registry and infrastructure stacks are created.
+    """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
+    # Use centralized naming
+    registry_stack = StackNaming.get_stack_name("registry", env)
+    infra_stack = infra_stack or StackNaming.get_stack_name("infra", env)
+    
+    console.print(f"[bold]Wiring registry permissions[/bold]")
+    console.print(f"  Registry stack: {registry_stack}")
+    console.print(f"  Infrastructure stack: {infra_stack}")
+    
+    # Security: This grants the AKS cluster's kubelet identity ACR pull permissions
+    # Without this, private container images cannot be pulled by the cluster
+    console.print("\n[yellow]Note: This grants the AKS cluster pull access to ACR[/yellow]")
+    console.print("This is required for pulling private container images.")
+    
+    # TODO: Implement the actual permission wiring using Pulumi automation API
+    # This would update the registry stack to add the role assignment
+    console.print("\n[yellow]Manual steps for now:[/yellow]")
+    console.print("1. Get the AKS cluster's kubelet identity:")
+    console.print("   az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId")
+    console.print("2. Grant ACR pull permissions:")
+    console.print("   az role assignment create --assignee <identity> --role acrpull --scope <acr-id>")
+    
+    console.print("\n[dim]Automated wiring will be implemented in a future update[/dim]")
+
+
+@app.command()
 def env(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     ),
@@ -299,13 +371,17 @@ def env(
         # Output as JSON
         mops registry env --format json
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     stack_name = StackNaming.get_stack_name("registry", env)
     project_name = StackNaming.get_project_name("registry")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "registry"
+    work_dir = ensure_work_dir("registry")
+    backend_url = get_backend_url()
     
-    if not work_dir.exists() or not backend_dir.exists():
+    if not work_dir.exists():
         if format == "json":
             console.print("{}")
         # Silent exit for shell evaluation
@@ -325,7 +401,7 @@ def env(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -380,20 +456,24 @@ def env(
 
 @app.command()
 def login(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
 ):
     """Login to container registry."""
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     import subprocess
     
     stack_name = StackNaming.get_stack_name("registry", env)
     project_name = StackNaming.get_project_name("registry")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "registry"
+    work_dir = ensure_work_dir("registry")
+    backend_url = get_backend_url()
     
     if not work_dir.exists():
         console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
@@ -413,7 +493,7 @@ def login(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )

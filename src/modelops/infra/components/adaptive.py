@@ -130,10 +130,25 @@ class AdaptiveRun(pulumi.ComponentResource):
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         restart_policy="OnFailure",
+                        # Security: Run adaptive workers as non-root to prevent privilege escalation
+                        # Adaptive workers access external services (Dask, Postgres) but shouldn't have root access
+                        security_context=k8s.core.v1.PodSecurityContextArgs(
+                            run_as_non_root=True,
+                            run_as_user=1000,
+                            fs_group=1000
+                        ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="adaptive-worker",
                                 image=config.get("image", "ghcr.io/modelops/adaptive:latest"),
+                                # Security: Drop all capabilities and prevent privilege escalation
+                                # Adaptive workers only need network access, no special kernel capabilities
+                                security_context=k8s.core.v1.SecurityContextArgs(
+                                    allow_privilege_escalation=False,
+                                    run_as_non_root=True,
+                                    run_as_user=1000,
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                ),
                                 command=config.get("command", [
                                     "python", "-m", "modelops.adaptive.worker"
                                 ]),
@@ -193,7 +208,9 @@ class AdaptiveRun(pulumi.ComponentResource):
             "run_id": name,
             "namespace": run_namespace,
             "scheduler_address": scheduler_address,
-            "postgres_dsn": postgres_dsn if postgres_dsn else None,
+            # Security: Mark postgres_dsn as secret to prevent plaintext exposure in state files
+            # Without this, database credentials are visible in ~/.pulumi/stacks/*.json
+            "postgres_dsn": pulumi.Output.secret(postgres_dsn) if postgres_dsn else None,
             "job_name": f"adaptive-{name}",
             "algorithm": config.get("algorithm", "optuna"),
             "n_trials": config.get("n_trials", 100),
@@ -212,9 +229,28 @@ class AdaptiveRun(pulumi.ComponentResource):
         Returns:
             PostgreSQL connection string
         """
-        # Generate secure random password
+        # Generate secure random password and mark as secret for Pulumi state
+        # This prevents the password from being stored in plaintext
         alphabet = string.ascii_letters + string.digits
-        postgres_password = ''.join(secrets.choice(alphabet) for _ in range(24))
+        postgres_password = pulumi.Output.secret(
+            ''.join(secrets.choice(alphabet) for _ in range(24))
+        )
+        
+        # Create K8s Secret for Postgres password to avoid plaintext in state
+        # Using secretKeyRef ensures the password is never exposed in pod spec
+        postgres_secret = k8s.core.v1.Secret(
+            f"{name}-postgres-secret",
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                namespace=namespace,
+                name="postgres-secret"
+            ),
+            string_data={
+                "password": postgres_password
+            },
+            type="Opaque",
+            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+        )
+        
         # Create PVC for Postgres data
         pvc = k8s.core.v1.PersistentVolumeClaim(
             f"{name}-postgres-pvc",
@@ -257,10 +293,25 @@ class AdaptiveRun(pulumi.ComponentResource):
                         }
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
+                        # Security: Run Postgres as non-root postgres user (uid 999 in official image)
+                        # Postgres container already drops to non-root, but we enforce it at pod level
+                        security_context=k8s.core.v1.PodSecurityContextArgs(
+                            run_as_non_root=True,
+                            run_as_user=999,
+                            fs_group=999
+                        ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="postgres",
                                 image="postgres:14-alpine",
+                                # Security: Postgres doesn't need special capabilities
+                                # Official image already runs as non-root postgres user
+                                security_context=k8s.core.v1.SecurityContextArgs(
+                                    allow_privilege_escalation=False,
+                                    run_as_non_root=True,
+                                    run_as_user=999,
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                ),
                                 env=[
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_DB",
@@ -272,7 +323,13 @@ class AdaptiveRun(pulumi.ComponentResource):
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_PASSWORD",
-                                        value=postgres_password
+                                        # Reference password from K8s Secret to avoid plaintext in state
+                                        value_from=k8s.core.v1.EnvVarSourceArgs(
+                                            secret_key_ref=k8s.core.v1.SecretKeySelectorArgs(
+                                                name="postgres-secret",
+                                                key="password"
+                                            )
+                                        )
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="PGDATA",
@@ -343,9 +400,10 @@ class AdaptiveRun(pulumi.ComponentResource):
         )
         
         # Build connection string with secure password
+        # Password is already marked as secret, so the entire DSN will be secret
         return pulumi.Output.concat(
             "postgresql://optuna:",
-            pulumi.Output.secret(postgres_password),
+            postgres_password,
             "@postgres.",
             namespace,
             ":5432/optuna"

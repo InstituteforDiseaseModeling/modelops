@@ -16,7 +16,7 @@ app = typer.Typer(
 console = Console()
 
 # Import sub-commands
-from . import infra, workspace, adaptive, registry
+from . import infra, workspace, adaptive, registry, config as config_cli
 
 # Register sub-commands
 app.add_typer(
@@ -43,6 +43,12 @@ app.add_typer(
     help="Manage adaptive optimization runs"
 )
 
+app.add_typer(
+    config_cli.app,
+    name="config",
+    help="Manage ModelOps configuration"
+)
+
 
 @app.command()
 def version():
@@ -52,17 +58,26 @@ def version():
 
 
 @app.command()
-def config():
-    """Show configuration paths and status."""
-    config_dir = Path.home() / ".modelops"
-    providers_dir = config_dir / "providers"
-    pulumi_dir = config_dir / "pulumi"
+def status():
+    """Show overall ModelOps status."""
+    from ..core.config import ModelOpsConfig, ConfigNotFoundError
+    from ..core.paths import CONFIG_FILE, MODELOPS_HOME
     
-    console.print("[bold]ModelOps Configuration:[/bold]")
-    console.print(f"  Config directory: {config_dir}")
-    console.print(f"  Providers directory: {providers_dir} {'✓' if providers_dir.exists() else '✗'}")
-    console.print(f"  Pulumi state directory: {pulumi_dir} {'✓' if pulumi_dir.exists() else '✗'}")
+    console.print("[bold]ModelOps Status:[/bold]")
+    console.print(f"  Config file: {CONFIG_FILE} {'✓' if CONFIG_FILE.exists() else '✗'}")
+    console.print(f"  Home directory: {MODELOPS_HOME} {'✓' if MODELOPS_HOME.exists() else '✗'}")
     
+    # Try to load config, but handle missing config gracefully
+    try:
+        config_obj = ModelOpsConfig.get_instance()
+        console.print(f"  Default environment: {config_obj.defaults.environment}")
+        console.print(f"  Default provider: {config_obj.defaults.provider}")
+    except ConfigNotFoundError:
+        console.print("[yellow]  Configuration: Not initialized[/yellow]")
+        console.print("\n[yellow]Run 'mops config init' to create configuration[/yellow]")
+        raise typer.Exit(0)
+    
+    providers_dir = MODELOPS_HOME / "providers"
     if providers_dir.exists():
         providers = list(providers_dir.glob("*.yaml"))
         if providers:
@@ -71,7 +86,8 @@ def config():
                 console.print(f"  - {p.stem}")
         else:
             console.print("\n[yellow]No providers configured yet.[/yellow]")
-            console.print("Run 'mops provider init <provider>' to configure a provider.")
+    
+    console.print("\n[dim]Use 'mops config show' to see full configuration[/dim]")
 
 
 def main():

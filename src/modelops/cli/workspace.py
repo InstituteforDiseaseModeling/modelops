@@ -1,11 +1,13 @@
 """Workspace management CLI commands for Dask deployment."""
 
 import typer
-import yaml
 import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
 from ..core import StackNaming
+from ..core.paths import ensure_work_dir, get_backend_url
+from ..core.config import ModelOpsConfig
+from ..components import WorkspaceConfig
 from .utils import handle_pulumi_error
 from .display import (
     console, success, warning, error, info, section,
@@ -22,12 +24,12 @@ def up(
         help="Workspace configuration file (YAML)"
     ),
     infra_stack: str = typer.Option(
-        "modelops-infra",
+        StackNaming.get_project_name("infra"),
         "--infra-stack",
-        help="Infrastructure stack to reference"
+        help=f"Infrastructure stack name (default: {StackNaming.get_project_name('infra')}, auto-appends env for default)"
     ),
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
@@ -41,22 +43,21 @@ def up(
         mops workspace up --env dev
         mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
-    # Load configuration if provided
-    workspace_config = {}
-    if config and config.exists():
-        with open(config) as f:
-            workspace_config = yaml.safe_load(f)
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
+    # Load and validate configuration if provided
+    validated_config = WorkspaceConfig.from_yaml_optional(config)
+    workspace_config = validated_config.to_pulumi_config() if validated_config else {}
+    
+    # Always use StackNaming.ref for consistency
+    infra_ref = StackNaming.ref("infra", env)
     
     def pulumi_program():
         """Create DaskWorkspace in Stack 2 context."""
         from ..infra.components.workspace import DaskWorkspace
         import pulumi
-        
-        # Use centralized naming for infrastructure reference
-        # For file backends, the organization is always "organization" (Pulumi constant)
-        infra_project = StackNaming.get_project_name("infra")
-        infra_stack = StackNaming.get_infra_stack_ref(env)
-        infra_ref = f"organization/{infra_project}/{infra_stack}"
         
         # Pass environment to workspace config
         workspace_config["environment"] = env
@@ -76,11 +77,9 @@ def up(
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    # Use the same backend as infrastructure (Azure backend) for stack references to work
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    backend_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
-    work_dir.mkdir(parents=True, exist_ok=True)
+    # Use paths.py for consistent directory management
+    work_dir = ensure_work_dir("workspace")
+    backend_url = get_backend_url()
     
     try:
         stack = auto.create_or_select_stack(
@@ -92,13 +91,15 @@ def up(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
         
         info(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
-        info(f"Infrastructure stack: {infra_stack}-{env}")
+        # Display the actual resolved stack reference, not the raw input
+        display_name = infra_ref.split('/')[-1] if '/' in infra_ref else infra_stack
+        info(f"Infrastructure stack: {display_name}")
         info(f"Workspace stack: {stack_name}\n")
         
         info("[yellow]Creating Dask resources...[/yellow]")
@@ -120,8 +121,8 @@ def up(
 
 @app.command()
 def down(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     ),
@@ -136,6 +137,10 @@ def down(
     This removes all Dask resources but leaves the underlying
     Kubernetes cluster intact.
     """
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
+    
     if not yes:
         warning("\nWarning")
         info(f"This will destroy the Dask workspace in environment: {env}")
@@ -150,8 +155,8 @@ def down(
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
+    work_dir = ensure_work_dir("workspace")
+    backend_url = get_backend_url()
     
     if not work_dir.exists():
         warning(f"No workspace found for environment: {env}")
@@ -171,7 +176,7 @@ def down(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
@@ -192,22 +197,25 @@ def down(
 
 @app.command()
 def status(
-    env: str = typer.Option(
-        "dev",
+    env: Optional[str] = typer.Option(
+        None,
         "--env", "-e",
         help="Environment name"
     )
 ):
     """Show workspace status and connection details."""
+    # Resolve environment from config if not provided
+    from .utils import resolve_env
+    env = resolve_env(env)
     
     # Use centralized naming
     stack_name = StackNaming.get_stack_name("workspace", env)
     project_name = StackNaming.get_project_name("workspace")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    work_dir = Path.home() / ".modelops" / "pulumi" / "workspace"
+    work_dir = ensure_work_dir("workspace")
+    backend_url = get_backend_url()
     
-    if not work_dir.exists() or not backend_dir.exists():
+    if not work_dir.exists():
         warning(f"No workspace found for environment: {env}")
         info("\nRun 'mops workspace up' to create a workspace")
         raise typer.Exit(0)
@@ -226,11 +234,14 @@ def status(
                 project_settings=auto.ProjectSettings(
                     name=project_name,
                     runtime="python",
-                    backend=auto.ProjectBackend(url=f"file://{backend_dir}")
+                    backend=auto.ProjectBackend(url=backend_url)
                 )
             )
         )
         
+        # Refresh stack to get current state from backend
+        # Without refresh, outputs show stale/cached data  
+        stack.refresh(on_output=lambda _: None)
         outputs = stack.outputs()
         
         if not outputs:
@@ -251,42 +262,88 @@ def status(
 
 @app.command(name="list")
 def list_workspaces():
-    """List all workspaces across environments."""
-    
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
-    
-    if not backend_dir.exists():
+    """List all workspaces across environments using Pulumi Automation API."""
+    project_name = StackNaming.get_project_name("workspace")
+    work_dir = ensure_work_dir("workspace")
+    backend_url = get_backend_url()
+
+    # Check if any workspaces exist
+    from ..core.paths import BACKEND_DIR
+    if not BACKEND_DIR.exists():
         console.print("[yellow]No workspaces found[/yellow]")
         console.print("\nRun 'mops workspace up' to create a workspace")
         return
-    
-    # Find all stack files
-    stack_files = list(backend_dir.rglob("*.json"))
-    
-    if not stack_files:
-        console.print("[yellow]No workspaces found[/yellow]")
-        return
-    
-    console.print("\n[bold]Available Workspaces[/bold]")
-    
-    for stack_file in stack_files:
-        if ".pulumi" in str(stack_file) and "stacks" in str(stack_file):
-            stack_name = stack_file.stem
-            env = stack_name.replace("modelops-workspace-", "")
-            
-            # Try to read basic info from stack file
+
+    try:
+        # Create a LocalWorkspace bound to the workspace project + backend
+        ws = auto.LocalWorkspace(
+            work_dir=str(work_dir),
+            project_settings=auto.ProjectSettings(
+                name=project_name,
+                runtime="python",
+                backend=auto.ProjectBackend(url=backend_url)
+            )
+        )
+
+        # List stacks registered for this project in this backend
+        stacks = ws.list_stacks()  # -> List[StackSummary]
+        if not stacks:
+            console.print("[yellow]No workspaces found[/yellow]")
+            return
+
+        console.print("\n[bold]Available Workspaces[/bold]")
+
+        # Sort for stable output
+        for s in sorted(stacks, key=lambda ss: ss.name):
+            stack_name = s.name
+            # env from the standardized stack name
             try:
-                import json
-                with open(stack_file) as f:
-                    stack_data = json.load(f)
-                    
-                # Check if it has outputs
-                has_outputs = bool(stack_data.get("checkpoint", {}).get("latest", {}).get("resources"))
-                status = "[green]✓ Deployed[/green]" if has_outputs else "[yellow]⚠ Not deployed[/yellow]"
-                
-                console.print(f"  • {env}: {status}")
-                
+                env = StackNaming.parse_stack_name(stack_name)["env"]
             except Exception:
-                console.print(f"  • {env}: [dim]Unknown status[/dim]")
-    
-    console.print("\nUse 'mops workspace status --env <env>' for details")
+                env = stack_name  # fallback: show the raw name
+
+            status = "[dim]Unknown[/dim]"
+            try:
+                # Select stack (no-op program) to read state safely
+                def _noop():  # minimal program
+                    pass
+
+                st = auto.select_stack(
+                    stack_name=stack_name,
+                    project_name=project_name,
+                    program=_noop,
+                    opts=auto.LocalWorkspaceOptions(
+                        work_dir=str(work_dir),
+                        project_settings=auto.ProjectSettings(
+                            name=project_name,
+                            runtime="python",
+                            backend=auto.ProjectBackend(url=backend_url)
+                        )
+                    )
+                )
+
+                # Fast state read: no refresh (avoid slowing down listing)
+                # Export returns a Deployment object with a .deployment dict attribute
+                state = st.export_stack()
+                
+                # The Deployment object has a .deployment attribute that is a dict
+                if hasattr(state, 'deployment') and isinstance(state.deployment, dict):
+                    resources = state.deployment.get("resources", [])
+                    # Consider it "deployed" if there are any real resources beyond the Stack resource itself
+                    has_real = any(r.get("type") != "pulumi:pulumi:Stack" for r in resources)
+                    status = "[green]✓ Deployed[/green]" if has_real else "[yellow]⚠ Not deployed[/yellow]"
+                else:
+                    # Fallback if structure is unexpected
+                    status = "[yellow]⚠ Unknown state[/yellow]"
+
+            except Exception as e:
+                # Keep Unknown status on error
+                pass
+
+            console.print(f"  • {env}: {status}")
+
+        console.print("\nUse 'mops workspace status --env <env>' for details")
+
+    except Exception as e:
+        error(f"Error listing workspaces: {e}")
+        raise typer.Exit(1)
