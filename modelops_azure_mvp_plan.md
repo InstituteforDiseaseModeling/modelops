@@ -39,6 +39,75 @@ mops adaptive status exp-001
 - **Stack 2 (Workspace)**: Deploys Dask scheduler/workers using StackReference to Stack 1
 - **Stack 3 (Adaptive)**: Runs optimization jobs using StackReferences to Stacks 1 & 2
 
+## Pulumi State Management
+
+ModelOps uses Pulumi's file backend for local state management with a carefully structured directory layout in `~/.modelops`:
+
+### Directory Structure
+```
+~/.modelops/
+├── pulumi/
+│   ├── azure/               # Working directory for infra stack
+│   ├── workspace/           # Working directory for workspace stack 
+│   ├── adaptive/            # Working directory for adaptive runs
+│   │   └── run-{id}/        # Per-run working directory
+│   ├── registry/            # Working directory for registry stack
+│   └── backend/
+│       └── azure/           # UNIFIED backend for ALL stacks
+│           └── .pulumi/
+│               ├── stacks/
+│               │   ├── modelops-infra-dev.json
+│               │   ├── modelops-workspace-dev.json
+│               │   └── modelops-adaptive-dev-run123.json
+│               ├── history/
+│               │   └── {stack}/
+│               │       └── {timestamp}-{operation}.json
+│               └── locks/
+│                   └── organization/
+│                       └── {project}/
+│                           └── {stack}.json.lock
+└── providers/
+    └── azure.yaml           # Provider configuration
+```
+
+### Critical Design Decisions
+
+1. **Unified Backend**: ALL stacks MUST use the same backend directory (`~/.modelops/pulumi/backend/azure`) for StackReferences to work. This is enforced via `src/modelops/core/paths.py`:
+   ```python
+   BACKEND_DIR = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
+   BACKEND_URL = f"file://{BACKEND_DIR}"
+   ```
+
+2. **Stack Naming Convention**: Centralized in `src/modelops/core/naming.py`:
+   - Infrastructure: `modelops-infra-{env}`
+   - Workspace: `modelops-workspace-{env}`
+   - Adaptive: `modelops-adaptive-{env}-{run_id}`
+   - Registry: `modelops-registry-{env}`
+
+3. **StackReference Format**: For file backends, references require the full path:
+   ```
+   organization/{project}/{stack}
+   ```
+   Example: `organization/modelops-infra/modelops-infra-dev`
+
+4. **State Files**: Each stack maintains:
+   - **Current state**: `.pulumi/stacks/{stack}.json` - resources, outputs, config
+   - **History**: `.pulumi/history/{stack}/` - audit trail of all operations
+   - **Locks**: `.pulumi/locks/` - prevents concurrent modifications
+
+5. **Stack Outputs**: The ONLY persistent state between stacks:
+   - Infrastructure exports: `kubeconfig`, `cluster_name`, `resource_group`
+   - Workspace exports: `scheduler_address`, `namespace`
+   - Adaptive exports: `job_name`, `postgres_dsn`, `status`
+
+### Implementation Notes
+
+- **No Custom State Files**: Everything flows through Pulumi stack outputs
+- **Atomic Operations**: Pulumi's lock files ensure safe concurrent access
+- **Deterministic References**: `StackNaming.ref()` generates consistent references
+- **Separate Work Dirs**: Each component has its own working directory for isolation
+- **Passphrase Protection**: Use `PULUMI_CONFIG_PASSPHRASE` for encryption
+
 ## Two planes, one contract
 
 - **Workspace plane (shared):** a **Dask** scheduler + workers that execute

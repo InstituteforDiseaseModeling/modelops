@@ -9,6 +9,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.table import Table
 from ..core import StackNaming
+from ..core.paths import BACKEND_DIR, WORK_DIRS, ensure_work_dir
 
 app = typer.Typer(help="Manage adaptive optimization runs")
 console = Console()
@@ -66,9 +67,9 @@ def up(
         """Create AdaptiveRun in Stack 3 context."""
         from ..infra.components.adaptive import AdaptiveRun
         
-        # Use centralized naming for stack references
-        infra_ref = StackNaming.get_infra_stack_ref(env)
-        workspace_ref = StackNaming.get_workspace_stack_ref(env)
+        # Use centralized naming for fully-qualified stack references
+        infra_ref = StackNaming.ref("infra", env)
+        workspace_ref = StackNaming.ref("workspace", env)
         
         return AdaptiveRun(
             run_id,
@@ -81,8 +82,8 @@ def up(
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    # Unique backend for each run
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+    # Use unified backend for cross-stack references
+    backend_dir = BACKEND_DIR
     backend_dir.mkdir(parents=True, exist_ok=True)
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -170,7 +171,7 @@ def down(
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+    backend_dir = BACKEND_DIR
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
     
     if not work_dir.exists():
@@ -228,7 +229,7 @@ def status(
     stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
     project_name = StackNaming.get_project_name("adaptive")
     
-    backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+    backend_dir = BACKEND_DIR
     work_dir = Path.home() / ".modelops" / "pulumi" / "adaptive" / run_id
     
     if not work_dir.exists():
@@ -289,8 +290,8 @@ def status(
         raise typer.Exit(1)
 
 
-@app.command()
-def list():
+@app.command(name="list")
+def list_runs():
     """List all adaptive runs."""
     
     adaptive_dir = Path.home() / ".modelops" / "pulumi" / "adaptive"
@@ -321,7 +322,7 @@ def list():
         stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
         
         # Check if stack exists in backend
-        backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+        backend_dir = BACKEND_DIR
         stack_file = backend_dir / ".pulumi" / "stacks" / f"{stack_name}.json"
         
         if stack_file.exists():
@@ -389,7 +390,7 @@ def logs(
     try:
         # Get namespace from stack outputs
         project_name = StackNaming.get_project_name("adaptive")
-        backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "adaptive"
+        backend_dir = BACKEND_DIR
         
         def pulumi_program():
             pass

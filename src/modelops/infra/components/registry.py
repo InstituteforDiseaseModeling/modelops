@@ -7,6 +7,7 @@ Azure ACR, AWS ECR, GCP GCR, and external registries like DockerHub.
 import base64
 import pulumi
 import pulumi_azure_native as azure
+import uuid
 from typing import Dict, Any, Optional
 from pathlib import Path
 from ...core import StackNaming
@@ -175,9 +176,17 @@ class ContainerRegistry(pulumi.ComponentResource):
         # AcrPull role definition ID
         acr_pull_role = f"/subscriptions/{self.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
         
-        # Create role assignment
+        # Create role assignment with deterministic GUID
+        # Azure requires a GUID for RoleAssignment names
+        # Generate deterministic UUID from scope and principal to ensure idempotency
+        role_assignment_guid = str(uuid.uuid5(
+            uuid.NAMESPACE_DNS,
+            f"{self.registry_id}-{principal_id}-acrpull"
+        ))
+        
         return azure.authorization.RoleAssignment(
             f"{self.registry_name}-cluster-pull",
+            role_assignment_name=role_assignment_guid,
             principal_id=principal_id,
             principal_type="ServicePrincipal",
             role_definition_id=acr_pull_role,

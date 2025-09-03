@@ -119,7 +119,8 @@ class ModelOpsCluster(pulumi.ComponentResource):
         """Create AKS cluster with configured node pools."""
         # Use centralized naming for AKS cluster
         cluster_name = StackNaming.get_aks_cluster_name(env)
-        k8s_version = aks_config.get("kubernetes_version", "1.32")
+        # Make K8s version optional - Azure will use latest stable if not specified
+        k8s_version = aks_config.get("kubernetes_version")
         
         # Build node pool profiles
         node_pools = self._build_node_pools(aks_config.get("node_pools", []))
@@ -131,7 +132,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
             resource_group_name=rg.name,
             location=location,
             dns_prefix=f"{cluster_name}-dns",
-            kubernetes_version=k8s_version,
+            kubernetes_version=k8s_version if k8s_version else None,
             identity=azure.containerservice.ManagedClusterIdentityArgs(
                 type="SystemAssigned"
             ),

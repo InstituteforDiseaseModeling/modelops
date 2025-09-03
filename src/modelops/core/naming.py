@@ -19,6 +19,8 @@ class StackNaming:
     """
     
     PROJECT_PREFIX = "modelops"
+    # Organization name for file backend (Pulumi constant for local backends)
+    ORG = "organization"
     
     @staticmethod
     def get_stack_name(component: str, env: str, run_id: Optional[str] = None) -> str:
@@ -221,3 +223,21 @@ class StackNaming:
             result["run_id"] = "-".join(parts[3:])
         
         return result
+    
+    @staticmethod
+    def ref(component: str, env: str, run_id: Optional[str] = None) -> str:
+        """Generate fully-qualified stack reference for Pulumi.
+        
+        Creates the organization/project/stack format required for StackReference.
+        
+        Args:
+            component: Component name (infra, workspace, adaptive)
+            env: Environment name (dev, staging, prod)
+            run_id: Optional run ID for adaptive stacks
+            
+        Returns:
+            Fully qualified reference like 'organization/modelops-infra/modelops-infra-dev'
+        """
+        project = StackNaming.get_project_name(component)
+        stack = StackNaming.get_stack_name(component, env, run_id)
+        return f"{StackNaming.ORG}/{project}/{stack}"

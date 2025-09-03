@@ -74,7 +74,7 @@ def up(
             pulumi.export("cluster_name", cluster.cluster_name)
             pulumi.export("resource_group", cluster.resource_group)
             pulumi.export("location", cluster.location)
-            pulumi.export("acr_login_server", cluster.acr_login_server)
+            # ACR is now managed by separate registry stack
             pulumi.export("provider", pulumi.Output.from_input("azure"))
             
             return cluster
@@ -139,11 +139,11 @@ def up(
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error creating infrastructure: {e}[/red]")
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -265,11 +265,11 @@ def down(
             console.print("Resource group preserved for future deployments")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"\n[red]Error destroying infrastructure: {e}[/red]")
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)
 
 
@@ -341,9 +341,6 @@ def status(
         else:
             console.print(f"  [red]✗[/red] Kubeconfig missing")
         
-        if outputs.get("acr_login_server"):
-            console.print(f"  ACR: {outputs.get('acr_login_server', {}).value}")
-        
         console.print("\nQuery outputs:")
         console.print(f"  pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/{provider}")
         console.print("\nNext steps:")
@@ -351,9 +348,9 @@ def status(
         console.print("  2. Run 'mops adaptive up' to start optimization")
         
     except auto.CommandError as e:
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error querying infrastructure status: {e}[/red]")
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, str(pulumi_dir), stack_name)
         raise typer.Exit(1)

@@ -249,8 +249,8 @@ def status(
         raise typer.Exit(1)
 
 
-@app.command()
-def list():
+@app.command(name="list")
+def list_workspaces():
     """List all workspaces across environments."""
     
     backend_dir = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"

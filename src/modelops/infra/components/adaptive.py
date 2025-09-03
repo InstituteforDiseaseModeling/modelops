@@ -5,6 +5,8 @@ Deploys adaptive workers that connect to Dask for distributed optimization.
 
 import pulumi
 import pulumi_kubernetes as k8s
+import secrets
+import string
 from typing import Dict, Any, Optional
 
 
@@ -210,6 +212,9 @@ class AdaptiveRun(pulumi.ComponentResource):
         Returns:
             PostgreSQL connection string
         """
+        # Generate secure random password
+        alphabet = string.ascii_letters + string.digits
+        postgres_password = ''.join(secrets.choice(alphabet) for _ in range(24))
         # Create PVC for Postgres data
         pvc = k8s.core.v1.PersistentVolumeClaim(
             f"{name}-postgres-pvc",
@@ -267,7 +272,7 @@ class AdaptiveRun(pulumi.ComponentResource):
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_PASSWORD",
-                                        value="optuna-pass"  # Should use Secret in production
+                                        value=postgres_password
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="PGDATA",
@@ -337,9 +342,11 @@ class AdaptiveRun(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Build connection string
+        # Build connection string with secure password
         return pulumi.Output.concat(
-            "postgresql://optuna:optuna-pass@postgres.",
+            "postgresql://optuna:",
+            pulumi.Output.secret(postgres_password),
+            "@postgres.",
             namespace,
             ":5432/optuna"
         )
