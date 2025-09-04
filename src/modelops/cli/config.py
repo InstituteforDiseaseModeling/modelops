@@ -32,6 +32,10 @@ def init(
             default="",
             show_default=False
         )
+        org = typer.prompt(
+            "  Organization name",
+            default=config.pulumi.organization
+        )
         
         # Prompt for defaults
         section("Default Settings")
@@ -52,6 +56,7 @@ def init(
         # Update config
         if backend:
             config.pulumi.backend_url = backend
+        config.pulumi.organization = org
         config.defaults.environment = env
         config.defaults.provider = provider
         if username:
@@ -108,6 +113,7 @@ def set(
     
     Examples:
         mops config set pulumi.backend_url s3://my-bucket
+        mops config set pulumi.organization myorg
         mops config set defaults.environment prod
         mops config set defaults.username alice
     """
@@ -167,7 +173,8 @@ def list_settings():
     info("\nPulumi Settings:")
     backend = config.pulumi.backend_url or "<default local>"
     info_dict({
-        "backend_url": backend
+        "backend_url": backend,
+        "organization": config.pulumi.organization
     }, indent="  ")
     
     # Default settings

@@ -20,9 +20,10 @@ class StackNaming:
     
     PROJECT_PREFIX = "modelops"
     
-    # Pulumi file backend requires org to be "organization"
+    # Pulumi file backend uses a virtual organization name (default: "organization")
+    # This can be customized via config.yaml to match your backend setup
     # See: https://github.com/pulumi/pulumi/issues/11390
-    ORG = "organization"
+    _DEFAULT_ORG = "organization"
     
     @staticmethod
     def get_stack_name(component: str, env: str, run_id: Optional[str] = None) -> str:
@@ -243,6 +244,16 @@ class StackNaming:
         Returns:
             Fully qualified reference like 'organization/modelops-infra/modelops-infra-dev'
         """
+        # Try to get org from config, fall back to default
+        org = StackNaming._DEFAULT_ORG
+        try:
+            from ..config import ModelOpsConfig
+            config = ModelOpsConfig.get_instance()
+            org = config.pulumi.organization
+        except:
+            # Config not available, use default
+            pass
+        
         project = StackNaming.get_project_name(component)
         stack = StackNaming.get_stack_name(component, env, run_id)
-        return f"{StackNaming.ORG}/{project}/{stack}"
+        return f"{org}/{project}/{stack}"
