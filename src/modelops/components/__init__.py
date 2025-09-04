@@ -17,6 +17,11 @@ from .specs import (
     
     # Workspace models
     WorkspaceConfig,
+    
+    # Adaptive models
+    AdaptiveConfig,
+    CentralStoreConfig,
+    WorkersConfig,
 )
 
 __all__ = [
@@ -37,4 +42,9 @@ __all__ = [
     
     # Workspace
     "WorkspaceConfig",
+    
+    # Adaptive
+    "AdaptiveConfig",
+    "CentralStoreConfig",
+    "WorkersConfig",
 ]

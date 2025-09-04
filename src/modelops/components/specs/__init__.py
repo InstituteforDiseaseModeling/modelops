@@ -21,6 +21,14 @@ from .workspace import (
     WorkspaceConfig,
 )
 
+from .adaptive import (
+    AdaptiveConfig,
+    CentralStoreConfig,
+    WorkersConfig,
+    PersistenceConfig,
+    WorkerResourceConfig,
+)
+
 __all__ = [
     # Common models
     "ResourceRequirements",
@@ -39,4 +47,11 @@ __all__ = [
     
     # Workspace models
     "WorkspaceConfig",
+    
+    # Adaptive models
+    "AdaptiveConfig",
+    "CentralStoreConfig",
+    "WorkersConfig",
+    "PersistenceConfig",
+    "WorkerResourceConfig",
 ]

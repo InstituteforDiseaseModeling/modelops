@@ -1,0 +1,30 @@
+version: 1
+algorithm: optuna  # Determines which optimization backend to provision
+
+central_store:
+  kind: postgres
+  mode: in-cluster
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: managed-csi  # Default AKS storage class
+  database: optuna
+  user: optuna_user
+
+workers:
+  # Adaptive workers are long-running processes that handle optimization tasks
+  image: python:3.11-slim  # Will be replaced with actual adaptive worker image
+  replicas: 4  # Number of worker pods to maintain
+  resources:
+    # Keep workers light - most computation happens in Dask
+    requests: 
+      cpu: "100m"      # Very light CPU - 0.1 core
+      memory: "256Mi"  # Minimal memory footprint
+    limits:
+      cpu: "500m"      # Allow burst up to 0.5 core
+      memory: "512Mi"  # Cap at 512Mi
+  # For testing - actual workers will connect to Postgres and Dask
+  command: ["sh", "-c", "echo 'Adaptive worker started'; while true; do sleep 30; done"]
+
+# Note: This provisions infrastructure only. Actual optimization runs
+# would be submitted separately and use this infrastructure.

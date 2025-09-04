@@ -1,6 +1,9 @@
-"""Adaptive plane ComponentResource for optimization runs.
+"""Adaptive plane ComponentResource for optimization infrastructure.
 
-Deploys adaptive workers that connect to Dask for distributed optimization.
+Provisions stateful components needed by optimization algorithms.
+
+TODO: some of the wiring here is too specific to Postgres and not general enough to 
+support other central stores. Refactor to be more generic.
 """
 
 import pulumi
@@ -8,13 +11,15 @@ import pulumi_kubernetes as k8s
 import secrets
 import string
 from typing import Dict, Any, Optional
+from ...core import StackNaming
 
 
-class AdaptiveRun(pulumi.ComponentResource):
-    """Stack 3: Adaptive plane - runs optimization workloads.
+class AdaptiveInfra(pulumi.ComponentResource):
+    """Stack 4: Adaptive plane - infrastructure for optimization algorithms.
     
-    Uses kubeconfig from infrastructure stack and scheduler address from
-    workspace stack to deploy adaptive optimization workers.
+    Provisions stateful components (databases, caches, queues) that
+    optimization algorithms require. These are long-lived infrastructure
+    components, not ephemeral runs.
     """
     
     def __init__(self, name: str, 
@@ -22,16 +27,16 @@ class AdaptiveRun(pulumi.ComponentResource):
                  workspace_stack_ref: str,
                  config: Dict[str, Any],
                  opts: Optional[pulumi.ResourceOptions] = None):
-        """Initialize adaptive optimization run.
+        """Initialize adaptive infrastructure.
         
         Args:
-            name: Run identifier (e.g., "run-20240101-123456")
+            name: Infrastructure identifier (e.g., "default", "postgres", "mlflow")
             infra_stack_ref: Reference to infrastructure stack
             workspace_stack_ref: Reference to workspace stack
-            config: Run configuration including algorithm settings
+            config: Component configuration from adaptive.yaml
             opts: Optional Pulumi resource options
         """
-        super().__init__("modelops:adaptive:run", name, None, opts)
+        super().__init__("modelops:adaptive:infra", name, None, opts)
         
         # Read from Stack 1 (infrastructure)
         infra = pulumi.StackReference(infra_stack_ref)
@@ -49,51 +54,51 @@ class AdaptiveRun(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(parent=self)
         )
         
-        # Create namespace for this run
-        run_namespace = f"adaptive-{name}"
+        # Create namespace for this adaptive infrastructure
+        # Using full naming pattern for clarity and avoiding conflicts
+        parsed_infra = StackNaming.parse_stack_name(infra_stack_ref.split('/')[-1])
+        env = parsed_infra.get('env', 'dev')
+        infra_namespace = f"modelops-adaptive-{env}-{name}"
         ns = k8s.core.v1.Namespace(
             f"{name}-namespace",
             metadata=k8s.meta.v1.ObjectMetaArgs(
-                name=run_namespace,
+                name=infra_namespace,
                 labels={
                     "modelops.io/component": "adaptive",
-                    "modelops.io/run-id": name,
+                    "modelops.io/adaptive-name": name,
                     "modelops.io/algorithm": config.get("algorithm", "optuna")
                 }
             ),
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Create ConfigMap with run configuration
+        # Create ConfigMap with infrastructure configuration
         config_map = k8s.core.v1.ConfigMap(
             f"{name}-config",
             metadata=k8s.meta.v1.ObjectMetaArgs(
-                namespace=run_namespace,
-                name="run-config"
+                namespace=infra_namespace,
+                name="adaptive-config"
             ),
             data={
-                "RUN_ID": name,
+                "INFRA_NAME": name,
                 "ALGORITHM": config.get("algorithm", "optuna"),
-                "N_TRIALS": str(config.get("n_trials", 100)),
-                "N_PARALLEL": str(config.get("n_parallel", 10)),
-                "TIMEOUT_SECONDS": str(config.get("timeout_seconds", 3600)),
-                "DASK_SCHEDULER": scheduler_address,
-                "TARGET_FUNCTION": config.get("target_function", ""),
-                "BUNDLE_REF": config.get("bundle_ref", "")
+                "NAMESPACE": infra_namespace,
             },
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Optional: Create Postgres for Optuna storage
+        # Optional: Create central store (e.g., Postgres for Optuna)
         postgres_dsn = None
-        if config.get("algorithm") == "optuna" and config.get("use_postgres", True):
-            postgres_dsn = self._create_postgres(name, run_namespace, k8s_provider)
+        postgres_deployment = None
+        central_store = config.get("central_store", {})
+        if central_store and central_store.get("kind") == "postgres":
+            postgres_dsn, postgres_deployment = self._create_postgres(name, infra_namespace, central_store, k8s_provider)
         
         # Create Secret for sensitive data
         secret = k8s.core.v1.Secret(
             f"{name}-secret",
             metadata=k8s.meta.v1.ObjectMetaArgs(
-                namespace=run_namespace,
+                namespace=infra_namespace,
                 name="run-secrets"
             ),
             type="Opaque",
@@ -104,32 +109,36 @@ class AdaptiveRun(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Create adaptive worker Job
-        job = k8s.batch.v1.Job(
-            f"{name}-adaptive",
+        # Create adaptive worker Deployment
+        workers_config = config.get("workers", {})
+        worker_replicas = workers_config.get("replicas", 2)
+        worker_image = workers_config.get("image", "ghcr.io/modelops/adaptive-worker:latest")
+        worker_resources = workers_config.get("resources", {})
+        
+        workers = k8s.apps.v1.Deployment(
+            f"{name}-workers",
             metadata=k8s.meta.v1.ObjectMetaArgs(
-                namespace=run_namespace,
-                name=f"adaptive-{name}",
+                namespace=infra_namespace,
+                name=f"adaptive-workers",
                 labels={
                     "modelops.io/component": "adaptive-worker",
-                    "modelops.io/run-id": name
+                    "modelops.io/adaptive-name": name
                 }
             ),
-            spec=k8s.batch.v1.JobSpecArgs(
-                parallelism=config.get("n_parallel", 10),
-                completions=config.get("n_trials", 100),
-                backoff_limit=config.get("backoff_limit", 3),
-                active_deadline_seconds=config.get("timeout_seconds", 3600),
+            spec=k8s.apps.v1.DeploymentSpecArgs(
+                replicas=worker_replicas,
+                selector=k8s.meta.v1.LabelSelectorArgs(
+                    match_labels={"app": "adaptive-worker"}
+                ),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels={
+                            "app": "adaptive-worker",
                             "modelops.io/component": "adaptive-worker",
-                            "modelops.io/run-id": name,
-                            "job-name": f"adaptive-{name}"
+                            "modelops.io/adaptive-name": name
                         }
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
-                        restart_policy="OnFailure",
                         # Security: Run adaptive workers as non-root to prevent privilege escalation
                         # Adaptive workers access external services (Dask, Postgres) but shouldn't have root access
                         security_context=k8s.core.v1.PodSecurityContextArgs(
@@ -140,7 +149,7 @@ class AdaptiveRun(pulumi.ComponentResource):
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="adaptive-worker",
-                                image=config.get("image", "ghcr.io/modelops/adaptive:latest"),
+                                image=worker_image,
                                 # Security: Drop all capabilities and prevent privilege escalation
                                 # Adaptive workers only need network access, no special kernel capabilities
                                 security_context=k8s.core.v1.SecurityContextArgs(
@@ -149,85 +158,88 @@ class AdaptiveRun(pulumi.ComponentResource):
                                     run_as_user=1000,
                                     capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
                                 ),
-                                command=config.get("command", [
+                                command=workers_config.get("command", [
                                     "python", "-m", "modelops.adaptive.worker"
                                 ]),
-                                env_from=[
-                                    k8s.core.v1.EnvFromSourceArgs(
-                                        config_map_ref=k8s.core.v1.ConfigMapEnvSourceArgs(
-                                            name="run-config"
+                                env=[
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="POSTGRES_DSN",
+                                        value_from=k8s.core.v1.EnvVarSourceArgs(
+                                            secret_key_ref=k8s.core.v1.SecretKeySelectorArgs(
+                                                name="run-secrets",
+                                                key="POSTGRES_DSN"
+                                            )
                                         )
                                     ),
-                                    k8s.core.v1.EnvFromSourceArgs(
-                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                                            name="run-secrets"
-                                        )
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="DASK_SCHEDULER",
+                                        value=scheduler_address
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="ALGORITHM",
+                                        value=config.get("algorithm", "optuna")
+                                    ),
+                                    k8s.core.v1.EnvVarArgs(
+                                        name="NAMESPACE",
+                                        value=infra_namespace
                                     )
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests={
-                                        "memory": config.get("worker_memory", "2Gi"),
-                                        "cpu": config.get("worker_cpu", "1")
-                                    },
-                                    limits={
-                                        "memory": config.get("worker_memory", "2Gi"),
-                                        "cpu": config.get("worker_cpu", "1")
-                                    }
+                                    requests=worker_resources.get("requests", {
+                                        "cpu": "100m",
+                                        "memory": "256Mi"
+                                    }),
+                                    limits=worker_resources.get("limits", {
+                                        "cpu": "500m",
+                                        "memory": "512Mi"
+                                    })
                                 ),
-                                volume_mounts=[
-                                    k8s.core.v1.VolumeMountArgs(
-                                        name="workspace",
-                                        mount_path="/workspace"
-                                    )
-                                ] if config.get("use_workspace_volume", False) else []
+                                volume_mounts=[]
                             )
-                        ],
-                        volumes=[
-                            k8s.core.v1.VolumeArgs(
-                                name="workspace",
-                                empty_dir=k8s.core.v1.EmptyDirVolumeSourceArgs(
-                                    size_limit="10Gi"
-                                )
-                            )
-                        ] if config.get("use_workspace_volume", False) else []
+                        ]
                     )
                 )
             ),
-            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+            opts=pulumi.ResourceOptions(
+                provider=k8s_provider, 
+                parent=self,
+                depends_on=[postgres_deployment] if postgres_deployment else []  # Workers depend on postgres if it exists
+            )
         )
         
         # Store outputs
-        self.run_id = pulumi.Output.from_input(name)
-        self.namespace = pulumi.Output.from_input(run_namespace)
+        self.name = pulumi.Output.from_input(name)
+        self.namespace = pulumi.Output.from_input(infra_namespace)
         self.scheduler_address = scheduler_address
         self.postgres_dsn = postgres_dsn
-        self.job_name = job.metadata.name
+        self.workers_name = workers.metadata.name
         
         # Register outputs
         self.register_outputs({
-            "run_id": name,
-            "namespace": run_namespace,
+            "name": name,
+            "namespace": infra_namespace,
             "scheduler_address": scheduler_address,
             # Security: Mark postgres_dsn as secret to prevent plaintext exposure in state files
             # Without this, database credentials are visible in ~/.pulumi/stacks/*.json
             "postgres_dsn": pulumi.Output.secret(postgres_dsn) if postgres_dsn else None,
-            "job_name": f"adaptive-{name}",
-            "algorithm": config.get("algorithm", "optuna"),
-            "n_trials": config.get("n_trials", 100),
-            "status": "running"
+            "workers_name": f"adaptive-workers",
+            "worker_replicas": worker_replicas,
+            "algorithm": config.get("algorithm", "optuna")
         })
     
     def _create_postgres(self, name: str, namespace: str, 
-                        k8s_provider) -> pulumi.Output[str]:
-        """Create Postgres deployment for Optuna distributed storage.
+                        central_store_config: Dict[str, Any],
+                        k8s_provider):
+        """Create Postgres deployment for central store (e.g., Optuna distributed storage).
         
         Args:
             name: Run identifier
             namespace: Kubernetes namespace
+            central_store_config: Central store configuration from adaptive.yaml
             k8s_provider: Kubernetes provider
             
         Returns:
-            PostgreSQL connection string
+            Tuple of (PostgreSQL connection string, Postgres deployment)
         """
         # Generate secure random password and mark as secret for Pulumi state
         # This prevents the password from being stored in plaintext
@@ -251,6 +263,13 @@ class AdaptiveRun(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
+        # Extract configuration values
+        persistence = central_store_config.get("persistence", {})
+        storage_size = persistence.get("size", "10Gi")
+        storage_class = persistence.get("storageClass", "managed-csi")
+        database_name = central_store_config.get("database", "optuna")
+        database_user = central_store_config.get("user", "optuna_user")
+        
         # Create PVC for Postgres data
         pvc = k8s.core.v1.PersistentVolumeClaim(
             f"{name}-postgres-pvc",
@@ -260,9 +279,10 @@ class AdaptiveRun(pulumi.ComponentResource):
             ),
             spec=k8s.core.v1.PersistentVolumeClaimSpecArgs(
                 access_modes=["ReadWriteOnce"],
+                storage_class_name=storage_class,
                 resources=k8s.core.v1.ResourceRequirementsArgs(
                     requests={
-                        "storage": "10Gi"
+                        "storage": storage_size
                     }
                 )
             ),
@@ -315,11 +335,11 @@ class AdaptiveRun(pulumi.ComponentResource):
                                 env=[
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_DB",
-                                        value="optuna"
+                                        value=database_name
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_USER",
-                                        value="optuna"
+                                        value=database_user
                                     ),
                                     k8s.core.v1.EnvVarArgs(
                                         name="POSTGRES_PASSWORD",
@@ -401,10 +421,13 @@ class AdaptiveRun(pulumi.ComponentResource):
         
         # Build connection string with secure password
         # Password is already marked as secret, so the entire DSN will be secret
-        return pulumi.Output.concat(
-            "postgresql://optuna:",
+        dsn = pulumi.Output.concat(
+            f"postgresql://{database_user}:",
             postgres_password,
             "@postgres.",
             namespace,
-            ":5432/optuna"
+            f":5432/{database_name}"
         )
+        
+        # Return both DSN and deployment reference
+        return dsn, postgres
