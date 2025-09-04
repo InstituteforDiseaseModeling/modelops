@@ -3,11 +3,9 @@
 import re
 from pathlib import Path
 from typing import Optional
-from rich.console import Console
 import pulumi.automation as auto
 import typer
-
-console = Console()
+from .display import console, success, warning, error, info, section, commands
 
 
 def get_config_or_exit(command_name: str = None):
@@ -27,10 +25,10 @@ def get_config_or_exit(command_name: str = None):
     try:
         return ModelOpsConfig.get_instance()
     except ConfigNotFoundError:
-        console.print("[red]Error: Configuration not initialized[/red]")
-        console.print("Run 'mops config init' to create configuration")
+        error("Error: Configuration not initialized")
+        info("Run 'mops config init' to create configuration")
         if command_name:
-            console.print(f"[dim](Required for 'mops {command_name}')[/dim]")
+            info(f"(Required for 'mops {command_name}')")
         raise typer.Exit(1)
 
 
@@ -83,51 +81,61 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
     
     # Check for lock file errors
     if "locked by" in error_msg or "lock file" in error_msg:
-        console.print("\n[red]❌ Error: Pulumi stack is locked by another process[/red]")
-        console.print("\n[yellow]This usually happens when:[/yellow]")
-        console.print("  • A previous Pulumi operation was interrupted")
-        console.print("  • Another Pulumi command is currently running")
-        console.print("  • A Pulumi process crashed without cleaning up")
+        error("\n❌ Error: Pulumi stack is locked by another process")
+        warning("\nThis usually happens when:")
+        info("  • A previous Pulumi operation was interrupted")
+        info("  • Another Pulumi command is currently running")
+        info("  • A Pulumi process crashed without cleaning up")
         
-        console.print("\n[bold]To fix this, run:[/bold]")
-        console.print(f"\n  [cyan]pulumi cancel --cwd {work_dir} --stack {stack_name} --yes[/cyan]")
+        section("To fix this, run:")
+        commands([
+            ("", f"pulumi cancel --cwd {work_dir} --stack {stack_name} --yes")
+        ])
         
-        console.print("\n[dim]If the problem persists, check for running Pulumi processes:[/dim]")
-        console.print("  [dim]ps aux | grep pulumi[/dim]")
+        info("\nIf the problem persists, check for running Pulumi processes:")
+        commands([
+            ("", "ps aux | grep pulumi")
+        ])
         
     elif "code: 255" in error_msg:
         # Generic Pulumi error with exit code 255
-        console.print("\n[red]❌ Pulumi operation failed[/red]")
+        error("\n❌ Pulumi operation failed")
         
         # Try to extract more specific error information
         if "stderr:" in error_msg:
             stderr_match = re.search(r'stderr: (.+?)(?:\n|$)', error_msg)
             if stderr_match:
-                console.print(f"\n[yellow]Error details:[/yellow] {stderr_match.group(1)}")
+                warning(f"\nError details: {stderr_match.group(1)}")
         
-        console.print("\n[bold]Troubleshooting steps:[/bold]")
-        console.print(f"  1. Check stack status: [cyan]pulumi stack --cwd {work_dir} --stack {stack_name}[/cyan]")
-        console.print(f"  2. View detailed logs: [cyan]pulumi logs --cwd {work_dir} --stack {stack_name}[/cyan]")
-        console.print(f"  3. If stuck, cancel: [cyan]pulumi cancel --cwd {work_dir} --stack {stack_name} --yes[/cyan]")
+        section("Troubleshooting steps:")
+        commands([
+            ("Check stack status", f"pulumi stack --cwd {work_dir} --stack {stack_name}"),
+            ("View detailed logs", f"pulumi logs --cwd {work_dir} --stack {stack_name}"),
+            ("If stuck, cancel", f"pulumi cancel --cwd {work_dir} --stack {stack_name} --yes")
+        ])
     
     elif isinstance(e, auto.CommandError):
         # Handle other Pulumi command errors
-        console.print(f"\n[red]❌ Pulumi command failed:[/red] {error_msg}")
+        error(f"\n❌ Pulumi command failed: {error_msg}")
         
         if "protected" in error_msg.lower():
-            console.print("\n[yellow]⚠️  Resource protection detected[/yellow]")
-            console.print("Some resources are protected from deletion. Use appropriate flags to force deletion.")
+            warning("\n⚠️  Resource protection detected")
+            info("Some resources are protected from deletion. Use appropriate flags to force deletion.")
         elif "not found" in error_msg.lower():
-            console.print("\n[yellow]⚠️  Stack or resource not found[/yellow]")
-            console.print("The requested stack or resources may not exist.")
+            warning("\n⚠️  Stack or resource not found")
+            info("The requested stack or resources may not exist.")
         else:
-            console.print("\n[bold]For more details, check:[/bold]")
-            console.print(f"  • Stack status: [cyan]pulumi stack --cwd {work_dir} --stack {stack_name}[/cyan]")
-            console.print(f"  • Recent operations: [cyan]pulumi history --cwd {work_dir} --stack {stack_name}[/cyan]")
+            section("For more details, check:")
+            commands([
+                ("Stack status", f"pulumi stack --cwd {work_dir} --stack {stack_name}"),
+                ("Recent operations", f"pulumi history --cwd {work_dir} --stack {stack_name}")
+            ])
     
     else:
         # Generic error handling
-        console.print(f"\n[red]Error: {error_msg}[/red]")
-        console.print("\n[bold]Debug commands:[/bold]")
-        console.print(f"  • Check stack: [cyan]pulumi stack --cwd {work_dir} --stack {stack_name}[/cyan]")
-        console.print(f"  • View config: [cyan]pulumi config --cwd {work_dir} --stack {stack_name}[/cyan]")
+        error(f"\nError: {error_msg}")
+        section("Debug commands:")
+        commands([
+            ("Check stack", f"pulumi stack --cwd {work_dir} --stack {stack_name}"),
+            ("View config", f"pulumi config --cwd {work_dir} --stack {stack_name}")
+        ])

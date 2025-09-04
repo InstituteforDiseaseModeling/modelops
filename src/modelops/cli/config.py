@@ -2,13 +2,12 @@
 
 import typer
 from pathlib import Path
-from rich.console import Console
 from rich.syntax import Syntax
 from ..core.config import ModelOpsConfig
 from ..core.paths import CONFIG_FILE
+from .display import console, success, warning, error, info, section, info_dict
 
 app = typer.Typer(help="Manage ModelOps configuration")
-console = Console()
 
 
 @app.command()
@@ -27,7 +26,7 @@ def init(
     
     if interactive:
         # Prompt for Pulumi settings
-        console.print("[bold]Pulumi Configuration[/bold]")
+        section("Pulumi Configuration")
         backend = typer.prompt(
             "  Backend URL (optional)",
             default="",
@@ -35,7 +34,7 @@ def init(
         )
         
         # Prompt for defaults
-        console.print("\n[bold]Default Settings[/bold]")
+        section("Default Settings")
         env = typer.prompt(
             "  Default environment",
             default=config.defaults.environment
@@ -65,7 +64,7 @@ def init(
             default=False
         )
         if not overwrite:
-            console.print("[yellow]Configuration not saved[/yellow]")
+            warning("Configuration not saved")
             raise typer.Exit(0)
     
     config.save()
@@ -73,10 +72,10 @@ def init(
     # Reset the cached instance since we created a new config
     ModelOpsConfig.reset()
     
-    console.print(f"\n[green]✓ Configuration saved to {CONFIG_FILE}[/green]")
+    success(f"\n✓ Configuration saved to {CONFIG_FILE}")
     
     if not interactive:
-        console.print("[dim]Use 'mops config set' to customize values[/dim]")
+        info("Use 'mops config set' to customize values")
 
 
 @app.command()
@@ -90,7 +89,7 @@ def show():
     yaml_content = config.to_yaml_string()
     syntax = Syntax(yaml_content, "yaml", theme="monokai", line_numbers=False)
     
-    console.print(f"\n[bold]Configuration from {CONFIG_FILE}:[/bold]\n")
+    section(f"Configuration from {CONFIG_FILE}")
     console.print(syntax)
 
 
@@ -119,24 +118,24 @@ def set(
     # Parse the key path
     parts = key.split(".")
     if len(parts) != 2:
-        console.print(f"[red]Invalid key format: {key}[/red]")
-        console.print("Use format: section.field (e.g., pulumi.backend_url)")
+        error(f"Invalid key format: {key}")
+        info("Use format: section.field (e.g., pulumi.backend_url)")
         raise typer.Exit(1)
     
-    section, field = parts
+    section_name, field = parts
     
     # Validate section
-    if not hasattr(config, section):
-        console.print(f"[red]Unknown configuration section: {section}[/red]")
-        console.print(f"Valid sections: pulumi, defaults")
+    if not hasattr(config, section_name):
+        error(f"Unknown configuration section: {section_name}")
+        info("Valid sections: pulumi, defaults")
         raise typer.Exit(1)
     
     # Validate field
-    section_obj = getattr(config, section)
+    section_obj = getattr(config, section_name)
     if not hasattr(section_obj, field):
-        console.print(f"[red]Unknown field '{field}' in section '{section}'[/red]")
+        error(f"Unknown field '{field}' in section '{section_name}'")
         valid_fields = [f for f in section_obj.model_fields.keys()]
-        console.print(f"Valid fields: {', '.join(valid_fields)}")
+        info(f"Valid fields: {', '.join(valid_fields)}")
         raise typer.Exit(1)
     
     # Handle special cases
@@ -152,7 +151,7 @@ def set(
     # Reset the cached instance since we modified it
     ModelOpsConfig.reset()
     
-    console.print(f"[green]✓ Set {key} = {value}[/green]")
+    success(f"✓ Set {key} = {value}")
 
 
 @app.command(name="list")
@@ -162,18 +161,22 @@ def list_settings():
     
     config = get_config_or_exit("config list")
     
-    console.print("\n[bold]Current Configuration:[/bold]\n")
+    section("Current Configuration")
     
     # Pulumi settings
-    console.print("[cyan]Pulumi Settings:[/cyan]")
-    backend = config.pulumi.backend_url or "[dim]<default local>[/dim]"
-    console.print(f"  backend_url: {backend}")
+    info("\nPulumi Settings:")
+    backend = config.pulumi.backend_url or "<default local>"
+    info_dict({
+        "backend_url": backend
+    }, indent="  ")
     
     # Default settings
-    console.print("\n[cyan]Default Settings:[/cyan]")
-    console.print(f"  environment: {config.defaults.environment}")
-    console.print(f"  provider: {config.defaults.provider}")
-    username = config.defaults.username or "[dim]<system user>[/dim]"
-    console.print(f"  username: {username}")
+    info("\nDefault Settings:")
+    username = config.defaults.username or "<system user>"
+    info_dict({
+        "environment": config.defaults.environment,
+        "provider": config.defaults.provider,
+        "username": username
+    }, indent="  ")
     
-    console.print(f"\n[dim]Config file: {CONFIG_FILE}[/dim]")
+    info(f"\nConfig file: {CONFIG_FILE}")

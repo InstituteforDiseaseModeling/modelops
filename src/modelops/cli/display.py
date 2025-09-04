@@ -8,17 +8,17 @@ console = Console()
 
 def success(message: str) -> None:
     """Print success message."""
-    console.print(f"[green]✓ {message}[/green]")
+    console.print(f"[green]{message}[/green]")
 
 
 def warning(message: str) -> None:
     """Print warning message."""
-    console.print(f"[yellow]⚠️  {message}[/yellow]")
+    console.print(f"[yellow]{message}[/yellow]")
 
 
 def error(message: str) -> None:
     """Print error message."""
-    console.print(f"[red]❌ {message}[/red]")
+    console.print(f"[red]{message}[/red]")
 
 
 def info(message: str) -> None:

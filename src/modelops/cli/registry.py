@@ -2,15 +2,14 @@
 
 import typer
 import yaml
-import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
-from rich.console import Console
-from ..core import StackNaming
-from ..core.paths import ensure_work_dir, get_backend_url
+from ..core import StackNaming, automation
+from .utils import handle_pulumi_error, resolve_env, resolve_provider
+from .display import console, success, warning, error, info, section, dim, commands, info_dict
+from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage container registries")
-console = Console()
 
 
 @app.command()
@@ -30,11 +29,7 @@ def create(
         "--config", "-c",
         help="Registry configuration file (YAML)"
     ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Create a new container registry.
     
@@ -45,8 +40,6 @@ def create(
         mops registry create --name modelops --provider azure
         mops registry create --config registry.yaml
     """
-    # Resolve defaults from config if not provided
-    from .utils import resolve_env, resolve_provider
     env = resolve_env(env)
     provider = resolve_provider(provider)
     
@@ -68,8 +61,8 @@ def create(
         subscription_id = registry_config.get("subscription_id") or \
                          None  # Will use Azure CLI auth
         if not subscription_id:
-            console.print("[red]Azure subscription ID required[/red]")
-            console.print("Set AZURE_SUBSCRIPTION_ID or provide in config")
+            error("Azure subscription ID required")
+            info("Set AZURE_SUBSCRIPTION_ID or provide in config")
             raise typer.Exit(1)
         registry_config["subscription_id"] = subscription_id
         registry_config["location"] = registry_config.get("location", "eastus2")
@@ -103,208 +96,115 @@ def create(
         
         return registry
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("registry", env)
-    project_name = StackNaming.get_project_name("registry")
-    
-    # Use paths.py for consistent directory management
-    work_dir = ensure_work_dir("registry")
-    backend_url = get_backend_url()
-    
     try:
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
+        section(f"Creating container registry: {name}")
+        info_dict({
+            "Provider": provider,
+            "Environment": env,
+            "Stack": StackNaming.get_stack_name('registry', env)
+        })
         
-        console.print(f"\n[bold]Creating container registry: {name}[/bold]")
-        console.print(f"Provider: {provider}")
-        console.print(f"Environment: {env}")
-        console.print(f"Stack: {stack_name}\n")
+        warning("\nCreating registry resources...")
+        outputs = automation.up("registry", env, None, pulumi_program, on_output=dim)
         
-        console.print("[yellow]Creating registry resources...[/yellow]")
-        result = stack.up(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
-        
-        outputs = result.outputs
-        
-        console.print("\n[green]✓ Registry created successfully![/green]")
-        console.print(f"  Login server: {outputs.get('login_server', {}).value if outputs.get('login_server') else 'unknown'}")
-        console.print(f"  Registry name: {outputs.get('registry_name', {}).value if outputs.get('registry_name') else 'unknown'}")
+        success("\n✓ Registry created successfully!")
+        info(f"  Login server: {automation.get_output_value(outputs, 'login_server', 'unknown')}")
+        info(f"  Registry name: {automation.get_output_value(outputs, 'registry_name', 'unknown')}")
         
         if provider == "azure":
-            registry_name = outputs.get('registry_name', {}).value if outputs.get('registry_name') else 'unknown'
-            console.print(f"\n[bold]Login to registry:[/bold]")
-            console.print(f"  az acr login --name {registry_name}")
-            console.print(f"\n[bold]Build and push images:[/bold]")
-            console.print(f"  docker build -t {registry_name}.azurecr.io/dask-worker:latest .")
-            console.print(f"  docker push {registry_name}.azurecr.io/dask-worker:latest")
+            registry_name = automation.get_output_value(outputs, 'registry_name', 'unknown')
+            section("\nLogin to registry:")
+            commands([
+                ("", f"az acr login --name {registry_name}")
+            ])
+            section("\nBuild and push images:")
+            commands([
+                ("Build", f"docker build -t {registry_name}.azurecr.io/dask-worker:latest ."),
+                ("Push", f"docker push {registry_name}.azurecr.io/dask-worker:latest")
+            ])
         
     except Exception as e:
-        console.print(f"\n[red]Error creating registry: {e}[/red]")
+        error(f"\nError creating registry: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 
 @app.command()
 def destroy(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes", "-y",
-        help="Skip confirmation prompt"
-    )
+    env: Optional[str] = env_option(),
+    yes: bool = yes_option()
 ):
     """Destroy container registry.
     
     Warning: This will delete the registry and all images stored in it.
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
     if not yes:
-        console.print("\n[bold yellow]⚠️  Warning[/bold yellow]")
-        console.print(f"This will destroy the container registry in environment: {env}")
-        console.print("All images stored in the registry will be permanently deleted.")
+        warning("\n⚠️  Warning")
+        info(f"This will destroy the container registry in environment: {env}")
+        info("All images stored in the registry will be permanently deleted.")
         
         confirm = typer.confirm("\nAre you sure you want to destroy the registry?")
         if not confirm:
-            console.print("[green]Destruction cancelled[/green]")
+            success("Destruction cancelled")
             raise typer.Exit(0)
     
-    stack_name = StackNaming.get_stack_name("registry", env)
-    project_name = StackNaming.get_project_name("registry")
-    
-    work_dir = ensure_work_dir("registry")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
-        raise typer.Exit(0)
-    
     try:
-        def pulumi_program():
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        console.print(f"\n[yellow]Destroying registry: {stack_name}...[/yellow]")
-        stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
-        
-        console.print("\n[green]✓ Registry destroyed successfully[/green]")
+        warning(f"\nDestroying registry: {StackNaming.get_stack_name('registry', env)}...")
+        automation.destroy("registry", env, on_output=dim)
+        success("\n✓ Registry destroyed successfully")
         
     except Exception as e:
-        console.print(f"\n[red]Error destroying registry: {e}[/red]")
+        error(f"\nError destroying registry: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 
 @app.command()
 def status(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Show registry status and connection details."""
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    stack_name = StackNaming.get_stack_name("registry", env)
-    project_name = StackNaming.get_project_name("registry")
-    
-    work_dir = ensure_work_dir("registry")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
-        console.print("\nRun 'mops registry create' to create a registry")
-        raise typer.Exit(0)
-    
     try:
-        # Read the existing stack without creating a new program
-        # We need a minimal program that just reads state
-        def pulumi_program():
-            import pulumi
-            # Empty program that just reads existing state
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh to ensure we have latest outputs
-        stack.refresh(on_output=lambda msg: None)
-        outputs = stack.outputs()
+        outputs = automation.outputs("registry", env)
         
         if not outputs:
-            console.print(f"[yellow]Registry stack exists but has no outputs[/yellow]")
-            console.print("The registry may not be fully deployed.")
+            warning("Registry stack exists but has no outputs")
+            info("The registry may not be fully deployed.")
             raise typer.Exit(0)
         
-        console.print(f"\n[bold]Registry Status[/bold]")
-        console.print(f"  Environment: {env}")
-        console.print(f"  Stack: {stack_name}")
-        console.print(f"  Login server: {outputs.get('login_server', {}).value if outputs.get('login_server') else 'unknown'}")
-        console.print(f"  Registry name: {outputs.get('registry_name', {}).value if outputs.get('registry_name') else 'unknown'}")
-        console.print(f"  Provider: {outputs.get('provider', {}).value if outputs.get('provider') else 'unknown'}")
-        console.print(f"  Requires auth: {outputs.get('requires_auth', {}).value if outputs.get('requires_auth') else 'unknown'}")
+        section("Registry Status")
+        info_dict({
+            "Environment": env,
+            "Stack": StackNaming.get_stack_name('registry', env),
+            "Login server": automation.get_output_value(outputs, 'login_server', 'unknown'),
+            "Registry name": automation.get_output_value(outputs, 'registry_name', 'unknown'),
+            "Provider": automation.get_output_value(outputs, 'provider', 'unknown'),
+            "Requires auth": automation.get_output_value(outputs, 'requires_auth', 'unknown')
+        })
         
-        provider = outputs.get('provider', {}).value if outputs.get('provider') else None
+        provider = automation.get_output_value(outputs, 'provider')
         if provider == "azure":
-            registry_name = outputs.get('registry_name', {}).value if outputs.get('registry_name') else 'unknown'
-            console.print(f"\n[bold]Usage commands:[/bold]")
-            console.print(f"  Login: az acr login --name {registry_name}")
-            console.print(f"  List images: az acr repository list --name {registry_name}")
-            console.print(f"  Show tags: az acr repository show-tags --name {registry_name} --repository IMAGE")
+            registry_name = automation.get_output_value(outputs, 'registry_name', 'unknown')
+            section("\nUsage commands:")
+            commands([
+                ("Login", f"az acr login --name {registry_name}"),
+                ("List images", f"az acr repository list --name {registry_name}"),
+                ("Show tags", f"az acr repository show-tags --name {registry_name} --repository IMAGE")
+            ])
         
     except Exception as e:
-        console.print(f"[red]Error querying registry status: {e}[/red]")
+        error(f"Error querying registry status: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 
 @app.command()
 def wire_permissions(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
+    env: Optional[str] = env_option(),
     infra_stack: str = typer.Option(
         None,
         "--infra-stack",
@@ -318,41 +218,39 @@ def wire_permissions(
     
     Run this after both registry and infrastructure stacks are created.
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
     # Use centralized naming
     registry_stack = StackNaming.get_stack_name("registry", env)
     infra_stack = infra_stack or StackNaming.get_stack_name("infra", env)
     
-    console.print(f"[bold]Wiring registry permissions[/bold]")
-    console.print(f"  Registry stack: {registry_stack}")
-    console.print(f"  Infrastructure stack: {infra_stack}")
+    section("Wiring registry permissions")
+    info(f"  Registry stack: {registry_stack}")
+    info(f"  Infrastructure stack: {infra_stack}")
     
     # Security: This grants the AKS cluster's kubelet identity ACR pull permissions
     # Without this, private container images cannot be pulled by the cluster
-    console.print("\n[yellow]Note: This grants the AKS cluster pull access to ACR[/yellow]")
-    console.print("This is required for pulling private container images.")
+    warning("\nNote: This grants the AKS cluster pull access to ACR")
+    info("This is required for pulling private container images.")
     
     # TODO: Implement the actual permission wiring using Pulumi automation API
     # This would update the registry stack to add the role assignment
-    console.print("\n[yellow]Manual steps for now:[/yellow]")
-    console.print("1. Get the AKS cluster's kubelet identity:")
-    console.print("   az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId")
-    console.print("2. Grant ACR pull permissions:")
-    console.print("   az role assignment create --assignee <identity> --role acrpull --scope <acr-id>")
+    warning("\nManual steps for now:")
+    info("1. Get the AKS cluster's kubelet identity:")
+    commands([
+        ("", "az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId")
+    ])
+    info("2. Grant ACR pull permissions:")
+    commands([
+        ("", "az role assignment create --assignee <identity> --role acrpull --scope <acr-id>")
+    ])
     
-    console.print("\n[dim]Automated wiring will be implemented in a future update[/dim]")
+    info("\nAutomated wiring will be implemented in a future update")
 
 
 @app.command()
 def env(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
+    env: Optional[str] = env_option(),
     format: str = typer.Option(
         "bash",
         "--format", "-f",
@@ -371,54 +269,20 @@ def env(
         # Output as JSON
         mops registry env --format json
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    stack_name = StackNaming.get_stack_name("registry", env)
-    project_name = StackNaming.get_project_name("registry")
-    
-    work_dir = ensure_work_dir("registry")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        if format == "json":
-            console.print("{}")
-        # Silent exit for shell evaluation
-        raise typer.Exit(0)
-    
     try:
-        def pulumi_program():
-            import pulumi
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh to get latest outputs
-        stack.refresh(on_output=lambda msg: None)
-        outputs = stack.outputs()
+        outputs = automation.outputs("registry", env, refresh=True)
         
         if not outputs:
             if format == "json":
-                console.print("{}")
+                print("{}")
             raise typer.Exit(0)
         
         # Extract values
-        login_server = outputs.get('login_server', {}).value if outputs.get('login_server') else None
-        registry_name = outputs.get('registry_name', {}).value if outputs.get('registry_name') else None
-        provider = outputs.get('provider', {}).value if outputs.get('provider') else None
+        login_server = automation.get_output_value(outputs, 'login_server')
+        registry_name = automation.get_output_value(outputs, 'registry_name')
+        provider = automation.get_output_value(outputs, 'provider')
         
         if format == "bash":
             # Output as shell export statements
@@ -456,61 +320,25 @@ def env(
 
 @app.command()
 def login(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Login to container registry."""
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
     import subprocess
     
-    stack_name = StackNaming.get_stack_name("registry", env)
-    project_name = StackNaming.get_project_name("registry")
-    
-    work_dir = ensure_work_dir("registry")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        console.print(f"[yellow]No registry found for environment: {env}[/yellow]")
-        raise typer.Exit(1)
-    
     try:
-        def pulumi_program():
-            import pulumi
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh to get latest outputs
-        stack.refresh(on_output=lambda msg: None)
-        outputs = stack.outputs()
+        outputs = automation.outputs("registry", env)
         
         if not outputs:
-            console.print("[red]Registry has no outputs[/red]")
+            error("Registry has no outputs")
             raise typer.Exit(1)
         
-        provider = outputs.get('provider', {}).value if outputs.get('provider') else None
+        provider = automation.get_output_value(outputs, 'provider')
         
         if provider == "azure":
-            registry_name = outputs.get('registry_name', {}).value
-            console.print(f"[yellow]Logging in to Azure Container Registry: {registry_name}[/yellow]")
+            registry_name = automation.get_output_value(outputs, 'registry_name')
+            warning(f"Logging in to Azure Container Registry: {registry_name}")
             
             # Run az acr login
             result = subprocess.run(
@@ -520,15 +348,15 @@ def login(
             )
             
             if result.returncode == 0:
-                console.print("[green]✓ Successfully logged in to registry[/green]")
+                success("✓ Successfully logged in to registry")
             else:
-                console.print(f"[red]Login failed: {result.stderr}[/red]")
+                error(f"Login failed: {result.stderr}")
                 raise typer.Exit(1)
         else:
-            console.print(f"[yellow]Manual login required for {provider} registry[/yellow]")
-            login_server = outputs.get('login_server', {}).value
-            console.print(f"Use: docker login {login_server}")
+            warning(f"Manual login required for {provider} registry")
+            login_server = automation.get_output_value(outputs, 'login_server')
+            info(f"Use: docker login {login_server}")
         
     except Exception as e:
-        console.print(f"[red]Error logging in: {e}[/red]")
+        error(f"Error logging in: {e}")
         raise typer.Exit(1)

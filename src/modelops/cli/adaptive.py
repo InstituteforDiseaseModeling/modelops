@@ -2,17 +2,17 @@
 
 import typer
 import yaml
-import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
-from rich.console import Console
 from rich.table import Table
-from ..core import StackNaming
-from ..core.paths import ensure_work_dir, get_backend_url
+from ..core import StackNaming, automation
+from ..core.k8s import dns_1123_label
+from .utils import handle_pulumi_error, resolve_env
+from .display import console, success, warning, error, info, section, dim, commands
+from .common_options import env_option, yes_option, run_id_option
 
 app = typer.Typer(help="Manage adaptive optimization runs")
-console = Console()
 
 
 @app.command()
@@ -40,11 +40,7 @@ def up(
         "--workspace-stack",
         help=f"Workspace stack name (default: {StackNaming.get_project_name('workspace')}, auto-appends env for default)"
     ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Start an adaptive optimization run.
     
@@ -55,13 +51,17 @@ def up(
         mops adaptive up optuna-config.yaml
         mops adaptive up experiment.yaml --run-id exp-001 --env prod
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    # Generate run ID if not provided
+    # Generate run ID if not provided and sanitize for DNS-1123 compliance
     if not run_id:
         run_id = f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    
+    # Sanitize run_id for Kubernetes DNS-1123 compliance
+    sanitized_run_id = dns_1123_label(run_id, fallback="run")
+    if sanitized_run_id != run_id:
+        warning(f"Run ID '{run_id}' was sanitized to '{sanitized_run_id}' for Kubernetes compatibility")
+        run_id = sanitized_run_id
     
     # Load configuration
     with open(config) as f:
@@ -82,306 +82,251 @@ def up(
             config=run_config
         )
     
-    # Use centralized naming for stack and project
-    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
-    project_name = StackNaming.get_project_name("adaptive")
-    
-    # Use paths.py for consistent directory management
+    # Ensure run directory exists for this specific run
+    from ..core.paths import ensure_work_dir
     base_dir = ensure_work_dir("adaptive")
     work_dir = base_dir / run_id
     work_dir.mkdir(parents=True, exist_ok=True)
-    backend_url = get_backend_url()
     
     try:
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
+        section(f"Starting adaptive run: {run_id}")
+        info(f"  Environment: {env}")
+        info(f"  Algorithm: {run_config.get('algorithm', 'optuna')}")
+        info(f"  Trials: {run_config.get('n_trials', 100)}")
+        info(f"  Parallel workers: {run_config.get('n_parallel', 10)}\n")
         
-        console.print(f"\n[bold]Starting adaptive run: {run_id}[/bold]")
-        console.print(f"  Environment: {env}")
-        console.print(f"  Algorithm: {run_config.get('algorithm', 'optuna')}")
-        console.print(f"  Trials: {run_config.get('n_trials', 100)}")
-        console.print(f"  Parallel workers: {run_config.get('n_parallel', 10)}\n")
+        warning("\nCreating adaptive resources...")
         
-        console.print("[yellow]Creating adaptive resources...[/yellow]")
-        result = stack.up(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
+        # Use automation helper with custom work_dir for run-specific directory
+        outputs = automation.up("adaptive", env, run_id, pulumi_program, on_output=dim, work_dir=str(work_dir))
         
-        outputs = result.outputs
-        
-        console.print(f"\n[green]✓ Adaptive run started![/green]")
-        console.print(f"  Run ID: {run_id}")
-        console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
-        console.print(f"  Job: {outputs.get('job_name', {}).value if outputs.get('job_name') else 'unknown'}")
+        success("\n✓ Adaptive run started!")
+        info(f"  Run ID: {run_id}")
+        info(f"  Namespace: {automation.get_output_value(outputs, 'namespace', 'unknown')}")
+        info(f"  Job: {automation.get_output_value(outputs, 'job_name', 'unknown')}")
         
         if outputs.get('postgres_dsn'):
-            console.print(f"  Database: [green]✓[/green] Postgres provisioned")
+            success("  Database: ✓ Postgres provisioned")
         
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else f'adaptive-{run_id}'
-        job_name = outputs.get('job_name', {}).value if outputs.get('job_name') else f'adaptive-{run_id}'
+        namespace = automation.get_output_value(outputs, 'namespace', f'adaptive-{run_id}')
+        job_name = automation.get_output_value(outputs, 'job_name', f'adaptive-{run_id}')
         
-        console.print(f"\n[bold]Monitor progress:[/bold]")
-        console.print(f"  Logs: kubectl logs -n {namespace} -l job-name={job_name}")
-        console.print(f"  Status: kubectl get job -n {namespace} {job_name}")
-        console.print(f"  Pods: kubectl get pods -n {namespace} -l job-name={job_name}")
+        section("\nMonitor progress:")
+        commands([
+            ("Logs", f"kubectl logs -n {namespace} -l job-name={job_name}"),
+            ("Status", f"kubectl get job -n {namespace} {job_name}"),
+            ("Pods", f"kubectl get pods -n {namespace} -l job-name={job_name}")
+        ])
         
     except Exception as e:
-        console.print(f"\n[red]Error starting run: {e}[/red]")
+        error(f"\nError starting run: {e}")
+        handle_pulumi_error(e, str(work_dir), StackNaming.get_stack_name('adaptive', env, run_id))
         raise typer.Exit(1)
 
 
 @app.command()
 def down(
-    run_id: str = typer.Argument(
-        ...,
-        help="Run ID to destroy"
-    ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes", "-y",
-        help="Skip confirmation prompt"
-    )
+    run_id: str = run_id_option(),
+    env: Optional[str] = env_option(),
+    yes: bool = yes_option()
 ):
     """Destroy an adaptive run and clean up resources.
     
     This removes all resources associated with the run including
     any Postgres database and persistent volumes.
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
+    # Sanitize run_id for consistency
+    run_id = dns_1123_label(run_id, fallback="run")
+    
     if not yes:
-        console.print(f"\n[bold yellow]⚠️  Warning[/bold yellow]")
-        console.print(f"This will destroy adaptive run: {run_id}")
-        console.print("All data associated with this run will be lost.")
+        warning("\n⚠️  Warning")
+        info(f"This will destroy adaptive run: {run_id}")
+        info("All data associated with this run will be lost.")
         
         confirm = typer.confirm("\nAre you sure you want to destroy this run?")
         if not confirm:
-            console.print("[green]Destruction cancelled[/green]")
+            success("Destruction cancelled")
             raise typer.Exit(0)
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
-    project_name = StackNaming.get_project_name("adaptive")
-    
+    # Check if run directory exists
+    from ..core.paths import ensure_work_dir
     base_dir = ensure_work_dir("adaptive")
     work_dir = base_dir / run_id
-    backend_url = get_backend_url()
     
     if not work_dir.exists():
-        console.print(f"[yellow]Run not found: {run_id}[/yellow]")
+        warning(f"Run not found: {run_id}")
         raise typer.Exit(0)
     
     try:
-        # Minimal program for destroy
-        def pulumi_program():
-            pass
+        warning(f"\nDestroying run: {run_id}...")
         
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        console.print(f"\n[yellow]Destroying run: {run_id}...[/yellow]")
-        stack.destroy(on_output=lambda msg: console.print(f"[dim]{msg}[/dim]", end=""))
+        # Use automation helper with custom work_dir
+        automation.destroy("adaptive", env, run_id, on_output=dim, work_dir=str(work_dir))
         
         # Clean up work directory
         import shutil
         shutil.rmtree(work_dir)
         
-        console.print(f"\n[green]✓ Run {run_id} destroyed successfully[/green]")
+        success(f"\n✓ Run {run_id} destroyed successfully")
         
     except Exception as e:
-        console.print(f"\n[red]Error destroying run: {e}[/red]")
+        error(f"\nError destroying run: {e}")
+        handle_pulumi_error(e, str(work_dir), StackNaming.get_stack_name('adaptive', env, run_id))
         raise typer.Exit(1)
 
 
 @app.command()
 def status(
-    run_id: str = typer.Argument(
-        ...,
-        help="Run ID to check"
-    ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    run_id: str = run_id_option(),
+    env: Optional[str] = env_option()
 ):
     """Check status of an adaptive run."""
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
-    project_name = StackNaming.get_project_name("adaptive")
+    # Sanitize run_id for consistency
+    run_id = dns_1123_label(run_id, fallback="run")
     
+    # Check if run directory exists
+    from ..core.paths import ensure_work_dir
     base_dir = ensure_work_dir("adaptive")
     work_dir = base_dir / run_id
-    backend_url = get_backend_url()
     
     if not work_dir.exists():
-        console.print(f"[yellow]Run not found: {run_id}[/yellow]")
+        warning(f"Run not found: {run_id}")
         raise typer.Exit(0)
     
     try:
-        # Minimal program to query stack
-        def pulumi_program():
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh stack to get current state from backend
-        # Without refresh, outputs show stale/cached data
-        stack.refresh(on_output=lambda _: None)
-        outputs = stack.outputs()
+        # Use automation helper to get outputs with custom work_dir
+        outputs = automation.outputs("adaptive", env, run_id, refresh=True, work_dir=str(work_dir))
         
         if not outputs:
-            console.print(f"[yellow]Run exists but has no outputs[/yellow]")
-            console.print("The run may not be fully deployed.")
+            warning("Run exists but has no outputs")
+            info("The run may not be fully deployed.")
             raise typer.Exit(0)
         
-        console.print(f"\n[bold]Run Status[/bold]")
-        console.print(f"  Run ID: {run_id}")
-        console.print(f"  Stack: {stack_name}")
-        console.print(f"  Algorithm: {outputs.get('algorithm', {}).value if outputs.get('algorithm') else 'unknown'}")
-        console.print(f"  Trials: {outputs.get('n_trials', {}).value if outputs.get('n_trials') else 'unknown'}")
-        console.print(f"  Namespace: {outputs.get('namespace', {}).value if outputs.get('namespace') else 'unknown'}")
-        console.print(f"  Job: {outputs.get('job_name', {}).value if outputs.get('job_name') else 'unknown'}")
-        console.print(f"  Status: {outputs.get('status', {}).value if outputs.get('status') else 'unknown'}")
+        section("Run Status")
+        info(f"  Run ID: {run_id}")
+        info(f"  Stack: {StackNaming.get_stack_name('adaptive', env, run_id)}")
+        info(f"  Algorithm: {automation.get_output_value(outputs, 'algorithm', 'unknown')}")
+        info(f"  Trials: {automation.get_output_value(outputs, 'n_trials', 'unknown')}")
+        info(f"  Namespace: {automation.get_output_value(outputs, 'namespace', 'unknown')}")
+        info(f"  Job: {automation.get_output_value(outputs, 'job_name', 'unknown')}")
+        info(f"  Status: {automation.get_output_value(outputs, 'status', 'unknown')}")
         
         if outputs.get('postgres_dsn'):
-            console.print(f"  Database: [green]✓[/green] Postgres connected")
+            success("  Database: ✓ Postgres connected")
         
         if outputs.get('scheduler_address'):
-            console.print(f"  Scheduler: {outputs.get('scheduler_address', {}).value}")
+            info(f"  Scheduler: {automation.get_output_value(outputs, 'scheduler_address')}")
         
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else f'adaptive-{run_id}'
-        job_name = outputs.get('job_name', {}).value if outputs.get('job_name') else f'adaptive-{run_id}'
+        namespace = automation.get_output_value(outputs, 'namespace', f'adaptive-{run_id}')
+        job_name = automation.get_output_value(outputs, 'job_name', f'adaptive-{run_id}')
         
-        console.print(f"\n[bold]Commands:[/bold]")
-        console.print(f"  Logs: kubectl logs -n {namespace} -l job-name={job_name}")
-        console.print(f"  Job status: kubectl describe job -n {namespace} {job_name}")
-        console.print(f"  Pod details: kubectl get pods -n {namespace} -l job-name={job_name} -o wide")
+        section("\nCommands:")
+        commands([
+            ("Logs", f"kubectl logs -n {namespace} -l job-name={job_name}"),
+            ("Job status", f"kubectl describe job -n {namespace} {job_name}"),
+            ("Pod details", f"kubectl get pods -n {namespace} -l job-name={job_name} -o wide")
+        ])
         
     except Exception as e:
-        console.print(f"[red]Error querying run status: {e}[/red]")
+        error(f"Error querying run status: {e}")
+        handle_pulumi_error(e, str(work_dir), StackNaming.get_stack_name('adaptive', env, run_id))
         raise typer.Exit(1)
 
 
 @app.command(name="list")
 def list_runs():
-    """List all adaptive runs."""
+    """List all adaptive runs using Pulumi Automation API."""
+    import pulumi.automation as auto
+    from ..core.paths import ensure_work_dir, get_backend_url, BACKEND_DIR
+    from ..core.automation import workspace_options
     
-    # Use paths.py to get adaptive directory
-    from ..core.paths import WORK_DIRS
-    adaptive_dir = WORK_DIRS["adaptive"]
-    
-    if not adaptive_dir.exists():
-        console.print("[yellow]No adaptive runs found[/yellow]")
-        console.print("\nRun 'mops adaptive up <config>' to start a run")
+    # Check if backend exists
+    if not BACKEND_DIR.exists():
+        warning("No adaptive runs found")
+        info("\nRun 'mops adaptive up <config>' to start a run")
         return
     
-    # Find all run directories
-    run_dirs = [d for d in adaptive_dir.iterdir() if d.is_dir()]
+    project_name = StackNaming.get_project_name("adaptive")
     
-    if not run_dirs:
-        console.print("[yellow]No adaptive runs found[/yellow]")
-        return
+    # Use the adaptive base directory for listing
+    base_dir = ensure_work_dir("adaptive")
     
-    # Create table
-    table = Table(title="Adaptive Runs")
-    table.add_column("Run ID", style="cyan")
-    table.add_column("Stack", style="yellow")
-    table.add_column("Status", style="green")
-    table.add_column("Created", style="dim")
-    
-    for run_dir in sorted(run_dirs):
-        run_id = run_dir.name
-        # Parse environment from directory structure or use default
-        env = "dev"  # Default, could be enhanced to parse from stack files
-        stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
+    try:
+        # Create a LocalWorkspace bound to the adaptive project + backend
+        # We use the base directory to list all stacks in this project
+        ws = auto.LocalWorkspace(
+            **workspace_options(project_name, base_dir).__dict__
+        )
         
-        # Check if stack exists in backend
-        from ..core.paths import BACKEND_DIR
-        stack_file = BACKEND_DIR / ".pulumi" / "stacks" / f"{stack_name}.json"
+        # List stacks registered for this project in this backend
+        stacks = ws.list_stacks()
+        if not stacks:
+            warning("No adaptive runs found")
+            return
         
-        if stack_file.exists():
-            # Try to get basic info
+        # Create table
+        table = Table(title="Adaptive Runs")
+        table.add_column("Run ID", style="cyan")
+        table.add_column("Environment", style="yellow") 
+        table.add_column("Status", style="green")
+        table.add_column("Algorithm", style="dim")
+        
+        # Process each stack
+        for s in sorted(stacks, key=lambda ss: ss.name):
+            stack_name = s.name
+            
+            # Parse stack name to get env and run_id
             try:
-                import json
-                with open(stack_file) as f:
-                    stack_data = json.load(f)
-                
-                # Check deployment status
-                has_resources = bool(stack_data.get("checkpoint", {}).get("latest", {}).get("resources"))
-                status = "✓ Deployed" if has_resources else "⚠ Not deployed"
-                
-                # Get creation time
-                created = datetime.fromtimestamp(run_dir.stat().st_ctime).strftime("%Y-%m-%d %H:%M")
-                
+                parsed = StackNaming.parse_stack_name(stack_name)
+                stack_env = parsed["env"]
+                run_id = parsed.get("run_id", stack_name)
             except Exception:
-                status = "? Unknown"
-                created = "-"
-        else:
-            status = "✗ No stack"
-            created = "-"
+                # Fallback if parsing fails
+                stack_env = "unknown"
+                run_id = stack_name
+            
+            # Get status and algorithm from stack state
+            status = "Unknown"
+            algorithm = "-"
+            
+            # Check if run directory exists
+            run_dir = base_dir / run_id
+            if run_dir.exists():
+                try:
+                    # Try to get outputs without refresh (fast)
+                    outputs = automation.outputs("adaptive", stack_env, run_id, refresh=False, work_dir=str(run_dir))
+                    if outputs:
+                        algorithm = automation.get_output_value(outputs, 'algorithm', '-')
+                        job_status = automation.get_output_value(outputs, 'status', '')
+                        if job_status:
+                            status = f"✓ {job_status}"
+                        else:
+                            status = "✓ Deployed"
+                    else:
+                        status = "⚠ Not deployed"
+                except Exception:
+                    # Keep unknown status on error
+                    pass
+            
+            table.add_row(run_id, stack_env, status, algorithm)
         
-        table.add_row(run_id, stack_name, status, created)
-    
-    console.print(table)
-    console.print("\nUse 'mops adaptive status <run-id>' for details")
-    console.print("Use 'mops adaptive down <run-id>' to clean up")
+        console.print(table)
+        info("\nUse 'mops adaptive status <run-id>' for details")
+        info("Use 'mops adaptive down <run-id>' to clean up")
+        
+    except Exception as e:
+        error(f"Error listing runs: {e}")
+        raise typer.Exit(1)
 
 
 @app.command()
 def logs(
-    run_id: str = typer.Argument(
-        ...,
-        help="Run ID to get logs for"
-    ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
+    run_id: str = run_id_option(),
+    env: Optional[str] = env_option(),
     follow: bool = typer.Option(
         False,
         "--follow", "-f",
@@ -397,51 +342,30 @@ def logs(
     
     This is a convenience wrapper around kubectl logs.
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("adaptive", env, run_id)
+    # Sanitize run_id for consistency
+    run_id = dns_1123_label(run_id, fallback="run")
+    
+    # Check if run directory exists
+    from ..core.paths import ensure_work_dir
     base_dir = ensure_work_dir("adaptive")
     work_dir = base_dir / run_id
     
     if not work_dir.exists():
-        console.print(f"[yellow]Run not found: {run_id}[/yellow]")
+        warning(f"Run not found: {run_id}")
         raise typer.Exit(0)
     
     try:
-        # Get namespace from stack outputs
-        project_name = StackNaming.get_project_name("adaptive")
-        backend_url = get_backend_url()
-        
-        def pulumi_program():
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh to get current state
-        stack.refresh(on_output=lambda _: None)
-        outputs = stack.outputs()
+        # Get namespace from stack outputs with custom work_dir
+        outputs = automation.outputs("adaptive", env, run_id, refresh=False, work_dir=str(work_dir))
         
         if not outputs:
-            console.print(f"[yellow]Run {run_id} has no outputs[/yellow]")
+            warning(f"Run {run_id} has no outputs")
             raise typer.Exit(0)
         
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else f'adaptive-{run_id}'
-        job_name = outputs.get('job_name', {}).value if outputs.get('job_name') else f'adaptive-{run_id}'
+        namespace = automation.get_output_value(outputs, 'namespace', f'adaptive-{run_id}')
+        job_name = automation.get_output_value(outputs, 'job_name', f'adaptive-{run_id}')
         
         # Build kubectl command
         import subprocess
@@ -456,11 +380,11 @@ def logs(
         if follow:
             cmd.append("-f")
         
-        console.print(f"[dim]Fetching logs from namespace: {namespace}[/dim]\n")
+        info(f"Fetching logs from namespace: {namespace}\n")
         
         # Run kubectl
         subprocess.run(cmd)
         
     except Exception as e:
-        console.print(f"[red]Error getting logs: {e}[/red]")
+        error(f"Error getting logs: {e}")
         raise typer.Exit(1)

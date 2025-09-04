@@ -1,18 +1,16 @@
 """Workspace management CLI commands for Dask deployment."""
 
 import typer
-import pulumi.automation as auto
 from pathlib import Path
 from typing import Optional
-from ..core import StackNaming
-from ..core.paths import ensure_work_dir, get_backend_url
-from ..core.config import ModelOpsConfig
+from ..core import StackNaming, automation
 from ..components import WorkspaceConfig
-from .utils import handle_pulumi_error
+from .utils import handle_pulumi_error, resolve_env
 from .display import (
-    console, success, warning, error, info, section,
+    console, success, warning, error, info, section, info_dict,
     workspace_info, workspace_commands, dim
 )
+from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage Dask workspaces")
 
@@ -28,11 +26,7 @@ def up(
         "--infra-stack",
         help=f"Infrastructure stack name (default: {StackNaming.get_project_name('infra')}, auto-appends env for default)"
     ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Deploy Dask workspace on existing infrastructure.
     
@@ -43,8 +37,6 @@ def up(
         mops workspace up --env dev
         mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
     # Load and validate configuration if provided
@@ -73,72 +65,35 @@ def up(
         
         return workspace
     
-    # Use centralized naming for stack and project
-    stack_name = StackNaming.get_stack_name("workspace", env)
-    project_name = StackNaming.get_project_name("workspace")
-    
-    # Use paths.py for consistent directory management
-    work_dir = ensure_work_dir("workspace")
-    backend_url = get_backend_url()
-    
     try:
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
         info(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
         # Display the actual resolved stack reference, not the raw input
         display_name = infra_ref.split('/')[-1] if '/' in infra_ref else infra_stack
         info(f"Infrastructure stack: {display_name}")
-        info(f"Workspace stack: {stack_name}\n")
+        info(f"Workspace stack: {StackNaming.get_stack_name('workspace', env)}\n")
         
         info("[yellow]Creating Dask resources...[/yellow]")
-        result = stack.up(on_output=dim)
-        
-        outputs = result.outputs
+        outputs = automation.up("workspace", env, None, pulumi_program, on_output=dim)
         
         success("\nWorkspace deployed successfully!")
-        workspace_info(outputs, env, stack_name)
+        workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))
         
-    except auto.CommandError as e:
-        handle_pulumi_error(e, str(work_dir), stack_name)
-        raise typer.Exit(1)
     except Exception as e:
         error(f"\nError deploying workspace: {e}")
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
         raise typer.Exit(1)
 
 
 @app.command()
 def down(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    ),
-    yes: bool = typer.Option(
-        False,
-        "--yes", "-y",
-        help="Skip confirmation prompt"
-    )
+    env: Optional[str] = env_option(),
+    yes: bool = yes_option()
 ):
     """Destroy Dask workspace.
     
     This removes all Dask resources but leaves the underlying
     Kubernetes cluster intact.
     """
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
     if not yes:
@@ -151,98 +106,26 @@ def down(
             success("Destruction cancelled")
             raise typer.Exit(0)
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("workspace", env)
-    project_name = StackNaming.get_project_name("workspace")
-    
-    work_dir = ensure_work_dir("workspace")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        warning(f"No workspace found for environment: {env}")
-        raise typer.Exit(0)
-    
     try:
-        # Need minimal program for destroy
-        def pulumi_program():
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        info(f"\n[yellow]Destroying workspace: {stack_name}...[/yellow]")
-        stack.destroy(on_output=dim)
-        
+        info(f"\n[yellow]Destroying workspace: {StackNaming.get_stack_name('workspace', env)}...[/yellow]")
+        automation.destroy("workspace", env, on_output=dim)
         success("\nWorkspace destroyed successfully")
         
-    except auto.CommandError as e:
-        handle_pulumi_error(e, str(work_dir), stack_name)
-        raise typer.Exit(1)
     except Exception as e:
         error(f"\nError destroying workspace: {e}")
-        handle_pulumi_error(e, str(work_dir), stack_name)
+        handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
         raise typer.Exit(1)
 
 
 @app.command()
 def status(
-    env: Optional[str] = typer.Option(
-        None,
-        "--env", "-e",
-        help="Environment name"
-    )
+    env: Optional[str] = env_option()
 ):
     """Show workspace status and connection details."""
-    # Resolve environment from config if not provided
-    from .utils import resolve_env
     env = resolve_env(env)
     
-    # Use centralized naming
-    stack_name = StackNaming.get_stack_name("workspace", env)
-    project_name = StackNaming.get_project_name("workspace")
-    
-    work_dir = ensure_work_dir("workspace")
-    backend_url = get_backend_url()
-    
-    if not work_dir.exists():
-        warning(f"No workspace found for environment: {env}")
-        info("\nRun 'mops workspace up' to create a workspace")
-        raise typer.Exit(0)
-    
     try:
-        # Minimal program to query stack
-        def pulumi_program():
-            pass
-        
-        stack = auto.create_or_select_stack(
-            stack_name=stack_name,
-            project_name=project_name,
-            program=pulumi_program,
-            opts=auto.LocalWorkspaceOptions(
-                work_dir=str(work_dir),
-                project_settings=auto.ProjectSettings(
-                    name=project_name,
-                    runtime="python",
-                    backend=auto.ProjectBackend(url=backend_url)
-                )
-            )
-        )
-        
-        # Refresh stack to get current state from backend
-        # Without refresh, outputs show stale/cached data  
-        stack.refresh(on_output=lambda _: None)
-        outputs = stack.outputs()
+        outputs = automation.outputs("workspace", env)
         
         if not outputs:
             warning("Workspace stack exists but has no outputs")
@@ -250,76 +133,66 @@ def status(
             raise typer.Exit(0)
         
         section("Workspace Status")
-        workspace_info(outputs, env, stack_name)
+        workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))
         
-        namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else StackNaming.get_namespace("dask", env)
+        namespace = automation.get_output_value(outputs, 'namespace', StackNaming.get_namespace("dask", env))
         workspace_commands(namespace)
         
     except Exception as e:
         error(f"Error querying workspace status: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
         raise typer.Exit(1)
 
 
 @app.command(name="list")
 def list_workspaces():
     """List all workspaces across environments using Pulumi Automation API."""
+    import pulumi.automation as auto
+    from ..core.paths import ensure_work_dir, get_backend_url, BACKEND_DIR
+    from ..core.automation import workspace_options
+    
     project_name = StackNaming.get_project_name("workspace")
     work_dir = ensure_work_dir("workspace")
-    backend_url = get_backend_url()
 
     # Check if any workspaces exist
-    from ..core.paths import BACKEND_DIR
     if not BACKEND_DIR.exists():
-        console.print("[yellow]No workspaces found[/yellow]")
-        console.print("\nRun 'mops workspace up' to create a workspace")
+        warning("No workspaces found")
+        info("\nRun 'mops workspace up' to create a workspace")
         return
 
     try:
         # Create a LocalWorkspace bound to the workspace project + backend
         ws = auto.LocalWorkspace(
-            work_dir=str(work_dir),
-            project_settings=auto.ProjectSettings(
-                name=project_name,
-                runtime="python",
-                backend=auto.ProjectBackend(url=backend_url)
-            )
+            **workspace_options(project_name, work_dir).__dict__
         )
 
         # List stacks registered for this project in this backend
         stacks = ws.list_stacks()  # -> List[StackSummary]
         if not stacks:
-            console.print("[yellow]No workspaces found[/yellow]")
+            warning("No workspaces found")
             return
 
-        console.print("\n[bold]Available Workspaces[/bold]")
+        section("Available Workspaces")
 
         # Sort for stable output
         for s in sorted(stacks, key=lambda ss: ss.name):
             stack_name = s.name
             # env from the standardized stack name
             try:
-                env = StackNaming.parse_stack_name(stack_name)["env"]
+                stack_env = StackNaming.parse_stack_name(stack_name)["env"]
             except Exception:
-                env = stack_name  # fallback: show the raw name
+                stack_env = stack_name  # fallback: show the raw name
 
-            status = "[dim]Unknown[/dim]"
+            status = "Unknown"
             try:
                 # Select stack (no-op program) to read state safely
-                def _noop():  # minimal program
-                    pass
+                from ..core.automation import noop_program as _noop
 
                 st = auto.select_stack(
                     stack_name=stack_name,
                     project_name=project_name,
                     program=_noop,
-                    opts=auto.LocalWorkspaceOptions(
-                        work_dir=str(work_dir),
-                        project_settings=auto.ProjectSettings(
-                            name=project_name,
-                            runtime="python",
-                            backend=auto.ProjectBackend(url=backend_url)
-                        )
-                    )
+                    opts=workspace_options(project_name, work_dir)
                 )
 
                 # Fast state read: no refresh (avoid slowing down listing)
@@ -331,19 +204,288 @@ def list_workspaces():
                     resources = state.deployment.get("resources", [])
                     # Consider it "deployed" if there are any real resources beyond the Stack resource itself
                     has_real = any(r.get("type") != "pulumi:pulumi:Stack" for r in resources)
-                    status = "[green]✓ Deployed[/green]" if has_real else "[yellow]⚠ Not deployed[/yellow]"
+                    status = "✓ Deployed" if has_real else "⚠ Not deployed"
                 else:
                     # Fallback if structure is unexpected
-                    status = "[yellow]⚠ Unknown state[/yellow]"
+                    status = "⚠ Unknown state"
 
             except Exception as e:
                 # Keep Unknown status on error
                 pass
 
-            console.print(f"  • {env}: {status}")
+            info(f"  • {stack_env}: {status}")
 
-        console.print("\nUse 'mops workspace status --env <env>' for details")
+        info("\nUse 'mops workspace status --env <env>' for details")
 
     except Exception as e:
         error(f"Error listing workspaces: {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def port_forward(
+    env: Optional[str] = env_option(),
+    target: str = typer.Option(
+        "dashboard",
+        "--target", "-t",
+        help="What to forward: dashboard (default), scheduler, or custom service"
+    ),
+    local_port: Optional[int] = typer.Option(
+        None,
+        "--local-port", "-l",
+        help="Local port to forward to (auto-assigned if not specified)"
+    ),
+    remote_port: Optional[int] = typer.Option(
+        None,
+        "--remote-port", "-r", 
+        help="Remote port on the service (derived from target if not specified)"
+    ),
+    service_name: Optional[str] = typer.Option(
+        None,
+        "--service", "-s",
+        help="Override service name (uses workspace outputs if not specified)"
+    )
+):
+    """Port forward to Dask services using Python Kubernetes client.
+    
+    This creates a local port forward to Dask services based on workspace outputs,
+    avoiding hardcoded values. The service details are read from Pulumi stack outputs.
+    
+    Examples:
+        # Forward Dask dashboard (default)
+        mops workspace port-forward
+        
+        # Forward scheduler port instead
+        mops workspace port-forward --target scheduler
+        
+        # Custom local port
+        mops workspace port-forward --local-port 9999
+        
+        # Override for custom service
+        mops workspace port-forward --service my-service --remote-port 8080
+    """
+    env = resolve_env(env)
+    
+    try:
+        # Get workspace outputs to determine namespace and kubeconfig
+        outputs = automation.outputs("workspace", env, refresh=False)
+        
+        if not outputs:
+            error("Workspace not deployed")
+            info("Run 'mops workspace up' first")
+            raise typer.Exit(1)
+        
+        namespace = automation.get_output_value(outputs, 'namespace')
+        if not namespace:
+            error("Could not determine workspace namespace")
+            raise typer.Exit(1)
+        
+        # Get service details from workspace outputs (single source of truth)
+        # Future enhancement: Could also discover services dynamically via K8s API
+        # by querying for services with label selector "modelops.io/component"
+        
+        # Determine service name and port based on target
+        if not service_name:
+            # Read service name from outputs
+            service_name = automation.get_output_value(outputs, 'scheduler_service_name', 'dask-scheduler')
+        
+        if not remote_port:
+            # Determine port based on target
+            if target == "dashboard":
+                remote_port = automation.get_output_value(outputs, 'dashboard_port', 8787)
+            elif target == "scheduler":
+                remote_port = automation.get_output_value(outputs, 'scheduler_port', 8786)
+            else:
+                error(f"Unknown target '{target}'. Use 'dashboard', 'scheduler', or specify --service and --remote-port")
+                raise typer.Exit(1)
+        
+        # Auto-assign local port if not specified
+        if not local_port:
+            local_port = remote_port  # Mirror remote port locally
+        
+        # Get kubeconfig from infrastructure stack
+        infra_outputs = automation.outputs("infra", env, refresh=False)
+        if not infra_outputs:
+            error("Infrastructure not deployed")
+            info("Run 'mops infra up' first")
+            raise typer.Exit(1)
+        
+        kubeconfig = automation.get_output_value(infra_outputs, 'kubeconfig')
+        if not kubeconfig:
+            error("Could not get kubeconfig from infrastructure")
+            raise typer.Exit(1)
+        
+        # Import kubernetes client
+        try:
+            from kubernetes import client, config
+        except ImportError:
+            error("kubernetes Python client not installed")
+            info("Install with: pip install kubernetes")
+            raise typer.Exit(1)
+        
+        # Create temporary kubeconfig file
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(kubeconfig)
+            temp_kubeconfig = f.name
+        
+        try:
+            # Load kubernetes config from the temporary file
+            config.load_kube_config(config_file=temp_kubeconfig)
+            
+            # Create API client
+            v1 = client.CoreV1Api()
+            
+            # Find the service to verify it exists
+            try:
+                service = v1.read_namespaced_service(
+                    name=service_name,
+                    namespace=namespace
+                )
+                info(f"Found service '{service_name}' in namespace '{namespace}'")
+            except client.exceptions.ApiException as e:
+                if e.status == 404:
+                    error(f"Service '{service_name}' not found in namespace '{namespace}'")
+                    info("\nAvailable services:")
+                    services = v1.list_namespaced_service(namespace=namespace)
+                    for svc in services.items:
+                        info(f"  • {svc.metadata.name}")
+                else:
+                    error(f"Error accessing service: {e}")
+                raise typer.Exit(1)
+            
+            # Get pod selector from service
+            selector = service.spec.selector
+            if not selector:
+                error(f"Service '{service_name}' has no pod selector")
+                raise typer.Exit(1)
+            
+            # Find pods matching the service selector
+            label_selector = ",".join([f"{k}={v}" for k, v in selector.items()])
+            pods = v1.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=label_selector
+            )
+            
+            if not pods.items:
+                error(f"No pods found for service '{service_name}'")
+                raise typer.Exit(1)
+            
+            # Use the first ready pod
+            target_pod = None
+            for pod in pods.items:
+                if pod.status.phase == "Running":
+                    # Check if all containers are ready
+                    all_ready = all(
+                        c.ready for c in (pod.status.container_statuses or [])
+                    )
+                    if all_ready:
+                        target_pod = pod
+                        break
+            
+            if not target_pod:
+                error("No ready pods found for service")
+                info("Pod statuses:")
+                for pod in pods.items:
+                    info(f"  • {pod.metadata.name}: {pod.status.phase}")
+                raise typer.Exit(1)
+            
+            section(f"Port forwarding to {target}")
+            info_dict({
+                "Target": target,
+                "Namespace": namespace,
+                "Service": service_name,
+                "Pod": target_pod.metadata.name,
+                "Local": f"localhost:{local_port}",
+                "Remote": f"{remote_port}"
+            })
+            
+            # Check if local port is already in use for idempotency
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.bind(('localhost', local_port))
+                sock.close()
+            except OSError:
+                warning(f"Port {local_port} is already in use")
+                info("The port forward may already be active or another process is using this port")
+                raise typer.Exit(0)
+            
+            # Use kubectl subprocess for reliable cross-platform port forwarding
+            # This works on Windows, macOS, and Linux as long as kubectl is installed
+            import subprocess
+            import signal
+            import sys
+            
+            # Build kubectl command
+            cmd = [
+                "kubectl", "port-forward",
+                f"pod/{target_pod.metadata.name}",
+                f"{local_port}:{remote_port}",
+                "-n", namespace,
+                "--kubeconfig", temp_kubeconfig
+            ]
+            
+            # Start port-forward process
+            info("\nStarting port forward...")
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
+            
+            # Give it a moment to establish
+            import time
+            time.sleep(1)
+            
+            # Check if process is still running
+            if proc.poll() is not None:
+                stderr_output = proc.stderr.read()
+                error(f"Port forward failed to start: {stderr_output}")
+                raise typer.Exit(1)
+            
+            success(f"\nPort forward established!")
+            if target == "dashboard":
+                info(f"  Dask dashboard: http://localhost:{local_port}")
+            elif target == "scheduler":
+                info(f"  Dask scheduler: tcp://localhost:{local_port}")
+            else:
+                info(f"  Service endpoint: localhost:{local_port}")
+            info("\nPress Ctrl+C to stop port forwarding...")
+            
+            # Cross-platform signal handling
+            def signal_handler(sig, frame):
+                info("\n\nStopping port forward...")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()  # Force kill if needed
+                success("Port forward stopped")
+                sys.exit(0)
+            
+            # Register signal handlers (cross-platform compatible)
+            if hasattr(signal, 'SIGINT'):
+                signal.signal(signal.SIGINT, signal_handler)
+            if hasattr(signal, 'SIGTERM'):
+                signal.signal(signal.SIGTERM, signal_handler)
+            
+            # Wait for process to complete or be interrupted
+            try:
+                proc.wait()
+            except KeyboardInterrupt:
+                signal_handler(signal.SIGINT, None)
+            
+        finally:
+            # Clean up temporary kubeconfig file
+            os.unlink(temp_kubeconfig)
+    
+    except KeyboardInterrupt:
+        success("\nPort forward stopped")
+    except Exception as e:
+        error(f"Error setting up port forward: {e}")
         raise typer.Exit(1)

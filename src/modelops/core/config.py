@@ -112,7 +112,8 @@ class ModelOpsConfig(ConfigModel):
         Returns:
             Path to ~/.modelops/config.yaml
         """
-        return Path.home() / ".modelops" / "config.yaml"
+        from .paths import CONFIG_FILE
+        return CONFIG_FILE
     
     def save(self) -> None:
         """Save configuration to ~/.modelops/config.yaml.

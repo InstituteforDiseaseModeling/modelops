@@ -314,5 +314,9 @@ class DaskWorkspace(pulumi.ComponentResource):
             "namespace": namespace,
             "worker_count": worker_count,
             "scheduler_image": scheduler_image,
-            "worker_image": worker_image
+            "worker_image": worker_image,
+            # Explicit service details for port-forwarding
+            "scheduler_service_name": "dask-scheduler",
+            "scheduler_port": 8786,
+            "dashboard_port": 8787
         })
