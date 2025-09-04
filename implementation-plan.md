@@ -11,54 +11,104 @@ This document provides the staged implementation plan for ModelOps MVP, emphasiz
 
 ---
 
-## Three-Stack Architecture with Pulumi ComponentResources
+## Four-Stack Architecture with Pulumi ComponentResources
 
 ### Overview
 
-The system implements a clean three-stack architecture using Pulumi ComponentResources and StackReferences:
+The system implements a clean four-stack architecture using Pulumi ComponentResources and StackReferences:
 
-**Stack 1: Infrastructure** (`modelops-infra-<env>`)
-- Creates Azure resources: Resource Group, ACR, AKS cluster
-- Exports: kubeconfig, cluster_name, resource_group, location, acr_login_server
+**Stack 1: Registry** (`modelops-registry-<env>`)
+- Creates container registry (ACR for Azure)
+- Exports: login_server, registry_name, requires_auth
+- Can grant pull permissions to AKS cluster
+- Managed via: `mops registry create/destroy/status`
+
+**Stack 2: Infrastructure** (`modelops-infra-<env>`)
+- Creates Azure resources: Resource Group, AKS cluster
+- Exports: kubeconfig, cluster_name, resource_group, location
+- Configuration: Via --config flag (examples/providers/azure.yaml or custom ~/.modelops/providers/azure.yaml)
 - Managed via: `mops infra up/down/status`
 
-**Stack 2: Workspace** (`modelops-workspace-<env>`)
+**Stack 3: Workspace** (`modelops-workspace-<env>`)
 - Deploys Dask scheduler and workers on Kubernetes
-- References Stack 1 via StackReference to get kubeconfig
-- Exports: scheduler_address, dashboard_url, namespace, worker_count
+- References Stack 2 via StackReference to get kubeconfig
+- Configuration: Via --config flag (examples/workspace.yaml)
+- Exports: scheduler_address, dashboard_url, namespace, worker_count,
+          scheduler_service_name, scheduler_port, dashboard_port
 - Managed via: `mops workspace up/down/status`
 
-**Stack 3: Adaptive** (`modelops-adaptive-<run_id>`)
+**Stack 4: Adaptive** (`modelops-adaptive-<env>-<run_id>`)
 - Creates optimization runs with adaptive workers
-- References both Stack 1 (kubeconfig) and Stack 2 (Dask endpoints)
+- References both Stack 2 (kubeconfig) and Stack 3 (Dask endpoints)
+- Configuration: Via --config flag (examples/adaptive.yaml)
 - Exports: namespace, job_name, algorithm, n_trials, status
 - Managed via: `mops adaptive up/down/status`
 
 ### State Management
 
 **Local File Backend**:
-- Stack state stored in `~/.modelops/pulumi/backend/{azure|workspace|adaptive}/`
-- Work directories at `~/.modelops/pulumi/{azure|workspace|adaptive}/`
+- Stack state stored in unified backend: `~/.modelops/pulumi/backend/`
+- Work directories at `~/.modelops/pulumi/{infra|registry|workspace|adaptive}/`
 - No custom StateManager or state.json files
-- All state managed through Pulumi outputs
+- All state managed through Pulumi outputs and StackReferences
 
 **Cross-Stack Communication**:
 ```python
-# In Stack 2, reference Stack 1
-infra_ref = f"{infra_stack}-{env}"
+# In Stack 3 (Workspace), reference Stack 2 (Infrastructure)
+infra_ref = StackNaming.ref("infra", env)  # Returns "organization/modelops-infra/modelops-infra-dev"
 stack_ref = pulumi.StackReference(infra_ref)
-kubeconfig = stack_ref.get_output("kubeconfig")
+kubeconfig = stack_ref.require_output("kubeconfig")
 ```
+
+### Configuration System
+
+**Global Configuration** (`~/.modelops/config.yaml`):
+- Created via: `mops config init`
+- Contains defaults and global settings:
+  - Default environment (dev/staging/prod)
+  - Default provider (azure/aws/gcp)
+  - Pulumi backend URL (optional)
+  - Pulumi organization name (configurable, defaults to "organization")
+  - Username override (optional)
+- Managed via: `mops config set/show/list`
+
+**Component Configurations** (passed via --config flag):
+- **Provider Config** (`examples/providers/azure.yaml` or custom `~/.modelops/providers/azure.yaml`):
+  - Azure subscription ID, location, resource group
+  - AKS cluster configuration
+  - SSH key settings
+- **Workspace Config** (`examples/workspace.yaml`):
+  - Dask scheduler/worker resources
+  - Container images
+  - Node selectors and tolerations
+- **Adaptive Config** (`examples/adaptive.yaml`):
+  - Algorithm selection (Optuna, etc.)
+  - Trial configuration
+  - Worker specifications
+
+### Resource Naming
+
+**Centralized Naming via StackNaming** (`src/modelops/core/naming.py`):
+- Resource Groups: `modelops-<env>-rg-<username>`
+- Container Registry: `modelops<env>acr<username|random>` (per-user in dev, org-level in prod)
+- AKS Cluster: `modelops-<env>-aks`
+- Kubernetes Namespaces: `modelops-<component>-<env>`
+- Stack Names: `modelops-<component>-<env>[-<run_id>]`
 
 ### Resource Protection
 
 **Per-User Resource Groups**:
-- Named as `modelops-rg-<username>` for multi-user isolation
+- Named as `modelops-<env>-rg-<username>` for multi-user isolation
 - Protected with `protect=True` and `retain_on_delete=True`
 - `mops infra down` preserves RG by default
 - Use `--delete-rg` flag to force deletion
 
 ### Example: Complete Flow (Current Implementation)
+
+**Note**: The examples below show the programmatic structure. Actual CLI commands use --config flag:
+- `mops infra up --config examples/providers/azure.yaml`
+- `mops workspace up --config examples/workspace.yaml`
+- `mops adaptive up --config examples/adaptive.yaml --run-id exp-001`
 
 ```python
 # Stack 1: Infrastructure creates Azure resources
@@ -390,7 +440,7 @@ def up(
     """Create infrastructure from zero based on provider config.
     
     Example:
-        mops infra up --config ~/.modelops/providers/azure.yaml
+        mops infra up --config examples/providers/azure.yaml  # or custom ~/.modelops/providers/azure.yaml
     """
     # Load configuration
     with open(config) as f:
@@ -667,7 +717,7 @@ def load_dask_binding(
 
 ### Examples
 
-**File**: `examples/providers/azure.yaml`
+**File**: `examples/providers/azure.yaml` (template - copy to `~/.modelops/providers/azure.yaml` for local customization)
 ```yaml
 subscription_id: "00000000-0000-0000-0000-000000000000"
 location: "eastus2"
@@ -1531,7 +1581,13 @@ class FakeAdapter(AdaptiveAlgorithm):
 
 ```bash
 # Configure provider
-cat > ~/.modelops/providers/azure.yaml <<EOF
+# Copy template to local config directory for customization
+cp examples/providers/azure.yaml ~/.modelops/providers/azure.yaml
+# Edit with your Azure details
+vim ~/.modelops/providers/azure.yaml
+
+# Or use the example directly:
+cat > examples/providers/azure.yaml <<EOF
 subscription_id: "YOUR-SUBSCRIPTION-ID"
 location: "eastus2"
 resource_group: "modelops-rg"
@@ -1546,7 +1602,7 @@ aks:
 EOF
 
 # Create Azure resources
-mops infra up --config ~/.modelops/providers/azure.yaml
+mops infra up --config examples/providers/azure.yaml  # or custom ~/.modelops/providers/azure.yaml
 
 # Output:
 # ✓ Created AKS cluster: modelops-aks

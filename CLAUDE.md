@@ -253,8 +253,9 @@ The compiler produces BindingOutputs containing:
 All infrastructure and workspace state is managed through Pulumi stacks:
 - **Stack Outputs**: The only persistent state (kubeconfig, endpoints, resource IDs)
 - **StackReferences**: Allow stacks to read outputs from other stacks
-- **Three-Stack Pattern**: 
-  - `modelops-infra` → Infrastructure (AKS, ACR, networking)
+- **Four-Stack Pattern**: 
+  - `modelops-registry` → Container registry (ACR for Azure)
+  - `modelops-infra` → Infrastructure (AKS, networking)
   - `modelops-workspace` → Dask deployment (reads infra outputs)
   - `modelops-adaptive-{run-id}` → Optimization runs (reads workspace outputs)
 - **Query State**: Use `pulumi stack output` commands or Automation API
@@ -370,7 +371,7 @@ Attributes: CPU/GPU shape, min/max replicas, spot/priority, image constraints, t
 This repository is implementing the Azure-only MVP with Pulumi-native infrastructure:
 
 ### Architecture
-- **Three-Stack Pattern**: Infrastructure → Workspace → Adaptive (connected via StackReferences)
+- **Four-Stack Pattern**: Registry → Infrastructure → Workspace → Adaptive (connected via StackReferences)
 - **ComponentResources**: Encapsulate cloud provisioning complexity
 - **Pulumi Stack State**: Single source of truth (no custom state management)
 - **Typed Bindings**: Runtime DTOs for passing data between components

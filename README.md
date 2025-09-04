@@ -8,18 +8,19 @@ ModelOps provides the infrastructure layer ("the hands") for running distributed
 
 ## Architecture
 
-ModelOps implements a three-stack architecture using Pulumi:
+ModelOps implements a four-stack architecture using Pulumi:
 
-1. **Infrastructure Stack** (`mops infra`): Creates cloud resources (AKS, resource groups, networking)
-2. **Workspace Stack** (`mops workspace`): Deploys Dask clusters on Kubernetes for simulation execution
-3. **Adaptive Stack** (`mops adaptive`): Manages ephemeral optimization runs (Optuna, MCMC, etc.)
+1. **Registry Stack** (`mops registry`): Creates container registry (ACR for Azure)
+2. **Infrastructure Stack** (`mops infra`): Creates cloud resources (AKS, resource groups, networking)
+3. **Workspace Stack** (`mops workspace`): Deploys Dask clusters on Kubernetes for simulation execution
+4. **Adaptive Stack** (`mops adaptive`): Manages ephemeral optimization runs (Optuna, MCMC, etc.)
 
 Each stack references outputs from previous stacks using Pulumi StackReferences, enabling clean separation of concerns and independent lifecycle management.
 
 ### Key Components
 
 - **SimulationService**: Implementations for local and distributed execution
-- **Three-Stack Management**: Pulumi-based infrastructure provisioning
+- **Four-Stack Management**: Pulumi-based infrastructure provisioning with registry isolation
 - **Provider Abstraction**: Cloud-agnostic infrastructure management (Azure MVP, AWS/GCP coming)
 - **Centralized Naming**: Consistent resource naming across environments
 
@@ -379,18 +380,22 @@ uv run black src/
 
 ## Infrastructure Provisioning Flow
 
-ModelOps follows a three-stack pattern with Pulumi:
+ModelOps follows a four-stack pattern with Pulumi:
 
-1. **Stack 1 (Infrastructure)**: Creates cloud resources
+1. **Stack 1 (Registry)**: Creates container registry
+   - Azure Container Registry (ACR)
+   - Exports: login server, registry credentials
+
+2. **Stack 2 (Infrastructure)**: Creates cloud resources
    - Resource groups, AKS clusters, networking
    - Exports: kubeconfig, cluster details
 
-2. **Stack 2 (Workspace)**: Deploys Dask using Stack 1's kubeconfig
+3. **Stack 3 (Workspace)**: Deploys Dask using Stack 2's kubeconfig
    - Dask scheduler and workers
    - Exports: scheduler address, dashboard URL
 
-3. **Stack 3 (Adaptive)**: Creates optimization jobs using Stack 1 & 2
-   - References Dask scheduler from Stack 2
+4. **Stack 4 (Adaptive)**: Creates optimization jobs using Stack 2 & 3
+   - References Dask scheduler from Stack 3
    - Manages Optuna, MCMC, and other adaptive algorithms
 
 ## Security

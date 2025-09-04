@@ -19,25 +19,35 @@ from zero to a working run with a few CLI commands.
 ## The happy path (CLIs you'll use)
 
 ```bash
-# 1) Provision Azure infrastructure from zero (Stack 1)
-mops infra up --config examples/providers/azure.yaml
+# 0) Initialize configuration (one-time setup)
+mops config init
 
-# 2) Deploy Dask workspace using infrastructure from Stack 1 (Stack 2)
-mops workspace up --infra-stack modelops-infra-dev
+# 1) Create container registry (Stack 1)
+mops registry create --name modelops --provider azure
 
-# 3) Run adaptive optimization using Stacks 1 & 2 (Stack 3)
-mops adaptive up optuna-config.yaml --run-id exp-001
+# 2) Provision Azure infrastructure from zero (Stack 2)
+mops infra up --config examples/providers/azure.yaml  # or ~/.modelops/providers/azure.yaml
 
-# 4) Check status and manage resources
+# 3) Deploy Dask workspace using infrastructure from Stack 2 (Stack 3)
+mops workspace up --config examples/workspace.yaml
+
+# 4) Port forward to Dask dashboard (for development)
+mops workspace port-forward
+
+# 5) Run adaptive optimization using Stacks 2 & 3 (Stack 4)
+mops adaptive up examples/adaptive.yaml --run-id exp-001
+
+# 6) Check status and manage resources
 mops infra status
 mops workspace status --env dev
-mops adaptive status exp-001
+mops adaptive status --run-id exp-001
 ```
 
-**Three-Stack Architecture:**
-- **Stack 1 (Infrastructure)**: Creates Azure resources (RG, AKS, optional ACR)
-- **Stack 2 (Workspace)**: Deploys Dask scheduler/workers using StackReference to Stack 1
-- **Stack 3 (Adaptive)**: Runs optimization jobs using StackReferences to Stacks 1 & 2
+**Four-Stack Architecture:**
+- **Stack 1 (Registry)**: Creates container registry (ACR for Azure)
+- **Stack 2 (Infrastructure)**: Creates Azure resources (RG, AKS cluster)
+- **Stack 3 (Workspace)**: Deploys Dask scheduler/workers using StackReference to Stack 2
+- **Stack 4 (Adaptive)**: Runs optimization jobs using StackReferences to Stacks 2 & 3
 
 ## Pulumi State Management
 
@@ -46,43 +56,44 @@ ModelOps uses Pulumi's file backend for local state management with a carefully 
 ### Directory Structure
 ```
 ~/.modelops/
+├── config.yaml              # Main configuration (defaults, Pulumi settings)
+├── providers/               # Provider-specific configs (optional, for local customization)
+│   └── azure.yaml          # Azure provider configuration (copied from examples/providers/)
 ├── pulumi/
-│   ├── azure/               # Working directory for infra stack
-│   ├── workspace/           # Working directory for workspace stack 
-│   ├── adaptive/            # Working directory for adaptive runs
-│   │   └── run-{id}/        # Per-run working directory
-│   ├── registry/            # Working directory for registry stack
-│   └── backend/
-│       └── azure/           # UNIFIED backend for ALL stacks
-│           └── .pulumi/
-│               ├── stacks/
-│               │   ├── modelops-infra-dev.json
-│               │   ├── modelops-workspace-dev.json
-│               │   └── modelops-adaptive-dev-run123.json
-│               ├── history/
-│               │   └── {stack}/
-│               │       └── {timestamp}-{operation}.json
-│               └── locks/
-│                   └── organization/
-│                       └── {project}/
-│                           └── {stack}.json.lock
-└── providers/
-    └── azure.yaml           # Provider configuration
+│   ├── backend/            # Unified Pulumi file backend for ALL stacks
+│   │   └── .pulumi/
+│   │       ├── stacks/
+│   │       │   ├── modelops-registry-dev.json
+│   │       │   ├── modelops-infra-dev.json
+│   │       │   ├── modelops-workspace-dev.json
+│   │       │   └── modelops-adaptive-dev-run123.json
+│   │       ├── history/
+│   │       │   └── {stack}/
+│   │       │       └── {timestamp}-{operation}.json
+│   │       └── locks/
+│   │           └── organization/
+│   │               └── {project}/
+│   │                   └── {stack}.json.lock
+│   ├── infra/              # Working directory for infra stack
+│   ├── registry/           # Working directory for registry stack
+│   ├── workspace/          # Working directory for workspace stack
+│   └── adaptive/           # Working directory for adaptive runs
+│       └── run-{id}/       # Per-run working directory
 ```
 
 ### Critical Design Decisions
 
-1. **Unified Backend**: ALL stacks MUST use the same backend directory (`~/.modelops/pulumi/backend/azure`) for StackReferences to work. This is enforced via `src/modelops/core/paths.py`:
+1. **Unified Backend**: ALL stacks MUST use the same backend directory (`~/.modelops/pulumi/backend`) for StackReferences to work. This is enforced via `src/modelops/core/paths.py`:
    ```python
-   BACKEND_DIR = Path.home() / ".modelops" / "pulumi" / "backend" / "azure"
+   BACKEND_DIR = Path.home() / ".modelops" / "pulumi" / "backend"
    BACKEND_URL = f"file://{BACKEND_DIR}"
    ```
 
 2. **Stack Naming Convention**: Centralized in `src/modelops/core/naming.py`:
+   - Registry: `modelops-registry-{env}`
    - Infrastructure: `modelops-infra-{env}`
    - Workspace: `modelops-workspace-{env}`
    - Adaptive: `modelops-adaptive-{env}-{run_id}`
-   - Registry: `modelops-registry-{env}`
 
 3. **StackReference Format**: For file backends, references require the full path:
    ```
@@ -107,6 +118,30 @@ ModelOps uses Pulumi's file backend for local state management with a carefully 
 - **Deterministic References**: `StackNaming.ref()` generates consistent references
 - **Separate Work Dirs**: Each component has its own working directory for isolation
 - **Passphrase Protection**: Use `PULUMI_CONFIG_PASSPHRASE` for encryption
+
+## Configuration System
+
+ModelOps uses a two-tier configuration approach:
+
+### Global Configuration (`~/.modelops/config.yaml`)
+Created via `mops config init`, this file contains user defaults and global settings:
+```yaml
+pulumi:
+  backend_url: null  # Optional backend override (e.g., s3://bucket)
+  organization: "organization"  # Configurable org name for Pulumi
+defaults:
+  environment: "dev"  # Default env for all commands
+  provider: "azure"  # Default cloud provider
+  username: null  # Optional username override (defaults to system user)
+```
+
+### Component Configurations (passed via `--config` flag)
+- **Provider configs** (`examples/providers/azure.yaml`): Azure subscription, location, AKS settings
+- **Workspace configs** (`examples/workspace.yaml`): Dask resources, images, node selectors
+- **Adaptive configs** (`examples/adaptive.yaml`): Algorithm selection, trial settings
+
+The global config provides defaults that can be overridden by CLI flags, while component configs
+define the actual infrastructure specifications.
 
 ## Two planes, one contract
 
@@ -221,7 +256,7 @@ language.
 ## MVP Expectations
 
 ### What the user provides
-- **Provider config** (`~/.modelops/providers/azure.yaml`):
+- **Provider config** (`examples/providers/azure.yaml` or `~/.modelops/providers/azure.yaml` for custom):
   - `subscription_id`, `tenant_id`, `location`
   - `resource_group` (name; created if missing)
   - `aks`: name, version (required; default pinned by `mops infra doctor`, e.g., `1.29.7`)
@@ -462,13 +497,13 @@ class PostgresBinding(BaseModel):
 
 ```bash
 # Step 1: Create Azure infrastructure from zero
-$ mops infra up --config ~/.modelops/providers/azure.yaml
+$ mops infra up --config examples/providers/azure.yaml  # or custom ~/.modelops/providers/azure.yaml
 ✓ Created Stack: modelops-infra
 ✓ Created AKS cluster: modelops-aks
 → Outputs saved to stack (query with: pulumi stack output --stack modelops-infra)
 
 # Step 2: Deploy Dask using StackReference to get kubeconfig
-$ mops workspace up -f workspace.yaml
+$ mops workspace up --config examples/workspace.yaml
 ✓ Created Stack: modelops-workspace
 ✓ Referenced: modelops-infra (via StackReference)
 ✓ Deployed Dask to namespace: modelops-dev
@@ -850,7 +885,7 @@ class AdaptiveRun(pulumi.ComponentResource):
 ```
 Step 1: Create Infrastructure
 ────────────────────────────
-$ mops infra up --config azure.yaml
+$ mops infra up --config examples/providers/azure.yaml
 
 → Creates Stack: modelops-infra
 → Runs: ModelOpsCluster component
@@ -903,7 +938,9 @@ $ pulumi stack output kubeconfig --stack modelops-infra --show-secrets > kubecon
 $ export KUBECONFIG=./kubeconfig.yaml
 $ kubectl get pods -n modelops
 
-# Port-forward to Dask dashboard
+# Port-forward to Dask dashboard (using built-in command)
+$ mops workspace port-forward
+# Or manually with kubectl
 $ kubectl port-forward -n modelops svc/dask-scheduler 8787:8787
 ```
 
@@ -1111,9 +1148,22 @@ modelops/
 ```
 modelops/
 ├── modelops/
-│  ├── cli/                          # Extend with workspace commands
-│  │  ├── workspace_cmd.py           # 'mops workspace up/down/ls'
-│  │  └── adaptive_cmd.py            # 'mops adaptive up/down'
+│  ├── cli/                          # CLI commands
+│  │  ├── main.py                    # Main entry point
+│  │  ├── infra.py                   # 'mops infra up/down/status'
+│  │  ├── workspace.py               # 'mops workspace up/down/status/port-forward'
+│  │  ├── adaptive.py                # 'mops adaptive up/down/status'
+│  │  ├── registry.py                # 'mops registry create/destroy/status'
+│  │  ├── config.py                  # 'mops config init/set/show'
+│  │  ├── common_options.py          # Reusable Typer options
+│  │  └── display.py                 # Rich console output helpers
+│  │
+│  ├── core/                         # Core utilities
+│  │  ├── automation.py              # Centralized Pulumi helpers
+│  │  ├── config.py                  # ModelOpsConfig management
+│  │  ├── naming.py                  # StackNaming conventions
+│  │  ├── k8s.py                     # Kubernetes utilities
+│  │  └── paths.py                   # Path constants
 │  │
 │  ├── components/                   # Component specs and provisioners
 │  │  ├── __init__.py
@@ -1124,9 +1174,12 @@ modelops/
 │  │
 │  ├── infra/                        # Cloud infrastructure
 │  │  ├── __init__.py
-│  │  ├── providers/
-│  │  │  └── azure.py                # Azure/AKS provisioning with Pulumi
-│  │  └── workspace.py               # Workspace orchestration
+│  │  ├── components/
+│  │  │  ├── azure.py                # AzureModelOpsInfra ComponentResource
+│  │  │  ├── workspace.py            # DaskWorkspace ComponentResource
+│  │  │  └── registry.py             # ContainerRegistry ComponentResource
+│  │  └── providers/
+│  │      └── azure.py               # Azure provider configuration
 │  │
 │  └── runners/                      # Adaptive plane runners
 │     └── adaptive_worker_runner.py  # Ask/Tell loop implementation
@@ -1428,7 +1481,7 @@ def main():
 - **Access Control**: Service Principal needs Storage Blob Data Contributor on state RG only
 - **Lock Policy**: Enable resource locks on state RG to prevent deletion
 
-**Provider config (`~/.modelops/providers/azure.yaml`).**
+**Provider config (`examples/providers/azure.yaml` or custom `~/.modelops/providers/azure.yaml`).**
 ```yaml
 subscription_id: "00000000-0000-0000-0000-000000000000"
 tenant_id: "11111111-1111-1111-1111-111111111111"
@@ -1471,10 +1524,11 @@ ssh:
 ```
 
 **Pulumi stacks & state.**
-- Three-stack architecture:
-  - Stack 1: `modelops-infra-<env>` (Resource Group, ACR, AKS cluster)
-  - Stack 2: `modelops-workspace-<env>` (Dask scheduler/workers, references Stack 1)
-  - Stack 3: `modelops-adaptive-<run_id>` (Optimization runs, references Stacks 1 & 2)
+- Four-stack architecture:
+  - Stack 1: `modelops-registry-<env>` (Azure Container Registry)
+  - Stack 2: `modelops-infra-<env>` (Resource Group, AKS cluster)
+  - Stack 3: `modelops-workspace-<env>` (Dask scheduler/workers, references Stack 2)
+  - Stack 4: `modelops-adaptive-<run_id>` (Optimization runs, references Stacks 2 & 3)
 - State backend: Local file backend at `~/.modelops/pulumi/backend/{azure|workspace|adaptive}/`
 - Cross-stack communication: Pulumi StackReferences for passing kubeconfig, endpoints, etc.
 - **IMPORTANT**: All state managed through Pulumi outputs - no custom StateManager or state.json
