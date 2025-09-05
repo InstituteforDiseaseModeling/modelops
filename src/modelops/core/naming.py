@@ -113,31 +113,6 @@ class StackNaming:
         clean_env = re.sub(r'[^a-zA-Z0-9]', '', env).lower()
         return f"{StackNaming.PROJECT_PREFIX}{clean_env}acr{suffix}"
     
-    @staticmethod
-    def get_storage_account_name(env: str, suffix: Optional[str] = None) -> str:
-        """Generate Azure Storage Account name.
-        
-        Storage account names must be globally unique, lowercase, alphanumeric only.
-        Pattern: {PROJECT_PREFIX}{env}st{suffix}
-        
-        Args:
-            env: Environment name (dev, staging, prod)
-            suffix: Optional suffix, auto-generated if not provided
-            
-        Returns:
-            Storage account name like 'modelopsdevst8m2p'
-        """
-        if not suffix:
-            suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        # Remove any non-alphanumeric characters from env
-        clean_env = re.sub(r'[^a-zA-Z0-9]', '', env).lower()
-        # Ensure total length doesn't exceed Azure's 24 character limit
-        base = f"{StackNaming.PROJECT_PREFIX}{clean_env}st"
-        if len(base) + len(suffix) > 24:
-            # Truncate base if needed
-            max_base_len = 24 - len(suffix)
-            base = base[:max_base_len]
-        return f"{base}{suffix}"
     
     @staticmethod
     def get_namespace(component: str, env: str) -> str:
@@ -171,6 +146,55 @@ class StackNaming:
         sanitized = re.sub(r'[^a-zA-Z0-9]', '', username).lower()
         # Limit to 20 characters for Azure resource name limits
         return sanitized[:20]
+    
+    @staticmethod
+    def get_storage_account_name(env: str, username: Optional[str] = None) -> str:
+        """Generate globally unique storage account name.
+        
+        Azure storage account names must be:
+        - 3-24 characters
+        - Lowercase letters and numbers only
+        - Globally unique across all Azure
+        
+        Pattern: 'mops{env}{username}{random}'
+        Example: 'mopsdevvsb7x9k' or 'mopsprodacr8a2m'
+        
+        Args:
+            env: Environment (dev, staging, prod)
+            username: Optional username for dev environments
+            
+        Returns:
+            Valid storage account name
+        """
+        # Start with project prefix
+        base = StackNaming.PROJECT_PREFIX.replace("-", "")  # Remove hyphens
+        
+        # Add environment (shortened to save chars)
+        env_short = env[:3] if env != "prod" else "prd"
+        base += env_short
+        
+        # Add username for dev/staging if provided
+        if username and env in ["dev", "staging"]:
+            sanitized = StackNaming.sanitize_username(username)[:3]  # Only 3 chars
+            base += sanitized
+        else:
+            base += "sto"  # Generic suffix for storage
+        
+        # Add deterministic suffix based on username/env hash for idempotency
+        # This ensures the same name is generated for the same user/env combination
+        import hashlib
+        
+        # Create deterministic hash from env + username
+        hash_input = f"{env}-{username or 'default'}"
+        hash_value = hashlib.md5(hash_input.encode()).hexdigest()
+        
+        # Take first 4 chars of hash as suffix (alphanumeric)
+        suffix = ''.join(c for c in hash_value[:8] if c.isalnum())[:4]
+        
+        name = f"{base}{suffix}"
+        
+        # Ensure within Azure limits (24 chars max)
+        return name[:24].lower()
     
     @staticmethod
     def get_infra_stack_ref(env: str) -> str:

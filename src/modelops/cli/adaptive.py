@@ -3,7 +3,7 @@
 import typer
 import yaml
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 from rich.table import Table
 from ..core import StackNaming, automation
@@ -13,6 +13,117 @@ from .display import console, success, warning, error, info, section, dim, comma
 from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage adaptive infrastructure for optimization algorithms")
+
+
+def run_adaptive_smoke_tests(namespace: str, outputs: Dict[str, Any], env: str):
+    """Run smoke tests for adaptive infrastructure connectivity.
+    
+    Args:
+        namespace: Kubernetes namespace
+        outputs: Stack outputs
+        env: Environment name
+    """
+    from .k8s_client import get_k8s_client, cleanup_temp_kubeconfig, run_kubectl_with_fresh_config
+    from ..versions import SMOKETEST_IMAGE
+    import json
+    
+    # Test storage connectivity using smoke test pod
+    info("Testing storage connectivity...")
+    
+    # Create overrides JSON with complete container spec
+    overrides = {
+        "spec": {
+            "containers": [{
+                "name": "adaptive-storage-test",
+                "image": SMOKETEST_IMAGE,
+                "envFrom": [{
+                    "secretRef": {
+                        "name": "modelops-storage",
+                        "optional": True
+                    }
+                }],
+                "command": ["/scripts/test.sh"]
+            }]
+        }
+    }
+    
+    test_cmd = [
+        "run", "adaptive-storage-test",
+        "--rm", "-i", "--restart=Never",
+        "-n", namespace,
+        f"--image={SMOKETEST_IMAGE}",
+        "--overrides", json.dumps(overrides)
+    ]
+    
+    try:
+        result = run_kubectl_with_fresh_config(test_cmd, env, timeout=15)
+        if result.returncode == 0:
+            if "✓ Storage configured" in result.stdout:
+                success("  ✓ Storage environment variables present")
+                if "✓ Storage client initialized" in result.stdout:
+                    success("  ✓ Storage client connection verified")
+            else:
+                warning("  ⚠ Storage not configured")
+        else:
+            warning(f"  ⚠ Could not test storage: {result.stderr}")
+    except Exception as e:
+        error(f"  ❌ Test failed: {e}")
+    
+    # Use K8s client for pod status checks
+    try:
+        v1, _, temp_path = get_k8s_client(env)
+        
+        try:
+            # Test Postgres connectivity if configured
+            if outputs.get('postgres_dsn'):
+                info("\nTesting Postgres connectivity...")
+                
+                pods = v1.list_namespaced_pod(
+                    namespace=namespace,
+                    label_selector="app=postgres"
+                )
+                
+                if pods.items:
+                    for pod in pods.items:
+                        if pod.status.phase == "Running":
+                            success(f"  ✓ Postgres pod {pod.metadata.name} is running")
+                        else:
+                            warning(f"  ⚠ Postgres pod {pod.metadata.name} is {pod.status.phase}")
+                else:
+                    warning("  ⚠ No Postgres pods found")
+            
+            # Test Dask connectivity
+            scheduler_address = automation.get_output_value(outputs, 'scheduler_address', '')
+            if scheduler_address:
+                info("\nTesting Dask scheduler connectivity...")
+                info(f"  Scheduler address: {scheduler_address}")
+                success("  ✓ Scheduler address configured")
+            
+            # Test adaptive workers
+            info("\nTesting adaptive workers...")
+            worker_replicas = automation.get_output_value(outputs, 'worker_replicas', 0)
+            
+            pods = v1.list_namespaced_pod(
+                namespace=namespace,
+                label_selector="app=adaptive-worker"
+            )
+            
+            if pods.items:
+                running_count = sum(
+                    1 for pod in pods.items
+                    if pod.status.phase == "Running"
+                )
+                success(f"  ✓ {running_count}/{worker_replicas} workers running")
+            else:
+                error("  ❌ No worker pods found")
+                
+        finally:
+            cleanup_temp_kubeconfig(temp_path)
+            
+    except Exception as e:
+        error(f"  ❌ Test failed: {e}")
+    
+    info("\nSmoke tests completed")
 
 
 @app.command()
@@ -69,15 +180,36 @@ def up(
         import pulumi
         from ..infra.components.adaptive import AdaptiveInfra
         
-        # Always use StackNaming.ref for consistency
-        infra_ref = StackNaming.ref("infra", env)
-        workspace_ref = StackNaming.ref("workspace", env)
+        # Use provided stack names or default to standard naming
+        if infra_stack == StackNaming.get_project_name("infra"):
+            # Default value - append environment
+            infra_ref = StackNaming.ref("infra", env)
+        else:
+            # Custom stack name provided
+            infra_ref = StackNaming.ref_from_stack(infra_stack)
+            
+        if workspace_stack == StackNaming.get_project_name("workspace"):
+            # Default value - append environment
+            workspace_ref = StackNaming.ref("workspace", env)
+        else:
+            # Custom stack name provided
+            workspace_ref = StackNaming.ref_from_stack(workspace_stack)
+        
+        # Check if storage stack exists and reference it
+        storage_ref = None
+        try:
+            # Try to reference storage stack if it exists
+            storage_ref = StackNaming.ref("storage", env)
+        except:
+            # Storage stack doesn't exist, adaptive will run without storage integration
+            pass
         
         adaptive = AdaptiveInfra(
             name,
             infra_stack_ref=infra_ref,
             workspace_stack_ref=workspace_ref,
-            config=run_config
+            config=run_config,
+            storage_stack_ref=storage_ref
         )
         
         # Export outputs at stack level for visibility (like workspace.py does)
@@ -200,7 +332,12 @@ def status(
         "--name", "-n",
         help="Name of adaptive infrastructure"
     ),
-    env: Optional[str] = env_option()
+    env: Optional[str] = env_option(),
+    smoke_test: bool = typer.Option(
+        False,
+        "--smoke-test",
+        help="Run smoke tests to validate connectivity"
+    )
 ):
     """Show status of adaptive infrastructure."""
     env = resolve_env(env)
@@ -240,8 +377,18 @@ def status(
         if outputs.get('scheduler_address'):
             info(f"  Scheduler: {automation.get_output_value(outputs, 'scheduler_address')}")
         
+        # Show smoke test status if available
+        if outputs.get('smoke_test_job'):
+            job_name = automation.get_output_value(outputs, 'smoke_test_job', '')
+            info(f"  Smoke test: Job '{job_name}' deployed")
+        
         namespace = automation.get_output_value(outputs, 'namespace', f'modelops-adaptive-{env}-{name}')
         workers_name = automation.get_output_value(outputs, 'workers_name', f'adaptive-workers')
+        
+        # Run smoke tests if requested
+        if smoke_test:
+            section("\nRunning Smoke Tests")
+            run_adaptive_smoke_tests(namespace, outputs, env)
         
         section("\nCommands:")
         commands([

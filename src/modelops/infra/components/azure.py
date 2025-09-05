@@ -70,8 +70,12 @@ class ModelOpsCluster(pulumi.ComponentResource):
             opts=pulumi.InvokeOptions(parent=self)
         )
         
-        kubeconfig = creds.kubeconfigs[0].value.apply(
-            lambda b64: base64.b64decode(b64).decode("utf-8")
+        # Fix kubeconfig extraction to handle preview mode (ISSUE-5 fix)
+        # Apply on the list first to avoid IndexError during preview
+        kubeconfig = creds.kubeconfigs.apply(
+            lambda configs: base64.b64decode(configs[0].value).decode("utf-8")
+            if configs and len(configs) > 0 and configs[0].value
+            else None
         )
         
         # Set component outputs
@@ -89,23 +93,32 @@ class ModelOpsCluster(pulumi.ComponentResource):
             "provider": pulumi.Output.from_input("azure")
         })
     
-    def _get_ssh_key(self, ssh_config: Dict[str, Any]) -> str:
-        """Get SSH public key from config or generate ephemeral."""
+    def _get_ssh_key(self, ssh_config: Dict[str, Any]) -> pulumi.Output[str]:
+        """Get SSH public key from config or generate unique key per stack."""
         # Try config first
         if ssh_config.get("public_key"):
-            return ssh_config["public_key"]
+            return pulumi.Output.from_input(ssh_config["public_key"])
         
         # Try file path
         if ssh_config.get("public_key_path"):
             key_path = Path(ssh_config["public_key_path"]).expanduser()
             if key_path.exists():
-                return key_path.read_text().strip()
+                return pulumi.Output.from_input(key_path.read_text().strip())
         
-        # Generate a valid ephemeral SSH key for MVP
-        pulumi.log.warn("Using ephemeral SSH key. Provide ssh.public_key or ssh.public_key_path in production.")
-        # This is a valid but insecure SSH key for testing only
-        # TODO/PLACEHOLDER: integrate real key generation
-        return "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDPaTXgcq3a8qEWVN9F4kPTXogk0cKAQjWLoyaGtOnostXCoL3pMPmsCyEh2H8xGr7kvTaLQuKcfa5+gOqE+mRwQO3OtMr7K1UoGlEO5V3rZPZLnLrOuWtrCbBVXLxBvlNfWPqRaMQT6N/06xrB2V3aF5YQtpt3zPLbMjU7miPVMvjV0pXQHCioFUDJmnFBcOT/EQlhxMKSqeMmQ+BYXQV7TT3aCrJiM6oC7Pa2h9REd5HDnZ5fwmGOXF3H0gxR8sPEEofV1tRFmacnVzk5tfoT0z0adPNDBoMD7bxs5xB5LQXdV8K9n5RYPsJc1p7Ms8pqXAQUJdGFaHOjKiGJjvPT modelops-ephemeral@azure"
+        # Generate a unique SSH key for this stack using pulumi_tls
+        import pulumi_tls
+        
+        pulumi.log.warn("Generating unique SSH key for this stack. For production, provide ssh.public_key or ssh.public_key_path.")
+        
+        # Create a unique SSH key per stack that persists in state
+        ssh_key = pulumi_tls.PrivateKey(
+            "aks-ssh-key",
+            algorithm="RSA",
+            rsa_bits=4096,
+            opts=pulumi.ResourceOptions(parent=self)
+        )
+        
+        return ssh_key.public_key_openssh
     
     def _ensure_resource_group(self, name: str, rg_name: str, location: str,
                               subscription_id: str, username: str) -> azure.resources.ResourceGroup:
@@ -167,7 +180,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
                            location: str, aks_config: Dict[str, Any], 
-                           ssh_pubkey: str, env: str) -> azure.containerservice.ManagedCluster:
+                           ssh_pubkey: pulumi.Output[str], env: str) -> azure.containerservice.ManagedCluster:
         """Create AKS cluster with configured node pools."""
         # Use centralized naming for AKS cluster
         cluster_name = StackNaming.get_aks_cluster_name(env)
@@ -201,8 +214,10 @@ class ModelOpsCluster(pulumi.ComponentResource):
             agent_pool_profiles=node_pools,
             network_profile=azure.containerservice.ContainerServiceNetworkProfileArgs(
                 network_plugin="azure",
-                service_cidr="10.0.0.0/16",
-                dns_service_ip="10.0.0.10"
+                # Use configurable network settings to avoid collisions (ISSUE-9 fix)
+                # Default to 172.16.0.0/16 which is less commonly used than 10.0.0.0/16
+                service_cidr=aks_config.get("network", {}).get("service_cidr", "172.16.0.0/16"),
+                dns_service_ip=aks_config.get("network", {}).get("dns_service_ip", "172.16.0.10")
             ),
             tags={
                 "managed-by": "modelops",

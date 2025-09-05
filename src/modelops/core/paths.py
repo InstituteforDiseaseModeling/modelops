@@ -22,6 +22,7 @@ WORK_DIRS = {
     "workspace": PULUMI_HOME / "workspace",
     "adaptive": PULUMI_HOME / "adaptive",
     "registry": PULUMI_HOME / "registry",
+    "storage": PULUMI_HOME / "storage",
 }
 
 # Provider configurations

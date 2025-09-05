@@ -8,10 +8,10 @@ support other central stores. Refactor to be more generic.
 
 import pulumi
 import pulumi_kubernetes as k8s
-import secrets
-import string
 from typing import Dict, Any, Optional
 from ...core import StackNaming
+from ...versions import POSTGRES_IMAGE
+from .smoke_test import SmokeTest
 
 
 class AdaptiveInfra(pulumi.ComponentResource):
@@ -26,6 +26,7 @@ class AdaptiveInfra(pulumi.ComponentResource):
                  infra_stack_ref: str,
                  workspace_stack_ref: str,
                  config: Dict[str, Any],
+                 storage_stack_ref: Optional[str] = None,
                  opts: Optional[pulumi.ResourceOptions] = None):
         """Initialize adaptive infrastructure.
         
@@ -34,9 +35,13 @@ class AdaptiveInfra(pulumi.ComponentResource):
             infra_stack_ref: Reference to infrastructure stack
             workspace_stack_ref: Reference to workspace stack
             config: Component configuration from adaptive.yaml
+            storage_stack_ref: Optional reference to storage stack for blob access
             opts: Optional Pulumi resource options
         """
         super().__init__("modelops:adaptive:infra", name, None, opts)
+        
+        # Store storage_stack_ref for use in child methods
+        self.storage_stack_ref = storage_stack_ref
         
         # Read from Stack 1 (infrastructure)
         infra = pulumi.StackReference(infra_stack_ref)
@@ -71,6 +76,29 @@ class AdaptiveInfra(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
+        
+        # Create storage secret if storage stack is referenced
+        if storage_stack_ref:
+            storage = pulumi.StackReference(storage_stack_ref)
+            storage_conn_str = storage.require_output("connection_string")
+            storage_account = storage.require_output("account_name")
+            
+            k8s.core.v1.Secret(
+                f"{name}-storage-secret",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name="modelops-storage",
+                    namespace=infra_namespace
+                ),
+                string_data={
+                    "AZURE_STORAGE_CONNECTION_STRING": storage_conn_str,
+                    "AZURE_STORAGE_ACCOUNT": storage_account
+                },
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[ns]
+                )
+            )
         
         # Create ConfigMap with infrastructure configuration
         config_map = k8s.core.v1.ConfigMap(
@@ -184,6 +212,15 @@ class AdaptiveInfra(pulumi.ComponentResource):
                                         value=infra_namespace
                                     )
                                 ],
+                                # Mount storage secret if available
+                                env_from=[
+                                    k8s.core.v1.EnvFromSourceArgs(
+                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                                            name="modelops-storage",
+                                            optional=True  # Don't fail if secret doesn't exist
+                                        )
+                                    )
+                                ] if storage_stack_ref else None,
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
                                     requests=worker_resources.get("requests", {
                                         "cpu": "100m",
@@ -207,6 +244,62 @@ class AdaptiveInfra(pulumi.ComponentResource):
             )
         )
         
+        # Run smoke tests if configured (opt-in to prevent deployment failures)
+        run_smoke_tests = config.get("smoke_tests", config.get("run_smoke_tests", False))
+        if run_smoke_tests:
+            # Determine which tests to run
+            tests = ["dask"]  # Test Dask connectivity
+            if postgres_dsn:
+                tests.append("postgres")  # Test database if configured
+            if storage_stack_ref:
+                tests.append("storage")  # Test storage if configured
+            
+            # Environment for smoke test
+            test_env = [
+                k8s.core.v1.EnvVarArgs(
+                    name="DASK_SCHEDULER",
+                    value=scheduler_address
+                )
+            ]
+            
+            if postgres_dsn:
+                test_env.append(
+                    k8s.core.v1.EnvVarArgs(
+                        name="POSTGRES_DSN",
+                        value=postgres_dsn
+                    )
+                )
+            
+            # Add storage env if available
+            test_env_from = None
+            if storage_stack_ref:
+                test_env_from = [
+                    k8s.core.v1.EnvFromSourceArgs(
+                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                            name="modelops-storage",
+                            optional=True
+                        )
+                    )
+                ]
+            
+            smoke_test = SmokeTest(
+                f"adaptive-{name}",
+                namespace=infra_namespace,
+                tests=tests,
+                k8s_provider=k8s_provider,
+                env=test_env,
+                env_from=test_env_from,
+                timeout_seconds=60,
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    depends_on=[workers] + ([postgres_deployment] if postgres_deployment else [])
+                )
+            )
+            
+            # Add smoke test outputs
+            self.smoke_test_job = smoke_test.job_name
+            self.smoke_test_status = pulumi.Output.from_input("created")
+        
         # Store outputs
         self.name = pulumi.Output.from_input(name)
         self.namespace = pulumi.Output.from_input(infra_namespace)
@@ -215,7 +308,7 @@ class AdaptiveInfra(pulumi.ComponentResource):
         self.workers_name = workers.metadata.name
         
         # Register outputs
-        self.register_outputs({
+        outputs_dict = {
             "name": name,
             "namespace": infra_namespace,
             "scheduler_address": scheduler_address,
@@ -225,7 +318,14 @@ class AdaptiveInfra(pulumi.ComponentResource):
             "workers_name": f"adaptive-workers",
             "worker_replicas": worker_replicas,
             "algorithm": config.get("algorithm", "optuna")
-        })
+        }
+        
+        # Add smoke test outputs if created
+        if run_smoke_tests:
+            outputs_dict["smoke_test_job"] = self.smoke_test_job
+            outputs_dict["smoke_test_status"] = self.smoke_test_status
+        
+        self.register_outputs(outputs_dict)
     
     def _create_postgres(self, name: str, namespace: str, 
                         central_store_config: Dict[str, Any],
@@ -241,12 +341,17 @@ class AdaptiveInfra(pulumi.ComponentResource):
         Returns:
             Tuple of (PostgreSQL connection string, Postgres deployment)
         """
-        # Generate secure random password and mark as secret for Pulumi state
-        # This prevents the password from being stored in plaintext
-        alphabet = string.ascii_letters + string.digits
-        postgres_password = pulumi.Output.secret(
-            ''.join(secrets.choice(alphabet) for _ in range(24))
+        # Generate secure random password using pulumi_random to ensure it persists
+        # This prevents password regeneration on every pulumi up (ISSUE-3 fix)
+        import pulumi_random
+        
+        postgres_password_resource = pulumi_random.RandomPassword(
+            f"{name}-postgres-password",
+            length=24,
+            special=False,  # Only alphanumeric for simplicity
+            opts=pulumi.ResourceOptions(parent=self)
         )
+        postgres_password = postgres_password_resource.result
         
         # Create K8s Secret for Postgres password to avoid plaintext in state
         # Using secretKeyRef ensures the password is never exposed in pod spec
@@ -323,7 +428,7 @@ class AdaptiveInfra(pulumi.ComponentResource):
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="postgres",
-                                image="postgres:14-alpine",
+                                image=POSTGRES_IMAGE,
                                 # Security: Postgres doesn't need special capabilities
                                 # Official image already runs as non-root postgres user
                                 security_context=k8s.core.v1.SecurityContextArgs(
@@ -356,6 +461,15 @@ class AdaptiveInfra(pulumi.ComponentResource):
                                         value="/var/lib/postgresql/data/pgdata"
                                     )
                                 ],
+                                # Mount storage secret if available (passed from parent)
+                                env_from=[
+                                    k8s.core.v1.EnvFromSourceArgs(
+                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                                            name="modelops-storage",
+                                            optional=True  # Don't fail if secret doesn't exist
+                                        )
+                                    )
+                                ] if self.storage_stack_ref else None,
                                 ports=[
                                     k8s.core.v1.ContainerPortArgs(
                                         container_port=5432,

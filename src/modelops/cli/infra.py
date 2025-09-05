@@ -112,6 +112,11 @@ def down(
         "--delete-rg",
         help="Also delete the resource group (dangerous!)"
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip dependency checks and force destruction"
+    ),
     yes: bool = yes_option()
 ):
     """Destroy infrastructure, optionally keeping resource group.
@@ -123,6 +128,49 @@ def down(
     
     # Load and validate configuration
     provider_config = AzureProviderConfig.from_yaml(config)
+    
+    # Check for dependent stacks unless forced
+    if not force:
+        import subprocess
+        from ..core.paths import WORK_DIRS
+        
+        dependent_stacks = []
+        for component in ["workspace", "storage", "adaptive"]:
+            if component not in WORK_DIRS:
+                continue
+            
+            stack_name = StackNaming.get_stack_name(component, env)
+            work_dir = WORK_DIRS[component]
+            
+            # Check if stack exists
+            cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Stack exists, check if it has resources
+                cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name, "--show-urns"]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if "URN" in result.stdout:
+                    dependent_stacks.append(component)
+        
+        if dependent_stacks:
+            warning("\n⚠️  Dependent stacks detected!")
+            info("The following stacks depend on this infrastructure:")
+            for stack in dependent_stacks:
+                info(f"  • {stack}")
+            
+            info("\nDestroying infrastructure will make these stacks unreachable.")
+            info("Consider cleaning them up first:")
+            commands([
+                ("Recommended", f"mops {' '.join(dependent_stacks)} down"),
+                ("Or use", "mops cleanup all")
+            ])
+            
+            if not yes:
+                confirm = typer.confirm("\nDestroy infrastructure anyway?")
+                if not confirm:
+                    success("Destruction cancelled")
+                    raise typer.Exit(0)
     
     # Confirm destruction
     if not yes:
@@ -217,5 +265,122 @@ def status(
         
     except Exception as e:
         error(f"Error querying infrastructure status: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/infra", stack_name)
+        raise typer.Exit(1)
+
+
+@app.command()
+def kubeconfig(
+    env: Optional[str] = env_option(),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Write kubeconfig to file instead of stdout"
+    ),
+    merge: bool = typer.Option(
+        False,
+        "--merge",
+        help="Merge with existing ~/.kube/config"
+    )
+):
+    """Get kubeconfig from infrastructure state.
+    
+    Fetches the current kubeconfig from Pulumi state and either
+    displays it, saves it to a file, or merges it with existing config.
+    
+    Examples:
+        mops infra kubeconfig                    # Display to stdout
+        mops infra kubeconfig -o kubeconfig.yaml # Save to file
+        mops infra kubeconfig --merge            # Update ~/.kube/config
+    """
+    env = resolve_env(env)
+    stack_name = StackNaming.get_stack_name("infra", env)
+    
+    try:
+        # Get outputs from infrastructure stack
+        outputs = automation.outputs("infra", env, refresh=False)
+        
+        if not outputs:
+            error("No infrastructure found")
+            info("Run 'mops infra up' to create infrastructure first")
+            raise typer.Exit(1)
+        
+        kubeconfig_yaml = get_output_value(outputs, "kubeconfig")
+        if not kubeconfig_yaml:
+            error("No kubeconfig found in infrastructure outputs")
+            info("Infrastructure may not be fully deployed")
+            raise typer.Exit(1)
+        
+        cluster_name = get_output_value(outputs, "cluster_name", f"modelops-{env}")
+        
+        if merge:
+            # Merge with existing kubeconfig
+            import subprocess
+            import tempfile
+            import os
+            
+            # Create temp file with new kubeconfig
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+                f.write(kubeconfig_yaml)
+                temp_path = f.name
+            
+            try:
+                # Backup existing config
+                kube_dir = Path.home() / ".kube"
+                kube_dir.mkdir(exist_ok=True)
+                config_path = kube_dir / "config"
+                
+                if config_path.exists():
+                    backup_path = kube_dir / "config.backup"
+                    import shutil
+                    shutil.copy(config_path, backup_path)
+                    info(f"Backed up existing config to {backup_path}")
+                
+                # Use kubectl to merge configs
+                env_vars = os.environ.copy()
+                if config_path.exists():
+                    env_vars["KUBECONFIG"] = f"{config_path}:{temp_path}"
+                else:
+                    env_vars["KUBECONFIG"] = temp_path
+                
+                result = subprocess.run(
+                    ["kubectl", "config", "view", "--flatten"],
+                    env=env_vars,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if result.returncode != 0:
+                    error(f"Failed to merge kubeconfig: {result.stderr}")
+                    raise typer.Exit(1)
+                
+                # Write merged config
+                config_path.write_text(result.stdout)
+                success(f"✓ Merged kubeconfig for cluster '{cluster_name}' into ~/.kube/config")
+                
+                # Set current context
+                subprocess.run(
+                    ["kubectl", "config", "use-context", cluster_name],
+                    capture_output=True
+                )
+                info(f"Current context set to: {cluster_name}")
+                
+            finally:
+                # Clean up temp file
+                os.unlink(temp_path)
+        
+        elif output:
+            # Write to specified file
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(kubeconfig_yaml)
+            success(f"✓ Kubeconfig saved to {output}")
+            info(f"\nTo use: export KUBECONFIG={output.absolute()}")
+        
+        else:
+            # Output to stdout
+            console.print(kubeconfig_yaml)
+    
+    except Exception as e:
+        error(f"Error getting kubeconfig: {e}")
         handle_pulumi_error(e, "~/.modelops/pulumi/infra", stack_name)
         raise typer.Exit(1)

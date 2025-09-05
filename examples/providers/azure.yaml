@@ -53,6 +53,17 @@ aks:
 #   name: modelopsmvpacr  # Must be globally unique
 #   sku: Standard
 
+# Optional blob storage for bundles and results
+# Can also be deployed standalone: mops storage up examples/storage.yaml
+# storage:
+#   containers:
+#     - name: bundles
+#     - name: bundle-blobs
+#     - name: workspace
+#       lifecycle_days: 7  # Auto-cleanup
+#     - name: results
+#     - name: tasks
+
 # Note: Stack names are automatically generated based on environment
 # Use --env flag to specify environment (dev, staging, prod)
 # Stack pattern: modelops-infra-{env}

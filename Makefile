@@ -31,6 +31,7 @@ PYTHON_VERSION ?= 3.11
 # Image names
 SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
 WORKER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
+SMOKETEST_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-smoketest
 
 # GHCR Configuration
 GHCR_USER ?= $(shell git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' || echo "user")
@@ -95,7 +96,7 @@ lint:
 .PHONY: ghcr-login release update-cluster clean-images show-images test-images check-visibility make-public
 
 ## Build all Docker images (multi-architecture for deployment)
-build: build-multiarch check-visibility
+build: build-multiarch check-visibility 
 	@echo "✓ Built and pushed images with version: $(VERSION)"
 
 ## Setup Docker buildx for multi-architecture builds
@@ -108,7 +109,7 @@ setup-buildx:
 ## Build images for local Mac (Apple Silicon native)
 build-mac:
 	@echo "Building for local mac dev architecture (Apple Silicon)..."
-	$(MAKE) build-scheduler build-worker
+	$(MAKE) build-scheduler build-worker build-smoketest
 	@echo "✓ Built local images with version: $(VERSION)"
 
 ## Build and push multi-arch scheduler image
@@ -137,13 +138,27 @@ build-multiarch-worker: setup-buildx ghcr-login
 		$(BUILD_CONTEXT)
 	@echo "✓ Worker image built and pushed: $(WORKER_IMAGE):$(TAG)"
 
+## Build and push multi-arch smoketest image
+build-multiarch-smoketest: setup-buildx ghcr-login
+	@echo "Building multi-arch smoketest image for platforms: $(PLATFORMS)"
+	@docker buildx build \
+		--platform $(PLATFORMS) \
+		-f docker/Dockerfile.smoketest \
+		-t $(SMOKETEST_IMAGE):$(TAG) \
+		-t $(SMOKETEST_IMAGE):$(VERSION) \
+		--push \
+		$(BUILD_CONTEXT)/modelops
+	@echo "✓ Smoketest image built and pushed: $(SMOKETEST_IMAGE):$(TAG)"
+
 ## Build and push both multi-architecture images (can be parallelized with -j)
-build-multiarch: build-multiarch-scheduler build-multiarch-worker
+build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarch-smoketest
 	@echo "✓ All multi-arch images built and pushed for: $(PLATFORMS)"
 	@echo "  $(SCHEDULER_IMAGE):$(TAG)"
 	@echo "  $(SCHEDULER_IMAGE):$(VERSION)"
 	@echo "  $(WORKER_IMAGE):$(TAG)"
 	@echo "  $(WORKER_IMAGE):$(VERSION)"
+	@echo "  $(SMOKETEST_IMAGE):$(TAG)"
+	@echo "  $(SMOKETEST_IMAGE):$(VERSION)"
 
 ## Build Dask scheduler image
 build-scheduler:
@@ -164,6 +179,14 @@ build-worker:
 		-t $(WORKER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		$(BUILD_CONTEXT)
+
+## Build smoke test image
+build-smoketest:
+	@echo "Building smoke test image: $(SMOKETEST_IMAGE):$(TAG)"
+	docker build \
+		-f docker/Dockerfile.smoketest \
+		-t $(SMOKETEST_IMAGE):$(TAG) \
+		.
 
 ## Login to GitHub Container Registry
 ghcr-login:
@@ -311,4 +334,58 @@ run-simulation-local:
 
 ## Run simulation on Dask
 run-simulation-dask:
-	PYTHONPATH=. uv run python examples/run_dask_simulation.py --test pi -n 10 
+	PYTHONPATH=. uv run python examples/run_dask_simulation.py --test pi -n 10
+
+# === State Cleanup Targets ===
+
+.PHONY: clean-unreachable clean-workspace clean-storage clean-all-state reset-stacks
+
+## Clean unreachable K8s resources from workspace
+clean-unreachable:
+	@echo "Cleaning unreachable K8s resources from workspace..."
+	@PULUMI_K8S_DELETE_UNREACHABLE=true pulumi destroy \
+		--cwd ~/.modelops/pulumi/workspace \
+		--stack modelops-workspace-$(ENV) --yes || true
+	@echo "✓ Workspace cleaned"
+
+## Clean workspace state when cluster is gone
+clean-workspace:
+	@echo "Cleaning workspace state..."
+	@PULUMI_K8S_DELETE_UNREACHABLE=true pulumi refresh \
+		--cwd ~/.modelops/pulumi/workspace \
+		--stack modelops-workspace-$(ENV) --yes 2>/dev/null || true
+	@PULUMI_K8S_DELETE_UNREACHABLE=true pulumi destroy \
+		--cwd ~/.modelops/pulumi/workspace \
+		--stack modelops-workspace-$(ENV) --yes 2>/dev/null || true
+	@echo "✓ Workspace state cleaned"
+
+## Clean storage state
+clean-storage:
+	@echo "Cleaning storage state..."
+	@pulumi destroy \
+		--cwd ~/.modelops/pulumi/storage \
+		--stack modelops-storage-$(ENV) --yes 2>/dev/null || true
+	@echo "✓ Storage state cleaned"
+
+## Clean all Pulumi state (use with caution!)
+clean-all-state: clean-workspace clean-storage
+	@echo "✓ All state cleaned for environment: $(ENV)"
+
+## Nuclear option: Reset all stacks (requires confirmation)
+reset-stacks:
+	@echo "⚠️  WARNING: This will destroy ALL stacks for environment: $(ENV)"
+	@echo "This includes: infra, workspace, storage, registry"
+	@read -p "Type 'DESTROY' to confirm: " confirm && [ "$$confirm" = "DESTROY" ] || exit 1
+	@echo "Resetting all stacks..."
+	@$(MAKE) clean-workspace ENV=$(ENV)
+	@$(MAKE) clean-storage ENV=$(ENV)
+	@pulumi destroy --cwd ~/.modelops/pulumi/registry --stack modelops-registry-$(ENV) --yes 2>/dev/null || true
+	@pulumi destroy --cwd ~/.modelops/pulumi/infra --stack modelops-infra-$(ENV) --yes 2>/dev/null || true
+	@echo "✓ All stacks reset. You can start fresh with 'mops infra up'"
+
+## Quick cleanup for common dev issues
+dev-cleanup:
+	@echo "Running quick cleanup for common development issues..."
+	@$(MOPS) cleanup unreachable workspace --yes 2>/dev/null || true
+	@$(MOPS) cleanup orphaned --yes 2>/dev/null || true
+	@echo "✓ Dev cleanup complete" 

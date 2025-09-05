@@ -14,7 +14,7 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, workspace, adaptive, registry, config as config_cli
+from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status
 
 # Register sub-commands
 app.add_typer(
@@ -27,6 +27,12 @@ app.add_typer(
     registry.app,
     name="registry",
     help="Manage container registries"
+)
+
+app.add_typer(
+    storage.app,
+    name="storage",
+    help="Manage blob storage for bundles and results"
 )
 
 app.add_typer(
@@ -47,49 +53,24 @@ app.add_typer(
     help="Manage ModelOps configuration"
 )
 
+app.add_typer(
+    cleanup.app,
+    name="cleanup",
+    help="Clean up Pulumi state and resources"
+)
+
+app.add_typer(
+    status.app,
+    name="status",
+    help="Show comprehensive infrastructure status"
+)
+
 
 @app.command()
 def version():
     """Show ModelOps version."""
     from .. import __version__
     info(f"ModelOps version: {__version__}")
-
-
-@app.command()
-def status():
-    """Show overall ModelOps status."""
-    from ..core.config import ModelOpsConfig, ConfigNotFoundError
-    from ..core.paths import CONFIG_FILE, MODELOPS_HOME
-    
-    section("ModelOps Status")
-    info_dict({
-        "Config file": f"{CONFIG_FILE} {'✓' if CONFIG_FILE.exists() else '✗'}",
-        "Home directory": f"{MODELOPS_HOME} {'✓' if MODELOPS_HOME.exists() else '✗'}"
-    })
-    
-    # Try to load config, but handle missing config gracefully
-    try:
-        config_obj = ModelOpsConfig.get_instance()
-        info_dict({
-            "Default environment": config_obj.defaults.environment,
-            "Default provider": config_obj.defaults.provider
-        })
-    except ConfigNotFoundError:
-        warning("  Configuration: Not initialized")
-        warning("\nRun 'mops config init' to create configuration")
-        raise typer.Exit(0)
-    
-    providers_dir = MODELOPS_HOME / "providers"
-    if providers_dir.exists():
-        providers = list(providers_dir.glob("*.yaml"))
-        if providers:
-            section("Configured providers")
-            for p in providers:
-                info(f"  - {p.stem}")
-        else:
-            warning("\nNo providers configured yet.")
-    
-    info("\nUse 'mops config show' to see full configuration")
 
 
 def main():

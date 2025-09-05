@@ -79,8 +79,36 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
     """
     error_msg = str(e)
     
+    # Check for unreachable cluster errors
+    if "unreachable cluster" in error_msg or "unreachable: unable to load" in error_msg:
+        error("\n❌ Kubernetes cluster is unreachable")
+        warning("\nThis happens when:")
+        info("  • The AKS cluster has been deleted")
+        info("  • Infrastructure was destroyed but dependent stacks remain")
+        info("  • Network connectivity to the cluster is lost")
+        
+        section("To fix this:")
+        
+        # Determine component from stack name
+        component = "workspace"  # default
+        if "storage" in stack_name:
+            component = "storage"
+        elif "adaptive" in stack_name:
+            component = "adaptive"
+        elif "registry" in stack_name:
+            component = "registry"
+        
+        commands([
+            ("Quick fix", f"mops cleanup unreachable {component}"),
+            ("Manual cleanup", f"PULUMI_K8S_DELETE_UNREACHABLE=true pulumi destroy --cwd {work_dir} --stack {stack_name} --yes"),
+            ("Make target", f"make clean-unreachable ENV=dev")
+        ])
+        
+        info("\nThis will remove the unreachable resources from Pulumi state.")
+        return
+    
     # Check for lock file errors
-    if "locked by" in error_msg or "lock file" in error_msg:
+    elif "locked by" in error_msg or "lock file" in error_msg:
         error("\n❌ Error: Pulumi stack is locked by another process")
         warning("\nThis usually happens when:")
         info("  • A previous Pulumi operation was interrupted")
@@ -95,6 +123,21 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
         info("\nIf the problem persists, check for running Pulumi processes:")
         commands([
             ("", "ps aux | grep pulumi")
+        ])
+        
+    elif "invalid character" in error_msg and "stack name" in error_msg:
+        # Invalid stack name error
+        error("\n❌ Invalid stack name detected")
+        warning("\nStack names can only contain:")
+        info("  • Lowercase letters (a-z)")
+        info("  • Numbers (0-9)")  
+        info("  • Hyphens (-), underscores (_), or periods (.)")
+        
+        section("This is likely a bug in the code. Please report it.")
+        info("As a workaround, try:")
+        commands([
+            ("Initialize stack manually", f"cd {work_dir} && pulumi stack init {stack_name}"),
+            ("Then retry the operation", "mops <command> --env dev")
         ])
         
     elif "code: 255" in error_msg:

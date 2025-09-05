@@ -2,7 +2,7 @@
 
 import typer
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from ..core import StackNaming, automation
 from ..components import WorkspaceConfig
 from .utils import handle_pulumi_error, resolve_env
@@ -13,6 +13,114 @@ from .display import (
 from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage Dask workspaces")
+
+
+def run_workspace_smoke_tests(namespace: str, outputs: Dict[str, Any], env: str):
+    """Run smoke tests for workspace connectivity.
+    
+    Args:
+        namespace: Kubernetes namespace
+        outputs: Stack outputs
+        env: Environment name
+    """
+    from .k8s_client import get_k8s_client, cleanup_temp_kubeconfig, run_kubectl_with_fresh_config
+    from ..versions import SMOKETEST_IMAGE
+    import json
+    
+    # Test storage connectivity using smoke test pod
+    info("Testing storage connectivity...")
+    
+    # Create overrides JSON with complete container spec
+    overrides = {
+        "spec": {
+            "containers": [{
+                "name": "workspace-storage-test",
+                "image": SMOKETEST_IMAGE,
+                "envFrom": [{
+                    "secretRef": {
+                        "name": "modelops-storage",
+                        "optional": True
+                    }
+                }],
+                "command": ["/scripts/test.sh"]
+            }]
+        }
+    }
+    
+    test_cmd = [
+        "run", "workspace-storage-test",
+        "--rm", "-i", "--restart=Never",
+        "-n", namespace,
+        f"--image={SMOKETEST_IMAGE}",
+        "--overrides", json.dumps(overrides)
+    ]
+    
+    try:
+        result = run_kubectl_with_fresh_config(test_cmd, env, timeout=15)
+        if result.returncode == 0:
+            if "✓ Storage configured" in result.stdout:
+                success("  ✓ Storage environment variables present")
+                if "✓ Storage client initialized" in result.stdout:
+                    success("  ✓ Storage client connection verified")
+            else:
+                warning("  ⚠ Storage not configured")
+        else:
+            warning(f"  ⚠ Could not test storage: {result.stderr}")
+    except Exception as e:
+        error(f"  ❌ Test failed: {e}")
+    
+    # Test Dask scheduler and worker health using K8s client
+    info("\nTesting Dask scheduler health...")
+    try:
+        v1, _, temp_path = get_k8s_client(env)
+        
+        try:
+            # Get scheduler pods
+            pods = v1.list_namespaced_pod(
+                namespace=namespace,
+                label_selector="app=dask-scheduler"
+            )
+            
+            if pods.items:
+                for pod in pods.items:
+                    if pod.status.phase == "Running":
+                        ready = all(
+                            c.ready for c in (pod.status.container_statuses or [])
+                        )
+                        if ready:
+                            success(f"  ✓ Scheduler pod {pod.metadata.name} is healthy")
+                        else:
+                            warning(f"  ⚠ Scheduler pod {pod.metadata.name} not fully ready")
+                    else:
+                        warning(f"  ⚠ Scheduler pod {pod.metadata.name} is {pod.status.phase}")
+            else:
+                error("  ❌ No scheduler pods found")
+            
+            # Test worker health
+            info("\nTesting Dask workers...")
+            worker_count = automation.get_output_value(outputs, 'worker_count', 0)
+            
+            pods = v1.list_namespaced_pod(
+                namespace=namespace,
+                label_selector="app=dask-worker"
+            )
+            
+            if pods.items:
+                running_count = sum(
+                    1 for pod in pods.items
+                    if pod.status.phase == "Running"
+                )
+                success(f"  ✓ {running_count}/{worker_count} workers running")
+            else:
+                error("  ❌ No worker pods found")
+            
+        finally:
+            cleanup_temp_kubeconfig(temp_path)
+            
+    except Exception as e:
+        error(f"  ❌ Test failed: {e}")
+    
+    info("\nSmoke tests completed")
 
 
 @app.command()
@@ -43,8 +151,13 @@ def up(
     validated_config = WorkspaceConfig.from_yaml_optional(config)
     workspace_config = validated_config.to_pulumi_config() if validated_config else {}
     
-    # Always use StackNaming.ref for consistency
-    infra_ref = StackNaming.ref("infra", env)
+    # Use provided infra stack or default to standard naming
+    if infra_stack == StackNaming.get_project_name("infra"):
+        # Default value - append environment
+        infra_ref = StackNaming.ref("infra", env)
+    else:
+        # Custom stack name provided
+        infra_ref = StackNaming.ref_from_stack(infra_stack)
     
     def pulumi_program():
         """Create DaskWorkspace in Stack 2 context."""
@@ -54,8 +167,17 @@ def up(
         # Pass environment to workspace config
         workspace_config["environment"] = env
         
+        # Check if storage stack exists and reference it
+        storage_ref = None
+        try:
+            # Try to reference storage stack if it exists
+            storage_ref = StackNaming.ref("storage", env)
+        except:
+            # Storage stack doesn't exist, workspace will run without storage integration
+            pass
+        
         # Create the workspace component
-        workspace = DaskWorkspace("dask", infra_ref, workspace_config)
+        workspace = DaskWorkspace("dask", infra_ref, workspace_config, storage_stack_ref=storage_ref)
         
         # Export outputs at stack level for visibility
         pulumi.export("scheduler_address", workspace.scheduler_address)
@@ -119,7 +241,12 @@ def down(
 
 @app.command()
 def status(
-    env: Optional[str] = env_option()
+    env: Optional[str] = env_option(),
+    smoke_test: bool = typer.Option(
+        False,
+        "--smoke-test",
+        help="Run smoke tests to validate connectivity"
+    )
 ):
     """Show workspace status and connection details."""
     env = resolve_env(env)
@@ -136,6 +263,17 @@ def status(
         workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))
         
         namespace = automation.get_output_value(outputs, 'namespace', StackNaming.get_namespace("dask", env))
+        
+        # Show smoke test status if available
+        if outputs.get('smoke_test_job'):
+            job_name = automation.get_output_value(outputs, 'smoke_test_job', '')
+            info(f"\nSmoke test: Job '{job_name}' deployed")
+        
+        # Run smoke tests if requested
+        if smoke_test:
+            section("\nRunning Smoke Tests")
+            run_workspace_smoke_tests(namespace, outputs, env)
+        
         workspace_commands(namespace)
         
     except Exception as e:

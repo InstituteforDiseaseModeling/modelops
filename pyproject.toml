@@ -17,6 +17,8 @@ dependencies = [
     "kubernetes>=28.0.0",
     "pulumi-azure-native>=3.7.1",
     "numpy>=2.3.2",
+    "pulumi-tls>=5.2.2",
+    "pulumi-random>=4.18.3",
 ]
 
 [project.optional-dependencies]

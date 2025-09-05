@@ -11,6 +11,7 @@ import base64
 import os
 from ...core import StackNaming
 from ...versions import DASK_IMAGE
+from .smoke_test import SmokeTest
 
 
 class DaskWorkspace(pulumi.ComponentResource):
@@ -22,6 +23,7 @@ class DaskWorkspace(pulumi.ComponentResource):
     
     def __init__(self, name: str, infra_stack_ref: str,
                  config: Optional[Dict[str, Any]] = None,
+                 storage_stack_ref: Optional[str] = None,
                  opts: Optional[pulumi.ResourceOptions] = None):
         """Initialize Dask workspace deployment.
         
@@ -29,6 +31,7 @@ class DaskWorkspace(pulumi.ComponentResource):
             name: Component name (e.g., "dask")
             infra_stack_ref: Reference to infrastructure stack
             config: Optional workspace configuration
+            storage_stack_ref: Optional reference to storage stack for blob access
             opts: Optional Pulumi resource options
         """
         super().__init__("modelops:workspace:dask", name, None, opts)
@@ -71,13 +74,24 @@ class DaskWorkspace(pulumi.ComponentResource):
         worker_image = workers_config.get("image", scheduler_image)
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
         
-        # Convert K8s memory format to Dask format (4Gi -> 4GiB)
-        # Dask expects GiB/MiB notation, not K8s Gi/Mi
+        # Convert K8s memory format to Dask format
+        # Dask expects GiB/MiB/GB/MB notation
         memory_limit = workers_config.get("resources", {}).get("limits", {}).get("memory", "4Gi")
-        if memory_limit.endswith("Gi"):
-            memory_limit = memory_limit[:-2] + "GiB"
-        elif memory_limit.endswith("Mi"):
-            memory_limit = memory_limit[:-2] + "MiB"
+        
+        # Handle various memory format suffixes
+        memory_conversions = {
+            "Gi": "GiB",   # K8s Gi -> Dask GiB
+            "Mi": "MiB",   # K8s Mi -> Dask MiB  
+            "Ki": "KiB",   # K8s Ki -> Dask KiB
+            "G": "GB",     # G -> GB (already Dask compatible)
+            "M": "MB",     # M -> MB (already Dask compatible)
+            "K": "KB",     # K -> KB (already Dask compatible)
+        }
+        
+        for k8s_suffix, dask_suffix in memory_conversions.items():
+            if memory_limit.endswith(k8s_suffix):
+                memory_limit = memory_limit[:-len(k8s_suffix)] + dask_suffix
+                break
         
         # Node selectors
         scheduler_node_selector = scheduler_config.get("nodeSelector", {})
@@ -103,6 +117,29 @@ class DaskWorkspace(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
+        
+        # Create storage secret if storage stack is referenced
+        if storage_stack_ref:
+            storage = pulumi.StackReference(storage_stack_ref)
+            storage_conn_str = storage.require_output("connection_string")
+            storage_account = storage.require_output("account_name")
+            
+            k8s.core.v1.Secret(
+                f"{name}-storage-secret",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name="modelops-storage",
+                    namespace=namespace
+                ),
+                string_data={
+                    "AZURE_STORAGE_CONNECTION_STRING": storage_conn_str,
+                    "AZURE_STORAGE_ACCOUNT": storage_account
+                },
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[ns]
+                )
+            )
         
         # No image pull secrets needed for public GHCR images
         pull_secrets = []
@@ -176,7 +213,16 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "1"
                                     })
                                 ),
-                                env=[k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])]
+                                env=[k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])],
+                                # Mount storage secret if available
+                                env_from=[
+                                    k8s.core.v1.EnvFromSourceArgs(
+                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                                            name="modelops-storage",
+                                            optional=True  # Don't fail if secret doesn't exist
+                                        )
+                                    )
+                                ] if storage_stack_ref else None
                             )
                         ],
                         node_selector=scheduler_node_selector if scheduler_node_selector else None,
@@ -277,7 +323,16 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "2"
                                     })
                                 ),
-                                env=[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
+                                env=[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])],
+                                # Mount storage secret if available
+                                env_from=[
+                                    k8s.core.v1.EnvFromSourceArgs(
+                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                                            name="modelops-storage",
+                                            optional=True  # Don't fail if secret doesn't exist
+                                        )
+                                    )
+                                ] if storage_stack_ref else None
                             )
                         ],
                         node_selector=worker_node_selector if worker_node_selector else None,
@@ -301,6 +356,52 @@ class DaskWorkspace(pulumi.ComponentResource):
             "http://dask-scheduler.", namespace, ":8787"
         )
         
+        # Run smoke tests if configured (opt-in to prevent deployment failures)
+        run_smoke_tests = config.get("smoke_tests", config.get("run_smoke_tests", False))
+        if run_smoke_tests:
+            # Determine which tests to run
+            tests = ["dask"]  # Always test Dask connectivity
+            if storage_stack_ref:
+                tests.append("storage")  # Test storage if configured
+            
+            # Environment for smoke test
+            test_env = [
+                k8s.core.v1.EnvVarArgs(
+                    name="DASK_SCHEDULER",
+                    value=scheduler_address
+                )
+            ]
+            
+            # Add storage env if available
+            test_env_from = None
+            if storage_stack_ref:
+                test_env_from = [
+                    k8s.core.v1.EnvFromSourceArgs(
+                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                            name="modelops-storage",
+                            optional=True
+                        )
+                    )
+                ]
+            
+            smoke_test = SmokeTest(
+                "workspace",
+                namespace=namespace,
+                tests=tests,
+                k8s_provider=k8s_provider,
+                env=test_env,
+                env_from=test_env_from,
+                timeout_seconds=60,
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    depends_on=[scheduler, scheduler_svc, workers]
+                )
+            )
+            
+            # Add smoke test outputs
+            self.smoke_test_job = smoke_test.job_name
+            self.smoke_test_status = pulumi.Output.from_input("created")
+        
         # Store outputs for reference
         self.scheduler_address = scheduler_address
         self.dashboard_url = dashboard_url
@@ -308,7 +409,7 @@ class DaskWorkspace(pulumi.ComponentResource):
         self.worker_count = pulumi.Output.from_input(worker_count)
         
         # Register outputs for Stack 3 to use via StackReference
-        self.register_outputs({
+        outputs_dict = {
             "scheduler_address": scheduler_address,
             "dashboard_url": dashboard_url,
             "namespace": namespace,
@@ -319,4 +420,11 @@ class DaskWorkspace(pulumi.ComponentResource):
             "scheduler_service_name": "dask-scheduler",
             "scheduler_port": 8786,
             "dashboard_port": 8787
-        })
+        }
+        
+        # Add smoke test outputs if created
+        if run_smoke_tests:
+            outputs_dict["smoke_test_job"] = self.smoke_test_job
+            outputs_dict["smoke_test_status"] = self.smoke_test_status
+        
+        self.register_outputs(outputs_dict)

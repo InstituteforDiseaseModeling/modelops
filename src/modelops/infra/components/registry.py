@@ -37,6 +37,9 @@ class ContainerRegistry(pulumi.ComponentResource):
         """
         super().__init__("modelops:infra:registry", name, None, opts)
         
+        # Store static name for resource naming (ISSUE-1 fix)
+        self._static_name = name
+        
         provider = config.get("provider", "azure")
         
         if provider == "azure":
@@ -190,7 +193,7 @@ class ContainerRegistry(pulumi.ComponentResource):
         )))
         
         return azure.authorization.RoleAssignment(
-            f"{self.registry_name}-cluster-pull",
+            f"{self._static_name}-cluster-pull",  # Use static name, not Output
             role_assignment_name=role_assignment_guid,
             principal_id=principal_id,
             principal_type="ServicePrincipal",

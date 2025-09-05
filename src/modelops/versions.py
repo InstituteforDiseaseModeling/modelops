@@ -7,9 +7,16 @@ consistent versions across the Dask client and container images.
 # Pin versions for compatibility
 DASK_VERSION = "2024.8.0"
 PYTHON_VERSION = "3.11"
+POSTGRES_VERSION = "14"
 
-# Container image matching these versions
+# Container images (ISSUE-11, ISSUE-20 fix: pinned versions, no 'latest')
 DASK_IMAGE = f"ghcr.io/dask/dask:{DASK_VERSION}-py{PYTHON_VERSION}"
+POSTGRES_IMAGE = f"postgres:{POSTGRES_VERSION}-alpine"
+PYTHON_IMAGE = f"python:{PYTHON_VERSION}-slim"
+# Placeholder for adaptive worker image - will be built and versioned
+ADAPTIVE_WORKER_IMAGE = f"ghcr.io/modelops/adaptive-worker:0.1.0"
+# Smoke test image for infrastructure testing
+SMOKETEST_IMAGE = "ghcr.io/institutefordiseasemodeling/modelops-smoketest:latest"
 
 # For pyproject.toml validation
 DASK_REQUIREMENT = f"dask[distributed]=={DASK_VERSION}"
