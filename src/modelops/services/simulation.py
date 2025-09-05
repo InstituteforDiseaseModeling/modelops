@@ -1,21 +1,156 @@
 """SimulationService implementations for distributed and local execution."""
 
-from modelops_contracts import SimulationService, SimReturn, FutureLike
-from typing import Any, List, Optional
+from modelops_contracts import (
+    SimulationService, SimReturn, FutureLike, UniqueParameterSet,
+    AggregatorFunction, Scalar, make_param_id
+)
+from typing import Any, List, Optional, Union, Dict
 import importlib
 import logging
 import warnings
 from contextlib import redirect_stderr
 import io
 import os
+import numpy as np
+import pickle
 from .ipc import to_ipc_tables, from_ipc_tables, validate_sim_return
 from ..runtime.runners import SimulationRunner, DirectRunner, get_runner
+from .utils import resolve_function, import_function
+from .cache import SimulationCache
 
 # Logger for capturing Dask warnings
 dask_logger = logging.getLogger("modelops.dask.warnings")
+logger = logging.getLogger(__name__)
 
 
-class LocalSimulationService:
+class BaseSimulationService(SimulationService):
+    """Base implementation with shared logic for all simulation services.
+    
+    Provides replication methods, batch submission, and caching support
+    that can be reused by all concrete implementations.
+    """
+    
+    def __init__(self, cache: Optional[SimulationCache] = None):
+        """Initialize base service.
+        
+        Args:
+            cache: Optional SimulationCache for result deduplication
+        """
+        self.cache = cache
+        if cache:
+            logger.info(f"Initialized with cache: {cache.config.storage_prefix}")
+    
+    def submit_batch(self, fn_ref: str, param_sets: List[UniqueParameterSet], 
+                     seed: int, *, bundle_ref: str) -> List[FutureLike]:
+        """Submit batch with deterministic seed derivation.
+        
+        Uses numpy.random.SeedSequence for statistically independent seeds.
+        """
+        # Use SeedSequence for independent seeds
+        ss = np.random.SeedSequence(seed)
+        seeds = ss.spawn(len(param_sets))
+        
+        futures = []
+        for param_set, child_ss in zip(param_sets, seeds):
+            # Extract single seed value from sequence
+            seed_val = int(child_ss.generate_state(1)[0])
+            params_dict = dict(param_set.params)
+            
+            # Check cache first if available
+            if self.cache and self.cache.exists(params_dict, seed_val):
+                logger.debug(f"Cache hit for param_id={param_set.param_id[:8]}...")
+                cached_result = self.cache.get(params_dict, seed_val)
+                # Deserialize the cached result
+                if isinstance(cached_result, bytes):
+                    cached_result = pickle.loads(cached_result)
+                futures.append(self._make_cached_future(cached_result))
+            else:
+                # Submit actual computation
+                future = self.submit(fn_ref, params_dict, seed_val, bundle_ref=bundle_ref)
+                
+                # Store param_id with future for cache storage later (if possible)
+                if hasattr(future, '__dict__'):
+                    future._param_id = param_set.param_id
+                    future._params = params_dict
+                    future._seed = seed_val
+                
+                futures.append(future)
+        
+        return futures
+    
+    def submit_replicates(self, fn_ref: str, params: Dict[str, Scalar],
+                          seed: int, *, bundle_ref: str, 
+                          n_replicates: int) -> List[FutureLike]:
+        """Submit replicates with statistically independent seeds.
+        
+        Uses numpy.random.SeedSequence to generate high-quality independent seeds.
+        """
+        ss = np.random.SeedSequence(seed)
+        child_seeds = ss.spawn(n_replicates)
+        
+        futures = []
+        for child_ss in child_seeds:
+            seed_val = int(child_ss.generate_state(1)[0])
+            
+            if self.cache and self.cache.exists(params, seed_val):
+                logger.debug(f"Cache hit for seed={seed_val}")
+                cached_result = self.cache.get(params, seed_val)
+                # Deserialize if needed
+                if isinstance(cached_result, bytes):
+                    cached_result = pickle.loads(cached_result)
+                futures.append(self._make_cached_future(cached_result))
+            else:
+                future = self.submit(fn_ref, params, seed_val, bundle_ref=bundle_ref)
+                
+                # Store params and seed with future for cache storage later
+                if hasattr(future, '__dict__'):
+                    future._params = params
+                    future._seed = seed_val
+                
+                futures.append(future)
+        
+        return futures
+    
+    def gather_and_aggregate(self, futures: List[FutureLike],
+                             aggregator: Union[str, AggregatorFunction]) -> SimReturn:
+        """Gather and aggregate with support for both string refs and callables."""
+        is_distributed, resolved = resolve_function(aggregator)
+        
+        if is_distributed:
+            # Use worker-side aggregation with string ref
+            return self._gather_and_aggregate_distributed(futures, resolved)
+        else:
+            # Local aggregation with callable
+            results = self.gather(futures)
+            
+            # Cache results if futures have params/seed metadata
+            if self.cache:
+                for future, result in zip(futures, results):
+                    if (hasattr(future, '_params') and hasattr(future, '_seed') 
+                        and future._params and future._seed):
+                        self.cache.put(future._params, future._seed, result)
+            
+            return resolved(results)
+    
+    def _gather_and_aggregate_distributed(self, futures: List[FutureLike], 
+                                          aggregator_ref: str) -> SimReturn:
+        """Default implementation for distributed aggregation.
+        
+        Subclasses can override for worker-side aggregation.
+        """
+        results = self.gather(futures)
+        aggregator_fn = import_function(aggregator_ref)
+        return aggregator_fn(results)
+    
+    def _make_cached_future(self, result: SimReturn) -> FutureLike:
+        """Create a future-like object that returns cached result.
+        
+        Subclasses should override for their specific future type.
+        """
+        return result
+
+
+class LocalSimulationService(BaseSimulationService):
     """Local execution for testing without Dask.
     
     This implementation runs simulations in-process, useful for:
@@ -24,12 +159,15 @@ class LocalSimulationService:
     - Environments without Kubernetes
     """
     
-    def __init__(self, runner: Optional[SimulationRunner] = None):
-        """Initialize with optional runner.
+    def __init__(self, runner: Optional[SimulationRunner] = None,
+                 cache: Optional[SimulationCache] = None):
+        """Initialize with optional runner and cache.
         
         Args:
             runner: SimulationRunner to use. Defaults to DirectRunner.
+            cache: Optional SimulationCache for result deduplication.
         """
+        super().__init__(cache=cache)
         self.runner = runner or DirectRunner()
     
     def submit(self, fn_ref: str, params: dict, seed: int, *, bundle_ref: str) -> Any:
@@ -45,7 +183,13 @@ class LocalSimulationService:
             The simulation result directly (not a future)
         """
         # Use runner to execute simulation
-        return self.runner.run(fn_ref, params, seed, bundle_ref)
+        result = self.runner.run(fn_ref, params, seed, bundle_ref)
+        
+        # Store in cache if available
+        if self.cache:
+            self.cache.put(params, seed, result)
+        
+        return result
     
     def gather(self, futures: List[Any]) -> List[SimReturn]:
         """Gather results from submitted simulations.
@@ -61,15 +205,16 @@ class LocalSimulationService:
         return futures
 
 
-class DaskSimulationService:
+class DaskSimulationService(BaseSimulationService):
     """Dask distributed execution on a cluster.
     
     This implementation submits simulations to a Dask cluster for
-    distributed execution across multiple workers.
+    distributed execution across multiple workers. Includes worker-side
+    aggregation for efficient reduction operations.
     """
     
     def __init__(self, scheduler_address: str, silence_warnings: bool = True,
-                 runner_type: Optional[str] = None):
+                 runner_type: Optional[str] = None, cache: Optional[SimulationCache] = None):
         """Initialize connection to Dask cluster.
         
         Args:
@@ -78,7 +223,9 @@ class DaskSimulationService:
                             Warnings are still logged to 'modelops.dask.warnings' logger.
             runner_type: Type of runner to use on workers ("direct", "bundle", "cached").
                         If None, uses MODELOPS_RUNNER_TYPE env var or defaults to "direct".
+            cache: Optional SimulationCache for result deduplication.
         """
+        super().__init__(cache=cache)
         from dask.distributed import Client
         
         self.runner_type = runner_type
@@ -148,6 +295,29 @@ class DaskSimulationService:
             List of simulation results
         """
         return self.client.gather(futures)
+    
+    def _gather_and_aggregate_distributed(self, futures: List[FutureLike], 
+                                          aggregator_ref: str) -> SimReturn:
+        """Perform aggregation ON workers to minimize data transfer.
+        
+        This is the KEY performance optimization - aggregate on workers
+        to avoid transferring large replicate data back to scheduler.
+        """
+        # Submit aggregation task that operates on futures
+        aggregation_future = self.client.submit(
+            _worker_aggregate,
+            futures,
+            aggregator_ref,
+            pure=False  # Not pure since it depends on futures
+        )
+        
+        # Gather only the aggregated result (much smaller!)
+        return self.client.gather(aggregation_future)
+    
+    def _make_cached_future(self, result: SimReturn) -> FutureLike:
+        """Create a Dask future from cached result."""
+        # Submit a trivial task that returns the cached result
+        return self.client.submit(lambda x: x, result, pure=True)
     
     def close(self):
         """Close connection to Dask cluster."""
@@ -228,3 +398,34 @@ def _worker_run_sim(fn_ref: str, params: dict, seed: int, bundle_ref: str) -> Si
     
     # Execute using the runner
     return runner.run(fn_ref, params, seed, bundle_ref)
+
+
+def _worker_aggregate(futures: List[FutureLike], aggregator_ref: str) -> SimReturn:
+    """Aggregate function that runs ON a Dask worker.
+    
+    This runs ON the worker, gathering futures locally and applying aggregation
+    to avoid transferring all replicate data back to the client. This is a
+    key performance optimization for large simulations.
+    
+    Args:
+        futures: List of Dask futures to aggregate
+        aggregator_ref: String reference to aggregator function (module:function)
+        
+    Returns:
+        Aggregated SimReturn
+        
+    Examples:
+        >>> # This function is called by DaskSimulationService._gather_and_aggregate_distributed
+        >>> # It runs on a worker, not the client!
+        >>> result = _worker_aggregate(futures, "numpy:mean")
+    """
+    from dask.distributed import get_client
+    from .utils import import_function
+    
+    # Get client on worker to gather futures locally
+    client = get_client()
+    results = client.gather(futures)  # Local gather on worker!
+    
+    # Import and apply the aggregator
+    aggregator_fn = import_function(aggregator_ref)
+    return aggregator_fn(results)
