@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from modelops.services.simulation import DaskSimulationService, LocalSimulationService
 from modelops.services.ipc import from_ipc_tables
+from modelops.runtime.runners import DirectRunner, BundleRunner, CachedBundleRunner
 
 
 def test_monte_carlo_pi(service, n_simulations: int = 10):
@@ -270,21 +271,49 @@ def main():
         default="modelops-dask-dev",
         help="Kubernetes namespace where Dask is deployed (default: modelops-dask-dev)"
     )
+    parser.add_argument(
+        "--runner",
+        choices=["direct", "bundle", "cached"],
+        default=None,
+        help="Runner type to use for simulations (direct: simple import, bundle: isolated env, cached: reuse envs)"
+    )
     
     args = parser.parse_args()
     
     # Create simulation service
     if args.local:
-        print(f"Using LocalSimulationService (in-process execution)")
-        service = LocalSimulationService()
+        # Local execution with optional runner selection
+        if args.runner == "bundle":
+            runner = BundleRunner()
+            print(f"Using LocalSimulationService with BundleRunner (isolated environments)")
+        elif args.runner == "cached":
+            runner = CachedBundleRunner()
+            print(f"Using LocalSimulationService with CachedBundleRunner (cached environments)")
+        else:
+            runner = DirectRunner()
+            print(f"Using LocalSimulationService with DirectRunner (simple import)")
+        
+        service = LocalSimulationService(runner=runner)
     else:
         print(f"Connecting to Dask scheduler at {args.scheduler}")
+        if args.runner:
+            print(f"Using {args.runner} runner on workers")
         print(f"(Make sure to run: kubectl port-forward -n {args.namespace} svc/dask-scheduler 8786:8786)")
         
         try:
-            service = DaskSimulationService(args.scheduler, silence_warnings=not args.show_warnings)
-            # Test connection by getting client info
-            print(f"Connected! Cluster has {len(service.client.scheduler_info()['workers'])} workers")
+            service = DaskSimulationService(
+                args.scheduler, 
+                silence_warnings=not args.show_warnings,
+                runner_type=args.runner
+            )
+            # Test connection and show health info
+            health = service.health_check() if hasattr(service, 'health_check') else {}
+            if health.get('status') == 'healthy':
+                print(f"Connected! Cluster has {health.get('workers', 0)} workers")
+                print(f"Runner type: {health.get('runner_type', 'unknown')}")
+            else:
+                # Fallback to old method if health_check not available
+                print(f"Connected! Cluster has {len(service.client.scheduler_info()['workers'])} workers")
         except Exception as e:
             print(f"\nError connecting to Dask: {e}")
             print("\nTips:")

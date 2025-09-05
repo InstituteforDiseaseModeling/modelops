@@ -1,0 +1,22 @@
+version = 1
+requires-python = ">=3.11"
+
+[[package]]
+name = "numpy"
+version = "1.26.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/numpy-1.26.0.tar.gz", hash = "sha256:test", size = 10801007 }
+wheels = [
+    { url = "https://files.pythonhosted.org/numpy-1.26.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:test", size = 20639281 },
+]
+
+[[package]]
+name = "test-bundle"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy", specifier = ">=1.24.0" }]

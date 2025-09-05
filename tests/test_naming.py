@@ -66,9 +66,14 @@ class TestStackNaming:
         assert name.startswith("modelopsdevst")
         assert len(name) <= 24  # Azure limit
         
-        # With suffix
-        assert StackNaming.get_storage_account_name("dev", "test") == "modelopsdevsttest"
-        assert StackNaming.get_storage_account_name("prod", "123") == "modelopsprodst123"
+        # With suffix - now includes random part
+        name_with_suffix = StackNaming.get_storage_account_name("dev", "test")
+        assert name_with_suffix.startswith("modelopsdevtes")  # Truncated + random
+        assert len(name_with_suffix) <= 24
+        # Storage account names now always add random suffix for uniqueness
+        prod_name = StackNaming.get_storage_account_name("prod", "123") 
+        assert prod_name.startswith("modelopsprdst")  # Note: "prod" gets truncated to "prd"
+        assert len(prod_name) <= 24
         
         # Test truncation for long names
         long_name = StackNaming.get_storage_account_name("verylongenvironmentname", "suffix")
@@ -152,7 +157,8 @@ class TestStackNaming:
             assert acr_name == "testprojectdevacrtest"
             
             storage_name = StackNaming.get_storage_account_name("dev", "test")
-            assert storage_name == "testprojectdevsttest"
+            assert storage_name.startswith("testprojectdevtes")  # Truncated + random
+            assert len(storage_name) <= 24
             
         finally:
             # Restore original prefix

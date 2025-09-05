@@ -35,8 +35,12 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 modelops-contracts = { path = "../modelops-contracts" }
+modelops-bundle = { path = "../modelops-bundle" }
 
 [dependency-groups]
+bundle = [
+    "modelops-bundle",
+]
 dev = [
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
