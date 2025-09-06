@@ -53,9 +53,12 @@ def main():
     # Example 3: Cache statistics
     print("\n3. Cache statistics:")
     
-    # Add some dummy data to cache for demo
-    cache.put({"test": 1}, seed=100, result={"data": b"test_data"})
-    cache.put({"test": 2}, seed=200, result={"data": b"test_data2"})
+    # Add some dummy data to cache for demo (using proper SimReturn format)
+    from modelops.services.ipc import to_ipc_tables
+    df = pl.DataFrame({"value": [1, 2, 3], "index": [0, 1, 2]})
+    demo_result = to_ipc_tables({"results": df})
+    cache.put({"test": 1}, seed=100, result=demo_result)
+    cache.put({"test": 2}, seed=200, result=demo_result)
     
     stats = cache.stats()
     for key, value in stats.items():

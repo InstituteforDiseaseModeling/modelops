@@ -1,11 +1,13 @@
 """Simulation cache for result deduplication and reuse."""
 
 import logging
+import pickle  # For legacy cache reading only
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable, Any
 from modelops_contracts import SimReturn, make_param_id
 from .storage import StorageBackend, get_default_backend
+from .cache_codec import encode_zip, decode_zip
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +133,7 @@ class SimulationCache:
             seed: Random seed
             
         Returns:
-            Cached SimReturn or None if not found
+            Cached SimReturn (dict[str, bytes]) or None if not found
         """
         if not self.config.enabled:
             return None
@@ -140,14 +142,27 @@ class SimulationCache:
             param_id = make_param_id(params)
             cache_key = self.make_cache_key(param_id, seed)
             
-            if self.backend.exists(cache_key):
-                result = self.backend.load(cache_key)
-                logger.info(f"Retrieved cached result for param_id={param_id[:8]}..., seed={seed}")
-                
-                # Result is already in SimReturn format (IPC bytes)
-                return result
+            if not self.backend.exists(cache_key):
+                return None
             
-            return None
+            blob = self.backend.load(cache_key)
+            logger.info(f"Retrieved cached result for param_id={param_id[:8]}..., seed={seed}")
+            
+            # Try new ZIP format first
+            try:
+                return decode_zip(blob, validate=True)
+            except Exception:
+                # Fall back to legacy pickle format
+                try:
+                    result = pickle.loads(blob)
+                    if isinstance(result, dict):
+                        logger.debug("Loaded legacy pickle cache entry")
+                        return result
+                except Exception:
+                    pass
+                
+                logger.warning(f"Unable to decode cache entry for {param_id[:8]}/{seed}")
+                return None
             
         except Exception as e:
             logger.error(f"Error retrieving from cache: {e}")
@@ -159,7 +174,7 @@ class SimulationCache:
         Args:
             params: Parameter dictionary
             seed: Random seed  
-            result: Simulation result (SimReturn with IPC bytes)
+            result: Simulation result (SimReturn dict[str, bytes])
         """
         if not self.config.enabled:
             return
@@ -168,24 +183,40 @@ class SimulationCache:
             param_id = make_param_id(params)
             cache_key = self.make_cache_key(param_id, seed)
             
-            # Store metadata if first time seeing these params
+            # Update metadata with this seed
             if self.config.save_metadata:
                 metadata_key = self.make_metadata_key(param_id)
-                if not self.backend.exists(metadata_key):
+                
+                if self.backend.exists(metadata_key):
+                    # Update existing metadata
+                    metadata = self.backend.load_json(metadata_key)
+                    seeds = metadata.get("seeds_computed", [])
+                else:
+                    # Create new metadata
                     metadata = {
                         "param_id": param_id,
                         "params": params,
                         "first_seen": datetime.now().isoformat(),
                         "seeds_computed": []
                     }
-                    self.backend.save_json(metadata_key, metadata)
-                    logger.debug(f"Saved metadata for param_id={param_id[:8]}...")
+                    seeds = []
+                
+                # Add this seed if not already present
+                if seed not in seeds:
+                    seeds.append(seed)
+                    seeds.sort()  # Keep sorted for readability
+                
+                metadata["seeds_computed"] = seeds
+                metadata["last_updated"] = datetime.now().isoformat()
+                metadata["total_seeds"] = len(seeds)
+                
+                self.backend.save_json(metadata_key, metadata)
+                logger.debug(f"Updated metadata for param_id={param_id[:8]}... (seeds: {len(seeds)})")
             
-            # Store result (SimReturn is already IPC bytes)
-            # We need to serialize the dict of bytes
-            import pickle
-            result_bytes = pickle.dumps(dict(result))
-            self.backend.save(cache_key, result_bytes)
+            # Store result using new ZIP codec
+            # This provides deterministic, safe, and portable serialization
+            blob = encode_zip(result, params=params, seed=seed)
+            self.backend.save(cache_key, blob)
             logger.info(f"Cached result for param_id={param_id[:8]}..., seed={seed}")
             
         except Exception as e:

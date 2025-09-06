@@ -4,19 +4,12 @@ from modelops_contracts import (
     SimulationService, SimReturn, FutureLike, UniqueParameterSet,
     AggregatorFunction, Scalar, make_param_id
 )
-from typing import Any, List, Optional, Union, Dict
-import importlib
+from typing import Any, List, Optional, Union, Dict, Tuple
 import logging
-import warnings
-from contextlib import redirect_stderr
-import io
-import os
 import numpy as np
-import pickle
-from .ipc import to_ipc_tables, from_ipc_tables, validate_sim_return
-from ..runtime.runners import SimulationRunner, DirectRunner, get_runner
 from .utils import resolve_function, import_function
 from .cache import SimulationCache
+from ..runtime.runners import SimulationRunner, DirectRunner, get_runner
 
 # Logger for capturing Dask warnings
 dask_logger = logging.getLogger("modelops.dask.warnings")
@@ -95,9 +88,7 @@ class BaseSimulationService(SimulationService):
             if self.cache and self.cache.exists(params, seed_val):
                 logger.debug(f"Cache hit for seed={seed_val}")
                 cached_result = self.cache.get(params, seed_val)
-                # Deserialize if needed
-                if isinstance(cached_result, bytes):
-                    cached_result = pickle.loads(cached_result)
+                # get() now returns proper SimReturn, no deserialization needed
                 futures.append(self._make_cached_future(cached_result))
             else:
                 future = self.submit(fn_ref, params, seed_val, bundle_ref=bundle_ref)
@@ -113,7 +104,17 @@ class BaseSimulationService(SimulationService):
     
     def gather_and_aggregate(self, futures: List[FutureLike],
                              aggregator: Union[str, AggregatorFunction]) -> SimReturn:
-        """Gather and aggregate with support for both string refs and callables."""
+        """Gather and aggregate with support for both string refs and callables.
+        
+        Execution strategy depends on aggregator type:
+        - String refs ("module:function"): Aggregation runs ON workers,
+          minimizing data transfer. Only the aggregated result is returned.
+        - Callables (functions, lambdas): All results are gathered from workers
+          first, then aggregation runs locally. This avoids serialization issues
+          but has a performance penalty due to data transfer.
+        
+        For best performance with large datasets, use string references.
+        """
         is_distributed, resolved = resolve_function(aggregator)
         
         if is_distributed:
@@ -227,8 +228,14 @@ class DaskSimulationService(BaseSimulationService):
         """
         super().__init__(cache=cache)
         from dask.distributed import Client
+        import warnings
+        from contextlib import redirect_stderr
+        import io
+        import os
         
         self.runner_type = runner_type
+        # Track future metadata for caching
+        self._cache_meta: Dict[str, Tuple[Dict[str, Scalar], int]] = {}
         
         # Log which runner type will be used
         actual_runner = runner_type or os.getenv("MODELOPS_RUNNER_TYPE", "direct")
@@ -265,22 +272,33 @@ class DaskSimulationService(BaseSimulationService):
         Returns:
             A Dask future representing the pending computation
         """
-        # Pass runner type to workers if configured
-        if self.runner_type:
-            # Set environment variable for workers
-            worker_env = {"MODELOPS_RUNNER_TYPE": self.runner_type}
-            return self.client.submit(
-                _worker_run_sim, fn_ref, params, seed, bundle_ref,
-                workers=None, resources=None, retries=0,
-                priority=0, fifo_timeout="100ms", allow_other_workers=False,
-                actor=None, actors=None, pure=None,
-                key=None,
-                # Pass environment to workers
-                # Note: This requires Dask workers to be configured to accept env vars
-                # For now, we rely on workers having MODELOPS_RUNNER_TYPE set
-            )
-        else:
-            return self.client.submit(_worker_run_sim, fn_ref, params, seed, bundle_ref)
+        # Fast-path: return cached result if available
+        if self.cache and self.cache.exists(params, seed):
+            cached = self.cache.get(params, seed)
+            return self._make_cached_future(cached)
+        
+        # Submit to cluster
+        future = self.client.submit(_worker_run_sim, fn_ref, params, seed, bundle_ref, pure=False)
+        
+        # Register callback to cache result when complete
+        if self.cache:
+            self._cache_meta[future.key] = (dict(params), int(seed))
+            future.add_done_callback(self._cache_callback)
+        
+        return future
+    
+    def _cache_callback(self, future):
+        """Callback to cache results as futures complete."""
+        try:
+            meta = self._cache_meta.pop(future.key, None)
+            if not meta:
+                return
+            params, seed = meta
+            result = future.result()
+            # Cache the result
+            self.cache.put(params, seed, result)
+        except Exception as e:
+            logger.warning(f"Cache callback failed for {future.key}: {e}")
     
     def gather(self, futures: List[FutureLike]) -> List[SimReturn]:
         """Gather results from Dask futures.
@@ -316,8 +334,9 @@ class DaskSimulationService(BaseSimulationService):
     
     def _make_cached_future(self, result: SimReturn) -> FutureLike:
         """Create a Dask future from cached result."""
-        # Submit a trivial task that returns the cached result
-        return self.client.submit(lambda x: x, result, pure=True)
+        # Use scatter to efficiently place cached data in cluster
+        # This avoids task overhead and allows Dask to optimize placement
+        return self.client.scatter(result, broadcast=False)
     
     def close(self):
         """Close connection to Dask cluster."""
