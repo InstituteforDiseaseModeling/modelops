@@ -20,7 +20,7 @@ class SimulationRunner(Protocol):
         """Execute a single simulation.
         
         Args:
-            fn_ref: Function reference as "module:function"
+            fn_ref: Function reference as "module.function" or "module:function"
             params: Parameter dictionary with scalar values
             seed: Random seed for reproducibility
             bundle_ref: Bundle reference for code/data dependencies
@@ -43,8 +43,21 @@ class DirectRunner:
         
         Ignores bundle_ref and assumes code is pre-installed.
         """
-        # Parse function reference
-        module_name, func_name = fn_ref.split(":")
+        # Parse function reference - handle both dot and colon notation
+        if ":" in fn_ref:
+            # Traditional colon notation: "module:function"
+            module_name, func_name = fn_ref.split(":")
+        else:
+            # Dot notation from EntryPointId: "module.function"
+            # Assume last component is the function/class name
+            parts = fn_ref.rsplit(".", 1)
+            if len(parts) == 2:
+                module_name, func_name = parts
+            else:
+                # Single component - treat as module with same-named function
+                module_name = fn_ref
+                func_name = fn_ref.split(".")[-1]
+        
         mod = importlib.import_module(module_name)
         func = getattr(mod, func_name)
         
@@ -73,9 +86,17 @@ class BundleRunner:
         if not bundle_ref:
             raise ValueError("BundleRunner requires a bundle_ref")
         
-        # Extract digest from bundle_ref (e.g., "oci://registry/image:sha256:abc...")
-        # For now, assume bundle_ref is the digest directly
-        digest = bundle_ref.split(":")[-2] + ":" + bundle_ref.split(":")[-1] if ":" in bundle_ref else bundle_ref
+        # Extract digest from bundle_ref using proper parsing
+        try:
+            from modelops_bundle.digest_utils import extract_digest_from_ref
+            digest = extract_digest_from_ref(bundle_ref)
+            if not digest:
+                # No digest in ref, use the ref as-is (might be a tag)
+                digest = bundle_ref
+        except ImportError:
+            # Fallback if modelops-bundle not installed
+            # For now, assume bundle_ref is the digest directly
+            digest = bundle_ref.split(":")[-2] + ":" + bundle_ref.split(":")[-1] if ":" in bundle_ref else bundle_ref
         
         # Ensure bundle is available
         bundle_dir = ensure_bundle(digest)

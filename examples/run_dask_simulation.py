@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from modelops.services.simulation import DaskSimulationService, LocalSimulationService
 from modelops.services.ipc import from_ipc_tables
 from modelops.runtime.runners import DirectRunner, BundleRunner, CachedBundleRunner
+from modelops_contracts import SimTask
 
 
 def test_monte_carlo_pi(service, n_simulations: int = 10):
@@ -40,13 +41,16 @@ def test_monte_carlo_pi(service, n_simulations: int = 10):
     # Submit simulations with different seeds
     futures = []
     for i in range(n_simulations):
-        params = {"n_samples": 100000}  # 100k samples per simulation
-        future = service.submit(
-            "examples.simulations:monte_carlo_pi",
-            params,
-            seed=i,
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        # Future: Will compute real workspace digest from git + uv.lock
+        task = SimTask.from_components(
+            import_path="examples.simulations.monte_carlo_pi",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"n_samples": 100000},  # 100k samples per simulation
+            seed=i
         )
+        future = service.submit(task)
         futures.append(future)
     
     print(f"Submitted {n_simulations} simulations...")
@@ -118,22 +122,23 @@ def test_option_pricing(service, n_simulations: int = 20):
         sigma = 0.1 + (0.4 * i / (n_simulations - 1))
         volatilities.append(sigma)
         
-        params = {
-            "S0": 100,      # Current price
-            "K": 100,       # Strike (at-the-money)
-            "T": 1.0,       # 1 year to expiry
-            "r": 0.05,      # 5% risk-free rate
-            "sigma": sigma, # Volatility
-            "n_paths": 50000,
-            "option_type": "call"
-        }
-        
-        future = service.submit(
-            "examples.simulations:black_scholes_option",
-            params,
-            seed=42,  # Same seed for comparison
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task = SimTask.from_components(
+            import_path="examples.simulations.black_scholes_option",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={
+                "S0": 100,      # Current price
+                "K": 100,       # Strike (at-the-money)
+                "T": 1.0,       # 1 year to expiry
+                "r": 0.05,      # 5% risk-free rate
+                "sigma": sigma, # Volatility
+                "n_paths": 50000,
+                "option_type": "call"
+            },
+            seed=42  # Same seed for comparison
         )
+        future = service.submit(task)
         futures.append(future)
     
     print(f"Submitted {n_simulations} option pricing simulations...")
@@ -181,20 +186,21 @@ def test_stochastic_growth(service, n_simulations: int = 5):
     # Submit simulations
     futures = []
     for i in range(n_simulations):
-        params = {
-            "initial_value": 100,
-            "growth_rate": 0.08,    # 8% annual growth
-            "volatility": 0.20,      # 20% annual volatility
-            "n_periods": 252,        # 1 year of daily data
-            "dt": 1/252
-        }
-        
-        future = service.submit(
-            "examples.simulations:stochastic_growth_model",
-            params,
-            seed=i,
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task = SimTask.from_components(
+            import_path="examples.simulations.stochastic_growth_model",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={
+                "initial_value": 100,
+                "growth_rate": 0.08,    # 8% annual growth
+                "volatility": 0.20,      # 20% annual volatility
+                "n_periods": 252,        # 1 year of daily data
+                "dt": 1/252
+            },
+            seed=i
         )
+        future = service.submit(task)
         futures.append(future)
     
     print(f"Submitted {n_simulations} growth simulations...")

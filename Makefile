@@ -290,6 +290,17 @@ update-cluster:
 	@echo ""
 	@echo "Latest images: $(SCHEDULER_IMAGE):$(TAG), $(WORKER_IMAGE):$(TAG)"
 
+## Rollout new images to running Dask deployments
+rollout-images:
+	@echo "Rolling out latest images to Dask deployments in namespace: $(NAMESPACE)"
+	@kubectl rollout restart deployment dask-scheduler -n $(NAMESPACE)
+	@kubectl rollout restart deployment dask-workers -n $(NAMESPACE)
+	@echo "Waiting for rollouts to complete..."
+	@kubectl rollout status deployment dask-scheduler -n $(NAMESPACE) --timeout=120s
+	@kubectl rollout status deployment dask-workers -n $(NAMESPACE) --timeout=120s
+	@echo "✓ New images rolled out successfully"
+	@kubectl get pods -n $(NAMESPACE) | grep -E "dask-|NAME"
+
 ## Clean Docker images
 clean-images:
 	docker rmi $(SCHEDULER_IMAGE):$(TAG) $(WORKER_IMAGE):$(TAG) || true

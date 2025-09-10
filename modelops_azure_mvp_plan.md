@@ -16,38 +16,76 @@ models in the cloud** with clean seams between simulation execution and
 adaptive calibration/search. The MVP targets **Azure AKS** and lets a user go
 from zero to a working run with a few CLI commands.
 
+## ModelOps Ecosystem Overview
+
+ModelOps is part of a larger framework consisting of three repositories that work together:
+
+### Core Repositories:
+1. **modelops** (this repo): Infrastructure orchestration and runtime
+   - Manages cloud resources (AKS, storage, Dask)
+   - Provides simulation services and caching
+   - Handles adaptive optimization infrastructure
+
+2. **modelops-contracts**: Stable interfaces between science and infrastructure
+   - Defines protocols (AdaptiveAlgorithm, SimulationService)
+   - Provides core types (SimTask, UniqueParameterSet, TrialResult)
+   - Zero heavy dependencies for clean separation
+
+3. **modelops-bundle**: Workstation → Cloud mirroring with provenance tracking
+   - Mirrors local code/data to cloud storage
+   - Tracks provenance (git commits, file hashes)
+   - Creates versioned bundles for reproducibility
+   - Manages OCI artifacts
+
+### Data Flow Architecture:
+- **modelops-bundle**: Handles source code + input data (with full provenance)
+- **Storage Stack**: Stores computation results and output artifacts (NOT source data)
+- **Cache**: Deduplicates intermediate computations (experimental, not solidified)
+
+### Key Design Principle:
+- **Bundles** = Immutable source code/data packages (managed by modelops-bundle)
+- **Storage** = Mutable computation results (managed by storage stack)
+- **Cache** = Performance optimization (experimental)
+
 ## The happy path (CLIs you'll use)
 
 ```bash
 # 0) Initialize configuration (one-time setup)
 mops config init
 
-# 1) Create container registry (Stack 1)
+# 1) Create container registry
 mops registry create --name modelops --provider azure
+mops registry status
 
-# 2) Provision Azure infrastructure from zero (Stack 2)
+# 2) Provision Azure infrastructure from zero
 mops infra up --config examples/providers/azure.yaml  # or ~/.modelops/providers/azure.yaml
-
-# 3) Deploy Dask workspace using infrastructure from Stack 2 (Stack 3)
-mops workspace up --config examples/workspace.yaml
-
-# 4) Port forward to Dask dashboard (for development)
-mops workspace port-forward
-
-# 5) Run adaptive optimization using Stacks 2 & 3 (Stack 4)
-mops adaptive up examples/adaptive.yaml --run-id exp-001
-
-# 6) Check status and manage resources
 mops infra status
-mops workspace status --env dev
+
+# 3) Create storage for results and artifacts
+mops storage up --config examples/storage.yaml
+mops storage status
+mops storage connection-string > ~/.modelops/storage.env
+source ~/.modelops/storage.env
+
+# 4) Deploy Dask workspace
+mops workspace up --config examples/workspace.yaml
+mops workspace port-forward  # For development dashboard access
+
+# 5) Run adaptive optimization
+mops adaptive up examples/adaptive.yaml --run-id exp-001
 mops adaptive status --run-id exp-001
+
+# Quick iteration for development:
+make build -j 4        # Build and push Docker images
+make rollout-images    # Restart pods with new images
 ```
 
-**Four-Stack Architecture:**
-- **Stack 1 (Registry)**: Creates container registry (ACR for Azure)
-- **Stack 2 (Infrastructure)**: Creates Azure resources (RG, AKS cluster)
-- **Stack 3 (Workspace)**: Deploys Dask scheduler/workers using StackReference to Stack 2
-- **Stack 4 (Adaptive)**: Runs optimization jobs using StackReferences to Stacks 2 & 3
+**Five-Stack Architecture:**
+- **Stack 1 (Registry)**: Container registry (ACR for Azure)
+- **Stack 2 (Infrastructure)**: Azure resources (RG, AKS cluster)
+- **Stack 3 (Storage)**: Blob storage for results (containers not solidified)
+- **Stack 4 (Workspace)**: Dask scheduler/workers on K8s
+- **Stack 5 (Adaptive)**: Optimization infrastructure (Optuna + Postgres)
 
 ## Pulumi State Management
 
@@ -703,32 +741,117 @@ self.register_outputs({
 
 The system uses **independent Pulumi stacks** that reference each other's outputs. No custom state management needed - Pulumi handles it all.
 
-### The Four-Stack Pattern with Container Registry
+### The Five-Stack Pattern (Implemented)
 
 ```
-Stack 1: modelops-infra
-├── Creates: Azure resources (RG, AKS)
-├── Component: ModelOpsCluster
-└── Outputs: kubeconfig, cluster_endpoint, resource_group
-
-Stack 2: modelops-registry  
-├── Creates: Container Registry (ACR/ECR/GCR)
+Stack 1: modelops-registry-{env}
+├── Creates: Container Registry (ACR)
 ├── Component: ContainerRegistry
 ├── Independent lifecycle (can be shared across environments)
 └── Outputs: login_server, registry_name, requires_auth
 
-Stack 3: modelops-workspace  
+Stack 2: modelops-infra-{env}
+├── Creates: Azure resources (RG, AKS)
+├── Component: AzureModelOpsInfra
+└── Outputs: kubeconfig, cluster_endpoint, resource_group
+
+Stack 3: modelops-storage-{env}
+├── Creates: Azure Storage Account with blob containers
+├── Component: BlobStorage
+├── ⚠️ Containers (NOT SOLIDIFIED - need iteration/design):
+│   ├── bundles: OCI artifacts (<100MB) [may change]
+│   ├── bundle-blobs: Large files (>100MB) [may change]
+│   ├── workspace: Scratch space, 60-day lifecycle [may change]
+│   ├── results: Experiment outputs [likely stable]
+│   └── tasks: ZeroOps task definitions [may change]
+└── Outputs: connection_string, account_name, container_urls
+
+Stack 4: modelops-workspace-{env}
 ├── Creates: Dask on Kubernetes
 ├── Component: DaskWorkspace
-├── Depends on: Stack 1's kubeconfig + Stack 2's registry (via StackReferences)
+├── Depends on: Stack 2's kubeconfig (via StackReference)
 └── Outputs: scheduler_addr, dashboard_url, namespace
 
-Stack 4: modelops-adaptive-{run-id}
+Stack 5: modelops-adaptive-{env}-{name}
 ├── Creates: Adaptive workers, Postgres
-├── Component: AdaptiveRun  
-├── Depends on: Stack 3's scheduler_addr (via StackReference)
-└── Outputs: run_status, results_location
+├── Component: AdaptiveInfra
+├── Depends on: Stacks 2, 3, 4 (via StackReferences)
+└── Outputs: run_status, database_url, namespace
 ```
+
+### Storage Design Status ⚠️
+
+**WARNING**: The storage container structure is NOT SOLIDIFIED and needs design iteration.
+
+Current containers are provisional and will likely change:
+- **bundles/bundle-blobs**: May be replaced by direct modelops-bundle integration
+- **workspace**: Scratch space design still evolving
+- **results**: Most stable, likely to remain for experiment outputs
+- **tasks**: May move to different storage mechanism
+
+The storage stack exists and works but the container purposes and structure need careful design work. Integration with modelops-bundle for provenance tracking is pending.
+
+### Engineering Decisions & Tradeoffs
+
+#### Why Five Separate Stacks?
+
+The five-stack architecture represents deliberate engineering tradeoffs:
+
+1. **Registry Stack**: Independent lifecycle, shareable across environments
+   - (+) Image reuse across clusters
+   - (+) Survives cluster rebuilds
+   - (-) Additional stack to manage
+
+2. **Infrastructure Stack**: Core compute resources (AKS)
+   - (+) Expensive resources managed separately
+   - (+) Can preserve during workspace experiments
+   - (-) Tight coupling to Azure
+
+3. **Storage Stack**: Persistent data layer
+   - (+) Data survives compute teardown
+   - (+) Can be shared across workspaces
+   - (-) Container structure not solidified
+
+4. **Workspace Stack**: Ephemeral compute plane (Dask)
+   - (+) Quick teardown/rebuild for experiments
+   - (+) Independent scaling from infrastructure
+   - (-) Requires infrastructure stack reference
+
+5. **Adaptive Stack**: Per-experiment optimization state
+   - (+) Isolated experiment environments
+   - (+) Clean teardown per run
+   - (-) Complex dependency chain
+
+#### Why SimTask Over Individual Parameters?
+
+The migration from `submit(fn_ref, params, seed, bundle_ref)` to `submit(task: SimTask)`:
+- (+) **Encapsulation**: All parameters in one immutable object
+- (+) **Type Safety**: Single validated object vs multiple parameters
+- (+) **Cache Keys**: Deterministic `sim_root()` for deduplication
+- (+) **Extensibility**: Easy to add fields without breaking API
+- (-) **Migration Cost**: Existing code needs updates
+- (-) **Learning Curve**: New concept to understand
+
+#### Why Separate Bundles from Storage?
+
+Clear separation between source (bundles) and results (storage):
+- **Bundles** (via modelops-bundle): Immutable source code/data with provenance
+- **Storage**: Mutable computation results and artifacts
+- (+) **Clear Semantics**: Source vs output distinction
+- (+) **Provenance**: Full tracking for reproducibility
+- (-) **Complexity**: Two systems to manage
+- (-) **Integration**: Pending full implementation
+
+#### Why Not Solidified Yet?
+
+Several components are intentionally experimental:
+- **Cache**: Performance characteristics unknown at scale
+- **Storage Containers**: Need real-world usage patterns
+- **Bundle Integration**: API still evolving in modelops-bundle
+- (+) **Flexibility**: Can adjust based on learnings
+- (+) **User Feedback**: Incorporate real usage patterns
+- (-) **Breaking Changes**: May require migrations
+- (-) **Documentation**: Must clearly mark experimental features
 
 ### Why Separate Container Registry?
 
@@ -991,6 +1114,41 @@ $ mops workspace down
 $ mops infra down
 → Destroys Stack: modelops-infra
 ```
+
+---
+
+## Cache Implementation (EXPERIMENTAL - NOT SOLIDIFIED)
+
+⚠️ **WARNING**: The cache implementation is in active development and subject to change.
+
+### Current Status
+The cache system is functional but not solidified. Major changes are expected:
+- **Format Migration**: Currently migrating from pickle to ZIP codec
+- **Sharding Strategy**: Being evaluated for filesystem performance
+- **Bundle Integration**: Using placeholder "local://dev" until modelops-bundle integration
+- **Performance**: Under active testing, may be completely redesigned
+
+### Current v2 Architecture
+```
+cache/v2/
+├── {sim_root_shard}/     # 2-level sharding (e.g., ab/cd/)
+│   └── {sim_root}/       # Full simulation root hash
+│       └── {param_id}/   # Unique parameter set ID
+│           ├── {seed}.mops        # Cached simulation result
+│           └── metadata.json      # Parameter metadata
+```
+
+### Key Design Decisions
+- **sim_root()**: Replaces ExecContext for deterministic cache keys
+- **ZIP Codec**: Provides deterministic, safe serialization (replacing pickle)
+- **Sharding**: Prevents too many files in single directory
+- **Backward Compatibility**: Can read v1 pickle format during transition
+
+### Future Integration
+The cache will eventually integrate with modelops-bundle for:
+- Proper bundle_ref computation (not placeholders)
+- Provenance-aware cache invalidation
+- Cross-workspace cache sharing
 
 ---
 
@@ -1438,6 +1596,8 @@ def main():
         if not batch: continue
         # Generate deterministic seeds for each replicate
         import hashlib
+        from modelops_contracts import SimTask
+        
         futures = []
         for p in batch:
             for i in range(GROUP_SIZE):
@@ -1446,10 +1606,17 @@ def main():
                     f"{p.param_id}:{i}".encode(), digest_size=8
                 ).digest()
                 seed = int.from_bytes(seed_bytes, 'little') & ((1 << 64) - 1)
-                futures.append(
-                    sim.submit("pkg.mod:simulate", p.params, seed,
-                               bundle_ref=os.environ.get("BUNDLE_REF",""))
+                
+                # NEW: Create SimTask object encapsulating all parameters
+                task = SimTask.from_components(
+                    import_path="pkg.mod.simulate",
+                    scenario="default",
+                    bundle_ref=os.environ.get("BUNDLE_REF", "local://dev"),  # TODO: Will be computed by modelops-bundle
+                    params=p.params,
+                    seed=seed
                 )
+                futures.append(sim.submit(task))  # Submit single SimTask object
+        
         simouts = sim.gather(futures)
         results: list[TrialResult] = evaluate_with_calabaria(batch, simouts)
         algo.tell(results)
@@ -2158,29 +2325,56 @@ volumes:
 
 ## 8) Developer Workflow
 
+### Quick Development Iteration
+For rapid code changes without rebuilding infrastructure:
+
+```bash
+# 1) Make code changes locally
+vim src/modelops/services/simulation.py
+
+# 2) Build and push Docker images (uses parent directory for context)
+make build -j 4  # Parallel build of scheduler, worker, smoketest images
+
+# 3) Rollout new images to running pods
+make rollout-images  # Restarts deployments to pull latest images
+
+# 4) Test changes
+uv run python examples/test_dask_aggregation.py --scheduler tcp://localhost:8786
+```
+
+### Full Stack Deployment
 ```bash
 # 1) Azure auth
 az login && az account set --subscription "<SUB_ID>"
 
-# 2) Optional: build/push images
-make images REGISTRY=ghcr.io/you VERSION=latest
+# 2) Create all infrastructure stacks
+mops registry create --provider azure
+mops infra up --config examples/providers/azure.yaml
+mops storage up --config examples/storage.yaml
+mops workspace up --config examples/workspace.yaml
+mops adaptive up --config examples/adaptive.yaml
 
-# 3) Bring up infra + workspace plane
-mops workspace up -f workspace.yaml
+# 3) Teardown (preserves cluster)
+mops adaptive down
+mops workspace down
 
-# 4) Bring up adaptive plane
-mops adaptive up -f adaptive.yaml
-
-# 5) Teardown (keep cluster)
-mops adaptive down -n modelops
-mops workspace down -n modelops
-
-# 6) Destroy all Azure resources (danger)
-# NOTE: mops destroy --all includes safety guard:
-# - Refuses to run if target RG equals or contains Pulumi state RG/storage account
-# - Requires explicit confirmation for production environments
-mops destroy --all
+# 4) Destroy all resources (danger)
+mops storage down
+mops infra down
+mops registry destroy
 ```
+
+### Multi-Repository Build Context
+The Docker build uses parent directory to access sibling repos:
+```
+../
+├── modelops/           # This repository
+├── modelops-contracts/ # Interface definitions
+├── modelops-bundle/    # Provenance tracking (future)
+└── calabaria/         # Science framework
+```
+
+All repos are copied into Docker images during build.
 
 ---
 
@@ -2305,14 +2499,58 @@ The MVP strictly honors the contracts from `modelops-contracts`:
 
 - **`TrialStatus`**: Use `COMPLETED`, `FAILED`, `TIMEOUT` per provided code.
 - **`UniqueParameterSet`**: Stable `param_id` → used verbatim in Ask/Tell runner.
-- **`SimulationService`**: Our Dask implementation conforms exactly (fn_ref, params, seed, bundle_ref).
+- **`SimTask`**: NEW - Encapsulates all simulation parameters in one immutable object
+  - Created via `SimTask.from_components()` factory method
+  - Provides `sim_root()` for deterministic cache keys
+  - Replaces individual parameters (fn_ref, params, seed, bundle_ref)
+- **`SimulationService`**: Updated to use SimTask objects
+  - `submit(task: SimTask)` replaces `submit(fn_ref, params, seed, bundle_ref)`
+  - `gather()` returns results in submission order
 - **Diagnostics**: Remain capped (< 64KB) and never include secrets.
 - **Seeds**: Deterministic derivation when not provided: `seed = stable_hash(param_id) + i`.
-- **Immutability**: Pydantic models with `frozen=True` per modelops-contracts specification.
+- **Immutability**: All types use frozen dataclasses per modelops-contracts specification.
 
 ---
 
-## 12) Known Limitations (MVP)
+## 12) Current Implementation Status
+
+### ✅ Fully Implemented & Working:
+- **All 5 Stacks Operational**: Registry, Infrastructure, Storage, Workspace, Adaptive
+- **CLI Commands**: All `mops` commands functioning (registry, infra, storage, workspace, adaptive)
+- **Dask Integration**: Distributed compute working with port-forwarding for dashboard
+- **Optuna + Postgres**: Adaptive optimization infrastructure deployed and running
+- **SimTask API**: Migration complete, all examples updated
+- **Azure Provider**: Full AKS provisioning with node pools
+- **Docker Build Pipeline**: Multi-repo context working with make targets
+- **Quick Iteration**: `make build` → `make rollout-images` for rapid development
+
+### 🚧 Experimental / Not Solidified:
+- **Cache v2**: Functional but format/strategy under active development
+  - ZIP codec migration in progress
+  - Sharding strategy being evaluated
+  - Using placeholder bundle refs
+- **Storage Containers**: Structure needs design iteration
+  - Container purposes not finalized
+  - Integration with modelops-bundle pending
+- **Bundle Integration**: Using "local://dev" placeholders
+  - Real bundle computation coming from modelops-bundle
+  - Provenance tracking not yet integrated
+
+### 📋 Not Yet Implemented:
+- **GPU Support**: Configuration exists but untested
+- **Postgres HA**: Single replica only, no failover
+- **Managed Services**: Only in-cluster Postgres, not Azure Flexible Server
+- **Advanced Monitoring**: Basic logs only, no metrics/tracing
+- **Multi-Cloud**: Azure-only, AWS/GCP providers not implemented
+- **Autoscaling**: Fixed worker counts, no dynamic scaling
+
+### 🔄 Migration Required:
+- **Old Code**: Projects using old API need SimTask migration
+- **Cache Entries**: v1 pickle format can be read but should migrate to v2
+
+---
+
+## 13) Known Limitations (MVP)
 
 - **Single-tenant namespace**: No multi-tenant RBAC; one user per workspace.
 - **No GPU support**: CPU-only node pool; GPU node selectors/taints not defined.

@@ -8,6 +8,7 @@ from pathlib import Path
 from modelops.services.simulation import LocalSimulationService, _worker_run_sim
 from modelops.runtime.runners import DirectRunner, get_runner
 from modelops.services.ipc import from_ipc_tables, to_ipc_tables
+from modelops_contracts import SimTask
 
 
 def integration_test_sim(params: dict, seed: int) -> dict:
@@ -49,12 +50,15 @@ class TestEndToEndIntegration:
         service = LocalSimulationService(runner=DirectRunner())
         
         # Submit simulation
-        result = service.submit(
-            "tests.test_integration:integration_test_sim",
-            {"value": 10.0, "iterations": 50},
-            seed=42,
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task = SimTask.from_components(
+            import_path="tests.test_integration.integration_test_sim",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"value": 10.0, "iterations": 50},
+            seed=42
         )
+        result = service.submit(task)
         
         # Result is already in IPC format from the simulation
         decoded = from_ipc_tables(result)
@@ -86,12 +90,15 @@ class TestEndToEndIntegration:
             assert isinstance(runner, DirectRunner)
             
             # Test in worker function
-            result = _worker_run_sim(
-                "tests.test_integration:integration_test_sim",
-                {"value": 5.0},
-                seed=123,
-                bundle_ref=""
+            # TODO(MVP): Using local://dev with placeholder all-zeros digest
+            task = SimTask.from_components(
+                import_path="tests.test_integration.integration_test_sim",
+                scenario="default",
+                bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+                params={"value": 5.0},
+                seed=123
             )
+            result = _worker_run_sim(task)
             assert isinstance(result, dict)
     
     @patch('modelops.runtime.runners.ensure_bundle')
@@ -109,12 +116,15 @@ class TestEndToEndIntegration:
         
         # Test with bundle runner via environment
         with patch.dict(os.environ, {"MODELOPS_RUNNER_TYPE": "bundle"}):
-            result = _worker_run_sim(
-                "test:func",
-                {"param": "value"},
-                seed=999,
-                bundle_ref="sha256:test123"
+            # TODO(MVP): Using sha256 bundle ref for this test
+            task = SimTask.from_components(
+                import_path="test.func",
+                scenario="default",
+                bundle_ref="sha256:test123456789ab",  # Valid sha256 format
+                params={"param": "value"},
+                seed=999
             )
+            result = _worker_run_sim(task)
             
             # Verify bundle operations were called
             assert mock_bundle.called
@@ -130,12 +140,15 @@ class TestEndToEndIntegration:
         """Test LocalSimulationService with different runner types."""
         # Test with DirectRunner
         direct_service = LocalSimulationService(runner=DirectRunner())
-        result1 = direct_service.submit(
-            "tests.test_integration:integration_test_sim",
-            {"value": 1.0},
-            seed=1,
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task = SimTask.from_components(
+            import_path="tests.test_integration.integration_test_sim",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"value": 1.0},
+            seed=1
         )
+        result1 = direct_service.submit(task)
         assert isinstance(result1, dict)
         
         # Test with mocked BundleRunner
@@ -143,12 +156,15 @@ class TestEndToEndIntegration:
         mock_runner.run.return_value = {"mocked": b"result"}
         
         custom_service = LocalSimulationService(runner=mock_runner)
-        result2 = custom_service.submit(
-            "any:func",
-            {},
-            seed=0,
-            bundle_ref="test"
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task2 = SimTask.from_components(
+            import_path="any.func",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={},
+            seed=0
         )
+        result2 = custom_service.submit(task2)
         
         mock_runner.run.assert_called_once()
         assert result2 == {"mocked": b"result"}
@@ -160,12 +176,15 @@ class TestEndToEndIntegration:
         # Submit multiple simulations
         futures = []
         for i in range(5):
-            result = service.submit(
-                "tests.test_integration:integration_test_sim",
-                {"value": float(i), "iterations": 10},
-                seed=i,
-                bundle_ref=""
+            # TODO(MVP): Using local://dev with placeholder all-zeros digest
+            task = SimTask.from_components(
+                import_path="tests.test_integration.integration_test_sim",
+                scenario="default",
+                bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+                params={"value": float(i), "iterations": 10},
+                seed=i
             )
+            result = service.submit(task)
             futures.append(result)
         
         # Gather should preserve order
@@ -194,21 +213,27 @@ class TestEndToEndIntegration:
         
         # Test with non-existent module
         with pytest.raises(ImportError):
-            service.submit(
-                "nonexistent.module:func",
-                {},
-                seed=0,
-                bundle_ref=""
+            # TODO(MVP): Using local://dev with placeholder all-zeros digest
+            task = SimTask.from_components(
+                import_path="nonexistent.module.func",
+                scenario="default",
+                bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+                params={},
+                seed=0
             )
+            service.submit(task)
         
         # Test with non-existent function
         with pytest.raises(AttributeError):
-            service.submit(
-                "tests.test_integration:nonexistent_func",
-                {},
-                seed=0,
-                bundle_ref=""
+            # TODO(MVP): Using local://dev with placeholder all-zeros digest
+            task = SimTask.from_components(
+                import_path="tests.test_integration.nonexistent_func",
+                scenario="default",
+                bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+                params={},
+                seed=0
             )
+            service.submit(task)
 
 
 class TestIPCIntegration:
@@ -219,12 +244,15 @@ class TestIPCIntegration:
         service = LocalSimulationService()
         
         # Run simulation
-        result = service.submit(
-            "tests.test_integration:integration_test_sim",
-            {"value": 2.5, "iterations": 20},
-            seed=100,
-            bundle_ref=""
+        # TODO(MVP): Using local://dev with placeholder all-zeros digest
+        task = SimTask.from_components(
+            import_path="tests.test_integration.integration_test_sim",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"value": 2.5, "iterations": 20},
+            seed=100
         )
+        result = service.submit(task)
         
         # Result is already in IPC format
         assert all(isinstance(v, bytes) for v in result.values())

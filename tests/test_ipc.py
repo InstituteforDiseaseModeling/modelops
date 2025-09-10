@@ -96,6 +96,7 @@ def test_validate_sim_return_dict():
 def test_sim_services_return_bytes():
     """Test that simulation services return Mapping[str, bytes]."""
     from modelops.services.simulation import LocalSimulationService
+    from modelops_contracts import SimTask
     
     # Mock simulation function
     def mock_sim(params, seed):
@@ -110,7 +111,15 @@ def test_sim_services_return_bytes():
     
     # Test LocalSimulationService
     service = LocalSimulationService()
-    result = service.submit("test_module:mock_sim", {"x": 2}, 3, bundle_ref="")
+    # TODO(MVP): Using local://dev for tests
+    task = SimTask.from_components(
+        import_path="test_module.mock_sim",
+        scenario="default",
+        bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+        params={"x": 2},
+        seed=3
+    )
+    result = service.submit(task)
     
     # Should be dict of bytes
     assert isinstance(result, dict)

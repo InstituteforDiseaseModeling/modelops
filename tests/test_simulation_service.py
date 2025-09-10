@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 import os
 
+from modelops_contracts import SimTask, UniqueParameterSet
 from modelops.services.simulation import (
     LocalSimulationService,
     DaskSimulationService,
@@ -30,13 +31,15 @@ class TestLocalSimulationService:
         # Should have DirectRunner by default
         assert isinstance(service.runner, DirectRunner)
         
-        # Test execution with examples.simulations:simple_sim
-        result = service.submit(
-            "tests.test_simulation_service:simple_test_sim",
-            {"x": 5},
-            seed=10,
-            bundle_ref=""
+        # Test execution with test simulation
+        # TODO(MVP): Using local://dev for tests
+        task = SimTask(
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            entrypoint="tests.test_simulation_service.simple_test_sim/test@000000000000",
+            params=UniqueParameterSet.from_dict({"x": 5}),
+            seed=10
         )
+        result = service.submit(task)
         
         assert isinstance(result, dict)
         assert b"params={'x': 5},seed=10" in result["output"]
@@ -53,19 +56,21 @@ class TestLocalSimulationService:
         assert service.runner == mock_runner
         
         # Test execution
-        result = service.submit(
-            "module:func",
-            {"x": 1},
-            seed=42,
-            bundle_ref="test"
+        # TODO(MVP): Using local://dev for tests
+        task = SimTask(
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            entrypoint="module.func/test@000000000000",
+            params=UniqueParameterSet.from_dict({"x": 1}),
+            seed=42
         )
+        result = service.submit(task)
         
-        # Verify runner was called
+        # Verify runner was called with extracted values
         mock_runner.run.assert_called_once_with(
-            "module:func",
+            "module.func",  # Now uses dot notation directly
             {"x": 1},
             42,
-            "test"
+            "local://dev"
         )
         assert result == {"test": b"custom"}
     
@@ -90,21 +95,22 @@ class TestWorkerRunSim:
         mock_runner.run.return_value = {"result": b"test"}
         mock_get_runner.return_value = mock_runner
         
-        # Call worker function
-        result = _worker_run_sim(
-            "module:func",
-            {"param": "value"},
-            seed=123,
-            bundle_ref="sha256:abc"
+        # Call worker function with SimTask
+        task = SimTask(
+            bundle_ref="sha256:abc123456789",  # Need full digest
+            entrypoint="module.func/test@abc123456789",
+            params=UniqueParameterSet.from_dict({"param": "value"}),
+            seed=123
         )
+        result = _worker_run_sim(task)
         
-        # Verify runner was obtained and used
+        # Verify runner was obtained and used with extracted values
         mock_get_runner.assert_called_once()
         mock_runner.run.assert_called_once_with(
-            "module:func",
+            "module.func",  # Now uses dot notation directly
             {"param": "value"},
             123,
-            "sha256:abc"
+            "sha256:abc123456789"
         )
         assert result == {"result": b"test"}
     
@@ -116,7 +122,13 @@ class TestWorkerRunSim:
         mock_runner.run.return_value = {"data": b"bundle"}
         mock_get_runner.return_value = mock_runner
         
-        result = _worker_run_sim("m:f", {}, 0, "ref")
+        task = SimTask(
+            bundle_ref="sha256:ref123456789",  # Need proper scheme
+            entrypoint="m.f/test@ref123456789",
+            params=UniqueParameterSet.from_dict({}),
+            seed=0
+        )
+        result = _worker_run_sim(task)
         
         # get_runner should be called without arguments
         # (so it reads from environment)
@@ -137,22 +149,20 @@ class TestDaskSimulationService:
         
         service = DaskSimulationService("tcp://localhost:8786", silence_warnings=True)
         
-        # Submit a simulation
-        future = service.submit(
-            "example:func",
-            {"x": 10},
-            seed=42,
-            bundle_ref="bundle123"
+        # Submit a simulation task
+        task = SimTask(
+            bundle_ref="sha256:bundle123456",  # Need proper scheme
+            entrypoint="example.func/test@bundle123456",
+            params=UniqueParameterSet.from_dict({"x": 10}),
+            seed=42
         )
+        future = service.submit(task)
         
-        # Verify client.submit was called with _worker_run_sim
+        # Verify client.submit was called with _worker_run_sim and task
         mock_client.submit.assert_called_once()
         args = mock_client.submit.call_args[0]
         assert args[0] == _worker_run_sim  # Function
-        assert args[1] == "example:func"    # fn_ref
-        assert args[2] == {"x": 10}         # params
-        assert args[3] == 42                # seed
-        assert args[4] == "bundle123"       # bundle_ref
+        assert args[1] == task              # SimTask
         
         assert future == mock_future
     
@@ -196,12 +206,14 @@ class TestSimulationWithRunners:
         
         # Try monte_carlo_pi if available
         try:
-            result = service.submit(
-                "examples.simulations:monte_carlo_pi",
-                {"n_samples": 1000},
-                seed=42,
-                bundle_ref=""
+            # TODO(MVP): Using local://dev for tests
+            task = SimTask(
+                bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+                entrypoint="examples.simulations.monte_carlo_pi/test@000000000000",
+                params=UniqueParameterSet.from_dict({"n_samples": 1000}),
+                seed=42
             )
+            result = service.submit(task)
             
             # Should return IPC bytes
             assert isinstance(result, dict)
@@ -231,12 +243,13 @@ class TestSimulationWithRunners:
         service = LocalSimulationService(runner=runner)
         
         # Submit with bundle_ref
-        result = service.submit(
-            "test:func",
-            {"x": 1},
-            seed=0,
-            bundle_ref="sha256:test123"
+        task = SimTask(
+            bundle_ref="sha256:test12345678",  # Match digest
+            entrypoint="test.func/test@test12345678",
+            params=UniqueParameterSet.from_dict({"x": 1}),
+            seed=0
         )
+        result = service.submit(task)
         
         # Verify bundle operations were called
         assert mock_bundle.called

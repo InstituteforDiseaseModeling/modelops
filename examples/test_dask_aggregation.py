@@ -30,7 +30,7 @@ from modelops.services.simulation import DaskSimulationService, LocalSimulationS
 from modelops.services.cache import SimulationCache
 from modelops.services.storage import get_default_backend
 from modelops.services.ipc import from_ipc_tables
-from modelops_contracts import UniqueParameterSet
+from modelops_contracts import SimTask
 
 # Import simulation and aggregation functions from examples module
 # The examples directory is included in the package build, so these
@@ -89,22 +89,25 @@ def main():
     print("Test 1: Submit Replicates with Independent Seeds")
     print("=" * 70)
     
-    params = {"n_days": 100, "r0": 2.5, "recovery_rate": 0.1}
     n_replicates = 100
     base_seed = 42
     
+    # TODO(MVP): Using local://dev with placeholder all-zeros digest
+    # Future: Will compute real workspace digest from git + uv.lock
+    base_task = SimTask.from_components(
+        import_path="examples.aggregation_functions.epidemic_simulation",
+        scenario="default",
+        bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+        params={"n_days": 100, "r0": 2.5, "recovery_rate": 0.1},
+        seed=base_seed
+    )
+    
     print(f"\nSubmitting {n_replicates} replicates of epidemic simulation...")
-    print(f"Parameters: {params}")
+    print(f"Parameters: {base_task.params.params}")
     print(f"Base seed: {base_seed}")
     
     start = time.time()
-    futures = service.submit_replicates(
-        fn_ref="examples.aggregation_functions:epidemic_simulation",
-        params=params,
-        seed=base_seed,
-        bundle_ref="",
-        n_replicates=n_replicates
-    )
+    futures = service.submit_replicates(base_task, n_replicates)
     print(f"✓ Submitted {len(futures)} futures")
     
     # Show seed derivation
@@ -173,36 +176,51 @@ def main():
     print("Test 3: Batch Submission with Parameter Tracking")
     print("=" * 70)
     
-    # Create parameter sweep
-    param_sets = [
-        UniqueParameterSet.from_dict({"n_days": 100, "r0": 2.0, "recovery_rate": 0.1}),
-        UniqueParameterSet.from_dict({"n_days": 100, "r0": 2.5, "recovery_rate": 0.1}),
-        UniqueParameterSet.from_dict({"n_days": 100, "r0": 3.0, "recovery_rate": 0.1}),
-        UniqueParameterSet.from_dict({"n_days": 100, "r0": 3.5, "recovery_rate": 0.1}),
+    # Create parameter sweep with SimTask objects
+    # TODO(MVP): Using local://dev with placeholder all-zeros digest
+    tasks = [
+        SimTask.from_components(
+            import_path="examples.aggregation_functions.epidemic_simulation",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"n_days": 100, "r0": 2.0, "recovery_rate": 0.1},
+            seed=123
+        ),
+        SimTask.from_components(
+            import_path="examples.aggregation_functions.epidemic_simulation",
+            scenario="default",
+            bundle_ref="local://dev",
+            params={"n_days": 100, "r0": 2.5, "recovery_rate": 0.1},
+            seed=123
+        ),
+        SimTask.from_components(
+            import_path="examples.aggregation_functions.epidemic_simulation",
+            scenario="default",
+            bundle_ref="local://dev",
+            params={"n_days": 100, "r0": 3.0, "recovery_rate": 0.1},
+            seed=123
+        ),
+        SimTask.from_components(
+            import_path="examples.aggregation_functions.epidemic_simulation",
+            scenario="default",
+            bundle_ref="local://dev",
+            params={"n_days": 100, "r0": 3.5, "recovery_rate": 0.1},
+            seed=123
+        ),
     ]
     
-    print(f"\nSubmitting batch of {len(param_sets)} parameter sets...")
-    for i, ps in enumerate(param_sets):
-        print(f"  {i}: param_id={ps.param_id[:8]}... r0={ps.params['r0']}")
+    print(f"\nSubmitting batch of {len(tasks)} tasks...")
+    for i, task in enumerate(tasks):
+        print(f"  {i}: param_id={task.params.param_id[:8]}... r0={task.params.params['r0']}")
     
     start = time.time()
-    batch_futures = service.submit_batch(
-        fn_ref="examples.aggregation_functions:epidemic_simulation",
-        param_sets=param_sets,
-        seed=123,
-        bundle_ref=""
-    )
+    batch_futures = service.submit_batch(tasks)
     
     # Test cache hit (if enabled)
     if cache:
         print("\n🔄 Testing cache (submitting same batch again)...")
         cache_start = time.time()
-        batch_futures_2 = service.submit_batch(
-            fn_ref="examples.aggregation_functions:epidemic_simulation",
-            param_sets=param_sets,
-            seed=123,  # Same seed
-            bundle_ref=""
-        )
+        batch_futures_2 = service.submit_batch(tasks)  # Same tasks
         cache_time = time.time() - cache_start
         print(f"   Cache retrieval time: {cache_time:.3f} seconds")
         if cache_time < 0.1:
@@ -221,13 +239,15 @@ def main():
     
     # Submit more replicates for aggregation testing
     print(f"\nSubmitting 50 replicates for aggregation tests...")
-    large_futures = service.submit_replicates(
-        fn_ref="examples.aggregation_functions:epidemic_simulation",
+    # TODO(MVP): Using local://dev with placeholder all-zeros digest
+    large_task = SimTask.from_components(
+        import_path="examples.aggregation_functions.epidemic_simulation",
+        scenario="default",
+        bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
         params={"n_days": 50, "r0": 2.8, "recovery_rate": 0.15},
-        seed=999,
-        bundle_ref="",
-        n_replicates=50
+        seed=999
     )
+    large_futures = service.submit_replicates(large_task, 50)
     
     # Test percentile aggregation
     print("\nComputing percentiles across replicates...")
@@ -259,7 +279,7 @@ def main():
     features = [
         ("Submit Replicates", "✅", "Independent seeds via SeedSequence"),
         ("Worker-Side Aggregation", "✅", f"{speedup:.1f}x speedup" if 'speedup' in locals() else "Tested"),
-        ("Batch Submission", "✅", f"{len(param_sets)} parameter sets"),
+        ("Batch Submission", "✅", f"{len(tasks)} parameter sets"),
         ("Parameter Tracking", "✅", "UniqueParameterSet with param_id"),
         ("Cache Integration", "✅" if cache else "⏭️", "Enabled" if cache else "Skipped"),
         ("Multiple Aggregators", "✅", "Mean and Percentiles"),

@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 from typing import List
+from ..storage_utils import atomic_write, safe_read
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +71,11 @@ class LocalFileBackend:
             raise RuntimeError(f"Failed to load key '{key}': {e}")
     
     def save(self, key: str, data: bytes) -> None:
-        """Save data to file."""
+        """Save data to file atomically."""
         try:
             path = self._get_path(key)
-            # Ensure parent directory exists
-            path.parent.mkdir(parents=True, exist_ok=True)
-            
-            path.write_bytes(data)
+            # Use atomic write to prevent corruption
+            atomic_write(path, data)
             logger.debug(f"Saved {len(data)} bytes to {key}")
         except Exception as e:
             raise RuntimeError(f"Failed to save key '{key}': {e}")
@@ -149,13 +148,12 @@ class LocalFileBackend:
             return []
     
     def save_json(self, key: str, data: dict) -> None:
-        """Save JSON data to file."""
+        """Save JSON data to file atomically."""
         try:
             path = self._get_path(key)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            
             json_str = json.dumps(data, indent=2)
-            path.write_text(json_str, encoding='utf-8')
+            # Use atomic write for JSON too
+            atomic_write(path, json_str.encode('utf-8'))
             logger.debug(f"Saved JSON to {key}")
         except Exception as e:
             raise RuntimeError(f"Failed to save JSON to '{key}': {e}")

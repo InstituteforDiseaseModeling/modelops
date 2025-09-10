@@ -6,7 +6,7 @@ from modelops.services import LocalSimulationService
 from modelops.services.cache import SimulationCache
 from modelops.services.storage import LocalFileBackend
 from modelops.services.ipc import to_ipc_tables
-from modelops_contracts import UniqueParameterSet
+from modelops_contracts import UniqueParameterSet, SimTask
 
 def simple_simulation(params: dict, seed: int) -> dict:
     """Simple simulation function for testing."""
@@ -59,47 +59,57 @@ def main():
     print("=" * 60)
     
     # Example 1: Submit batch with caching
-    print("\n1. Batch submission with UniqueParameterSet:")
-    param_sets = [
-        UniqueParameterSet.from_dict({"n_points": 100, "mean": 0.0, "std": 1.0}),
-        UniqueParameterSet.from_dict({"n_points": 100, "mean": 1.0, "std": 1.0}),
-        UniqueParameterSet.from_dict({"n_points": 100, "mean": 2.0, "std": 1.0}),
+    print("\n1. Batch submission with SimTask:")
+    # TODO(MVP): Using local://dev with placeholder all-zeros digest
+    tasks = [
+        SimTask.from_components(
+            import_path="__main__.simple_simulation",
+            scenario="default",
+            bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+            params={"n_points": 100, "mean": 0.0, "std": 1.0},
+            seed=42
+        ),
+        SimTask.from_components(
+            import_path="__main__.simple_simulation",
+            scenario="default",
+            bundle_ref="local://dev",
+            params={"n_points": 100, "mean": 1.0, "std": 1.0},
+            seed=42
+        ),
+        SimTask.from_components(
+            import_path="__main__.simple_simulation",
+            scenario="default",
+            bundle_ref="local://dev",
+            params={"n_points": 100, "mean": 2.0, "std": 1.0},
+            seed=42
+        ),
     ]
     
     # First run - computes and caches
     print("   First run (computing)...")
-    futures = service.submit_batch(
-        "__main__:simple_simulation",
-        param_sets,
-        seed=42,
-        bundle_ref=""
-    )
+    futures = service.submit_batch(tasks)
     results = service.gather(futures)
     print(f"   Computed {len(results)} results")
     
     # Second run - uses cache
     print("   Second run (from cache)...")
-    futures = service.submit_batch(
-        "__main__:simple_simulation",
-        param_sets,
-        seed=42,  # Same seed
-        bundle_ref=""
-    )
+    futures = service.submit_batch(tasks)  # Same tasks
     results = service.gather(futures)
     print(f"   Retrieved {len(results)} cached results")
     
     # Example 2: Submit replicates
     print("\n2. Replicate submission:")
-    params = {"n_points": 100, "mean": 0.5, "std": 2.0}
+    # TODO(MVP): Using local://dev with placeholder all-zeros digest
+    base_task = SimTask.from_components(
+        import_path="__main__.simple_simulation",
+        scenario="default",
+        bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
+        params={"n_points": 100, "mean": 0.5, "std": 2.0},
+        seed=123
+    )
     
     print("   Submitting 10 replicates...")
-    futures = service.submit_replicates(
-        "__main__:simple_simulation",
-        params,
-        seed=123,
-        bundle_ref="",
-        n_replicates=10
-    )
+    futures = service.submit_replicates(base_task, 10)
     results = service.gather(futures)
     print(f"   Gathered {len(results)} replicate results")
     

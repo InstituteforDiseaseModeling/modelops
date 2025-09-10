@@ -2,13 +2,15 @@
 
 from modelops_contracts import (
     SimulationService, SimReturn, FutureLike, UniqueParameterSet,
-    AggregatorFunction, Scalar, make_param_id
+    AggregatorFunction, Scalar, make_param_id, SimTask, EntryPointId
 )
 from typing import Any, List, Optional, Union, Dict, Tuple
 import logging
+import os
 import numpy as np
 from .utils import resolve_function, import_function
 from .cache import SimulationCache
+# from .aggregation import AggregationService  # TODO: Update for new SimTask interface
 from ..runtime.runners import SimulationRunner, DirectRunner, get_runner
 
 # Logger for capturing Dask warnings
@@ -30,73 +32,83 @@ class BaseSimulationService(SimulationService):
             cache: Optional SimulationCache for result deduplication
         """
         self.cache = cache
+        # self.aggregation_service = aggregation_service or AggregationService()  # TODO: Update
         if cache:
             logger.info(f"Initialized with cache: {cache.config.storage_prefix}")
     
-    def submit_batch(self, fn_ref: str, param_sets: List[UniqueParameterSet], 
-                     seed: int, *, bundle_ref: str) -> List[FutureLike]:
-        """Submit batch with deterministic seed derivation.
+    
+    def submit_batch(self, tasks: List[SimTask]) -> List[FutureLike]:
+        """Submit multiple simulation tasks.
         
-        Uses numpy.random.SeedSequence for statistically independent seeds.
-        """
-        # Use SeedSequence for independent seeds
-        ss = np.random.SeedSequence(seed)
-        seeds = ss.spawn(len(param_sets))
+        Each task has its own UniqueParameterSet for tracking with param_id.
+        Seeds can be derived deterministically or specified per task.
         
-        futures = []
-        for param_set, child_ss in zip(param_sets, seeds):
-            # Extract single seed value from sequence
-            seed_val = int(child_ss.generate_state(1)[0])
-            params_dict = dict(param_set.params)
+        Args:
+            tasks: List of SimTask specifications
             
+        Returns:
+            List of futures, one per task
+        """
+        futures = []
+        for task in tasks:
             # Check cache first if available
-            if self.cache and self.cache.exists(params_dict, seed_val):
-                logger.debug(f"Cache hit for param_id={param_set.param_id[:8]}...")
-                cached_result = self.cache.get(params_dict, seed_val)
-                # Deserialize the cached result
-                if isinstance(cached_result, bytes):
-                    cached_result = pickle.loads(cached_result)
+            if self.cache and self.cache.exists(task):
+                logger.debug(f"Cache hit for task_id={task.task_id()[:8]}...")
+                cached_result = self.cache.get(task)
                 futures.append(self._make_cached_future(cached_result))
             else:
                 # Submit actual computation
-                future = self.submit(fn_ref, params_dict, seed_val, bundle_ref=bundle_ref)
+                future = self.submit(task)
                 
-                # Store param_id with future for cache storage later (if possible)
+                # Store task with future for cache storage later (if possible)
                 if hasattr(future, '__dict__'):
-                    future._param_id = param_set.param_id
-                    future._params = params_dict
-                    future._seed = seed_val
+                    future._task = task
                 
                 futures.append(future)
         
         return futures
     
-    def submit_replicates(self, fn_ref: str, params: Dict[str, Scalar],
-                          seed: int, *, bundle_ref: str, 
-                          n_replicates: int) -> List[FutureLike]:
-        """Submit replicates with statistically independent seeds.
+    def submit_replicates(self, base_task: SimTask, n_replicates: int) -> List[FutureLike]:
+        """Submit multiple replicates of the same task.
         
-        Uses numpy.random.SeedSequence to generate high-quality independent seeds.
+        Implementations should derive replicate seeds deterministically
+        from the base task's seed to ensure reproducibility.
+        
+        Args:
+            base_task: Base SimTask to replicate
+            n_replicates: Number of replicates to run
+            
+        Returns:
+            List of futures, one per replicate
         """
-        ss = np.random.SeedSequence(seed)
+        # Use SeedSequence for statistically independent seeds
+        # TODO: we might want to handle CRN, etc here more carefully.
+        ss = np.random.SeedSequence(base_task.seed)
         child_seeds = ss.spawn(n_replicates)
         
         futures = []
         for child_ss in child_seeds:
             seed_val = int(child_ss.generate_state(1)[0])
             
-            if self.cache and self.cache.exists(params, seed_val):
+            # Create replicate task with new seed
+            replicate_task = SimTask(
+                bundle_ref=base_task.bundle_ref,
+                entrypoint=base_task.entrypoint,
+                params=base_task.params,
+                seed=seed_val,
+                outputs=base_task.outputs
+            )
+            
+            if self.cache and self.cache.exists(replicate_task):
                 logger.debug(f"Cache hit for seed={seed_val}")
-                cached_result = self.cache.get(params, seed_val)
-                # get() now returns proper SimReturn, no deserialization needed
+                cached_result = self.cache.get(replicate_task)
                 futures.append(self._make_cached_future(cached_result))
             else:
-                future = self.submit(fn_ref, params, seed_val, bundle_ref=bundle_ref)
+                future = self.submit(replicate_task)
                 
-                # Store params and seed with future for cache storage later
+                # Store task with future for cache storage later
                 if hasattr(future, '__dict__'):
-                    future._params = params
-                    future._seed = seed_val
+                    future._task = replicate_task
                 
                 futures.append(future)
         
@@ -124,12 +136,11 @@ class BaseSimulationService(SimulationService):
             # Local aggregation with callable
             results = self.gather(futures)
             
-            # Cache results if futures have params/seed metadata
+            # Cache results if futures have task metadata
             if self.cache:
                 for future, result in zip(futures, results):
-                    if (hasattr(future, '_params') and hasattr(future, '_seed') 
-                        and future._params and future._seed):
-                        self.cache.put(future._params, future._seed, result)
+                    if hasattr(future, '_task') and future._task:
+                        self.cache.put(future._task, result)
             
             return resolved(results)
     
@@ -171,24 +182,27 @@ class LocalSimulationService(BaseSimulationService):
         super().__init__(cache=cache)
         self.runner = runner or DirectRunner()
     
-    def submit(self, fn_ref: str, params: dict, seed: int, *, bundle_ref: str) -> Any:
-        """Submit a simulation for local execution.
+    def submit(self, task: SimTask) -> Any:
+        """Submit a simulation task for local execution.
         
         Args:
-            fn_ref: Function reference as "module:function"
-            params: Parameter dictionary with scalar values
-            seed: Random seed for reproducibility
-            bundle_ref: Bundle reference (ignored in MVP, assumes code is installed)
+            task: SimTask specification containing all execution parameters
             
         Returns:
             The simulation result directly (not a future)
         """
-        # Use runner to execute simulation
-        result = self.runner.run(fn_ref, params, seed, bundle_ref)
+        # Extract function reference from entrypoint
+        # EntryPointId format: "pkg.module.Class/scenario@digest12"
+        from modelops_contracts import parse_entrypoint
+        import_path, scenario, _ = parse_entrypoint(task.entrypoint)
+        
+        # Use runner to execute simulation with import path directly
+        # Runners now handle dot notation (e.g., "pkg.module.function")
+        result = self.runner.run(import_path, dict(task.params.params), task.seed, task.bundle_ref)
         
         # Store in cache if available
         if self.cache:
-            self.cache.put(params, seed, result)
+            self.cache.put(task, result)
         
         return result
     
@@ -235,7 +249,7 @@ class DaskSimulationService(BaseSimulationService):
         
         self.runner_type = runner_type
         # Track future metadata for caching
-        self._cache_meta: Dict[str, Tuple[Dict[str, Scalar], int]] = {}
+        self._cache_meta: Dict[str, SimTask] = {}
         
         # Log which runner type will be used
         actual_runner = runner_type or os.getenv("MODELOPS_RUNNER_TYPE", "direct")
@@ -260,29 +274,26 @@ class DaskSimulationService(BaseSimulationService):
             # Normal connection with warnings visible
             self.client = Client(scheduler_address)
     
-    def submit(self, fn_ref: str, params: dict, seed: int, *, bundle_ref: str) -> FutureLike:
-        """Submit a simulation to Dask cluster.
+    def submit(self, task: SimTask) -> FutureLike:
+        """Submit a simulation task to Dask cluster.
         
         Args:
-            fn_ref: Function reference as "module:function"
-            params: Parameter dictionary with scalar values
-            seed: Random seed for reproducibility
-            bundle_ref: Bundle reference for code/data dependencies
+            task: SimTask specification containing all execution parameters
             
         Returns:
             A Dask future representing the pending computation
         """
         # Fast-path: return cached result if available
-        if self.cache and self.cache.exists(params, seed):
-            cached = self.cache.get(params, seed)
+        if self.cache and self.cache.exists(task):
+            cached = self.cache.get(task)
             return self._make_cached_future(cached)
         
         # Submit to cluster
-        future = self.client.submit(_worker_run_sim, fn_ref, params, seed, bundle_ref, pure=False)
+        future = self.client.submit(_worker_run_sim, task, pure=False)
         
         # Register callback to cache result when complete
         if self.cache:
-            self._cache_meta[future.key] = (dict(params), int(seed))
+            self._cache_meta[future.key] = task
             future.add_done_callback(self._cache_callback)
         
         return future
@@ -290,13 +301,12 @@ class DaskSimulationService(BaseSimulationService):
     def _cache_callback(self, future):
         """Callback to cache results as futures complete."""
         try:
-            meta = self._cache_meta.pop(future.key, None)
-            if not meta:
+            task = self._cache_meta.pop(future.key, None)
+            if not task:
                 return
-            params, seed = meta
             result = future.result()
-            # Cache the result
-            self.cache.put(params, seed, result)
+            # Cache the result with task
+            self.cache.put(task, result)
         except Exception as e:
             logger.warning(f"Cache callback failed for {future.key}: {e}")
     
@@ -373,13 +383,13 @@ class DaskSimulationService(BaseSimulationService):
             n_workers = len(info.get('workers', {}))
             
             # Test runner with simple function
-            test_future = self.client.submit(
-                _worker_run_sim,
-                "builtins:str",  # Simple built-in function
-                {"object": "test"},
-                seed=0,
-                bundle_ref=""
+            test_task = SimTask(
+                bundle_ref="test",
+                entrypoint="builtins.str/test@abcdef123456",
+                params=UniqueParameterSet.from_dict({"object": "test"}),
+                seed=0
             )
+            test_future = self.client.submit(_worker_run_sim, test_task)
             test_result = self.client.gather(test_future, timeout=5)
             
             return {
@@ -397,26 +407,28 @@ class DaskSimulationService(BaseSimulationService):
             }
 
 
-def _worker_run_sim(fn_ref: str, params: dict, seed: int, bundle_ref: str) -> SimReturn:
+def _worker_run_sim(task: SimTask) -> SimReturn:
     """Function that runs on Dask workers.
     
     This function is serialized and sent to workers for execution.
     Uses runner type from MODELOPS_RUNNER_TYPE environment variable.
     
     Args:
-        fn_ref: Function reference as "module:function"
-        params: Parameter dictionary
-        seed: Random seed
-        bundle_ref: Bundle reference for code/data dependencies
+        task: SimTask specification containing all execution parameters
         
     Returns:
         Simulation result as SimReturn (dict of named tables as IPC bytes)
     """
+    from modelops_contracts import parse_entrypoint
+    
     # Get appropriate runner based on environment configuration
     runner = get_runner()
     
-    # Execute using the runner
-    return runner.run(fn_ref, params, seed, bundle_ref)
+    # Extract function reference from entrypoint
+    import_path, scenario, _ = parse_entrypoint(task.entrypoint)
+    
+    # Use import path directly - runners now handle dot notation
+    return runner.run(import_path, dict(task.params.params), task.seed, task.bundle_ref)
 
 
 def _worker_aggregate(futures: List[FutureLike], aggregator_ref: str) -> SimReturn:
