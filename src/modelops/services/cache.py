@@ -1,4 +1,9 @@
-"""Simulation cache for result deduplication and reuse."""
+"""
+Simulation cache for result deduplication and reuse.
+
+TODO: this is influx and may change, especially as provenance is handled more
+in modelops-contracts.
+"""
 
 import logging
 import pickle  # For legacy cache reading only

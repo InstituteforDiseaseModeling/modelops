@@ -73,6 +73,8 @@ class DaskWorkspace(pulumi.ComponentResource):
         scheduler_image = scheduler_config.get("image", DASK_IMAGE)
         worker_image = workers_config.get("image", scheduler_image)
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
+        worker_processes = workers_config.get("processes", 1)  # Default to 1 process
+        worker_threads = workers_config.get("threads", 2)  # Default to 2 threads
         
         # Convert K8s memory format to Dask format
         # Dask expects GiB/MiB/GB/MB notation
@@ -92,6 +94,16 @@ class DaskWorkspace(pulumi.ComponentResource):
             if memory_limit.endswith(k8s_suffix):
                 memory_limit = memory_limit[:-len(k8s_suffix)] + dask_suffix
                 break
+        
+        # Adjust memory limit per process if using multiple processes
+        if worker_processes > 1:
+            # Parse memory value and unit
+            import re
+            match = re.match(r'^(\d+(?:\.\d+)?)\s*([A-Za-z]+)$', memory_limit)
+            if match:
+                value, unit = match.groups()
+                per_process_value = float(value) / worker_processes
+                memory_limit = f"{per_process_value:.1f}{unit}"
         
         # Node selectors
         scheduler_node_selector = scheduler_config.get("nodeSelector", {})
@@ -310,7 +322,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                                 command=[
                                     "dask-worker",
                                     "tcp://dask-scheduler:8786",
-                                    "--nthreads", str(workers_config.get("threads", 2)),
+                                    "--nprocs", str(worker_processes),
+                                    "--nthreads", str(worker_threads),
                                     "--memory-limit", memory_limit
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
@@ -407,6 +420,8 @@ class DaskWorkspace(pulumi.ComponentResource):
         self.dashboard_url = dashboard_url
         self.namespace = pulumi.Output.from_input(namespace)
         self.worker_count = pulumi.Output.from_input(worker_count)
+        self.worker_processes = pulumi.Output.from_input(worker_processes)
+        self.worker_threads = pulumi.Output.from_input(worker_threads)
         
         # Register outputs for Stack 3 to use via StackReference
         outputs_dict = {
@@ -414,6 +429,8 @@ class DaskWorkspace(pulumi.ComponentResource):
             "dashboard_url": dashboard_url,
             "namespace": namespace,
             "worker_count": worker_count,
+            "worker_processes": worker_processes,
+            "worker_threads": worker_threads,
             "scheduler_image": scheduler_image,
             "worker_image": worker_image,
             # Explicit service details for port-forwarding

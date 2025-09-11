@@ -395,3 +395,29 @@ This repository is implementing the Azure-only MVP with Pulumi-native infrastruc
 - **Clean Separation**: Provisioning (ComponentResources) vs Runtime (bindings)
 - **Provider Agnostic**: Azure MVP but extensible to AWS/GCP via same patterns
 - **Security**: Secrets marked with `pulumi.Output.secret()`, workload identity for storage
+
+## Dask Worker Configuration
+
+### Process vs Thread Architecture
+
+ModelOps configures Dask workers with careful consideration of Python's GIL:
+
+**For Simulation Workloads (Default)**:
+- Use `processes: 2, threads: 1` in `workspace.yaml`
+- Pure Python simulation code cannot release the GIL
+- Multiple processes provide true parallelism
+- Each process gets `pod_memory / nprocs`
+
+**For Data Science Workloads**:
+- Use `processes: 1, threads: 4` for NumPy/Pandas
+- These libraries release the GIL for vectorized operations
+- Threads share memory efficiently
+
+**Configuration Flow**:
+```
+workspace.yaml → Pulumi → K8s Deployment → Dask Workers
+  processes: 2     replicas: 4      4 pods       8 total processes
+  threads: 1                         2 procs/pod  1 thread each
+```
+
+See `docs/dask-configuration.md` for detailed guidance.

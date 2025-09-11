@@ -9,6 +9,8 @@ Key features:
 - Portable: Any language can read ZIP files
 - Compressed: Reduces storage with ZIP_DEFLATED or respects Arrow compression
 - Validated: SHA256 hashes ensure integrity
+
+TODO: needed? let's come back to this.
 """
 
 import io

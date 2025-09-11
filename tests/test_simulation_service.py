@@ -35,7 +35,7 @@ class TestLocalSimulationService:
         # TODO(MVP): Using local://dev for tests
         task = SimTask(
             bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
-            entrypoint="tests.test_simulation_service.simple_test_sim/test@000000000000",
+            entrypoint="tests.test_simulation_service.simple_test_sim/test",
             params=UniqueParameterSet.from_dict({"x": 5}),
             seed=10
         )
@@ -59,7 +59,7 @@ class TestLocalSimulationService:
         # TODO(MVP): Using local://dev for tests
         task = SimTask(
             bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
-            entrypoint="module.func/test@000000000000",
+            entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
         )
@@ -98,7 +98,7 @@ class TestWorkerRunSim:
         # Call worker function with SimTask
         task = SimTask(
             bundle_ref="sha256:abc123456789",  # Need full digest
-            entrypoint="module.func/test@abc123456789",
+            entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"param": "value"}),
             seed=123
         )
@@ -124,7 +124,7 @@ class TestWorkerRunSim:
         
         task = SimTask(
             bundle_ref="sha256:ref123456789",  # Need proper scheme
-            entrypoint="m.f/test@ref123456789",
+            entrypoint="m.f/test",
             params=UniqueParameterSet.from_dict({}),
             seed=0
         )
@@ -152,7 +152,7 @@ class TestDaskSimulationService:
         # Submit a simulation task
         task = SimTask(
             bundle_ref="sha256:bundle123456",  # Need proper scheme
-            entrypoint="example.func/test@bundle123456",
+            entrypoint="example.func/test",
             params=UniqueParameterSet.from_dict({"x": 10}),
             seed=42
         )
@@ -209,7 +209,7 @@ class TestSimulationWithRunners:
             # TODO(MVP): Using local://dev for tests
             task = SimTask(
                 bundle_ref="local://dev",  # PLACEHOLDER: Uses all-zeros digest for MVP
-                entrypoint="examples.simulations.monte_carlo_pi/test@000000000000",
+                entrypoint="examples.simulations.monte_carlo_pi/test",
                 params=UniqueParameterSet.from_dict({"n_samples": 1000}),
                 seed=42
             )
@@ -245,7 +245,7 @@ class TestSimulationWithRunners:
         # Submit with bundle_ref
         task = SimTask(
             bundle_ref="sha256:test12345678",  # Match digest
-            entrypoint="test.func/test@test12345678",
+            entrypoint="test.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=0
         )

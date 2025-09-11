@@ -4,6 +4,11 @@
 # Note: Stack names are automatically generated based on environment
 # Stack pattern: modelops-workspace-{env}
 # Namespace pattern: modelops-dask-{env}
+#
+# Process vs Thread Configuration:
+# - For simulation workloads (pure Python): Use processes=2, threads=1
+# - For data science (NumPy/Pandas): Use processes=1, threads=4
+# See docs/dask-configuration.md for detailed guidance
 
 apiVersion: modelops/v1
 kind: Workspace
@@ -46,8 +51,11 @@ spec:
     # Schedule on CPU nodes only
     nodeSelector:
       modelops.io/role: cpu
-    # Worker-specific configuration
-    threads: 2  # Number of threads per worker
+    # Process and thread configuration
+    # For simulation workloads (pure Python), use more processes and fewer threads
+    # to bypass GIL limitations. For NumPy/Pandas workloads, use more threads.
+    processes: 2  # Number of worker processes per pod (--nprocs)
+    threads: 1    # Number of threads per worker process (--nthreads)
     # Environment variables for workers
     env:
       - name: DASK_WORKER__MEMORY__TARGET

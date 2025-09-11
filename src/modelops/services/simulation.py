@@ -192,9 +192,9 @@ class LocalSimulationService(BaseSimulationService):
             The simulation result directly (not a future)
         """
         # Extract function reference from entrypoint
-        # EntryPointId format: "pkg.module.Class/scenario@digest12"
+        # EntryPointId format: "pkg.module.Class/scenario"
         from modelops_contracts import parse_entrypoint
-        import_path, scenario, _ = parse_entrypoint(task.entrypoint)
+        import_path, scenario = parse_entrypoint(task.entrypoint)
         
         # Use runner to execute simulation with import path directly
         # Runners now handle dot notation (e.g., "pkg.module.function")
@@ -385,7 +385,7 @@ class DaskSimulationService(BaseSimulationService):
             # Test runner with simple function
             test_task = SimTask(
                 bundle_ref="test",
-                entrypoint="builtins.str/test@abcdef123456",
+                entrypoint="builtins.str/test",
                 params=UniqueParameterSet.from_dict({"object": "test"}),
                 seed=0
             )
@@ -425,7 +425,7 @@ def _worker_run_sim(task: SimTask) -> SimReturn:
     runner = get_runner()
     
     # Extract function reference from entrypoint
-    import_path, scenario, _ = parse_entrypoint(task.entrypoint)
+    import_path, scenario = parse_entrypoint(task.entrypoint)
     
     # Use import path directly - runners now handle dot notation
     return runner.run(import_path, dict(task.params.params), task.seed, task.bundle_ref)
