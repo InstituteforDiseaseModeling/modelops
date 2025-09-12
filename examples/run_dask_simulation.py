@@ -26,9 +26,10 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from modelops.services.simulation import DaskSimulationService, LocalSimulationService
+from modelops.services.simulation import LocalSimulationService
+from modelops.services.dask_simulation import DaskSimulationService
 from modelops.services.ipc import from_ipc_tables
-from modelops.runtime.runners import DirectRunner, BundleRunner, CachedBundleRunner
+# Runners have been removed - using new WorkerPlugin architecture
 from modelops_contracts import SimTask
 
 

@@ -6,7 +6,7 @@ simulation caching, since aggregation has different identity requirements.
 
 import logging
 from typing import List, Optional, Union, Callable
-from modelops_contracts import SimReturn, AggregatorFunction
+from modelops_contracts import SimReturn
 from .storage import StorageBackend, get_default_backend
 from .cache_codec import encode_zip, decode_zip
 from .execution_context import ExecContext, AggregationContext
@@ -116,7 +116,7 @@ class AggregationService:
             logger.error(f"Error storing aggregate: {e}")
     
     def aggregate_with_cache(self, results: List[SimReturn],
-                             aggregator: Union[str, AggregatorFunction],
+                             aggregator: Union[str, Callable],
                              input_context: ExecContext,
                              param_id: str) -> SimReturn:
         """Aggregate results with caching support.

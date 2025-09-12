@@ -20,7 +20,7 @@ class PulumiConfig(BaseModel):
     """Pulumi-specific configuration."""
     
     backend_url: Optional[str] = None
-    """Optional backend URL override (e.g., s3://bucket, azblob://container)."""
+    """Optional backend URL override (e.g., azblob://container, file://path)."""
     
     organization: str = "organization"
     """Pulumi organization name (default: 'organization' for file backends)."""

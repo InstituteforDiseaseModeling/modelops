@@ -26,7 +26,8 @@ import argparse
 import time
 import numpy as np
 import polars as pl
-from modelops.services.simulation import DaskSimulationService, LocalSimulationService
+from modelops.services.simulation import LocalSimulationService
+from modelops.services.dask_simulation import DaskSimulationService
 from modelops.services.cache import SimulationCache
 from modelops.services.storage import get_default_backend
 from modelops.services.ipc import from_ipc_tables
@@ -107,7 +108,7 @@ def main():
     print(f"Base seed: {base_seed}")
     
     start = time.time()
-    futures = service.submit_replicates(base_task, n_replicates)
+    futures = service.submit_replicated(base_task, n_replicates)
     print(f"✓ Submitted {len(futures)} futures")
     
     # Show seed derivation

@@ -22,4 +22,4 @@ NUMEXPR_NUM_THREADS=1
 
 - [ ] Infra dependency graph?
 
-
+- [ ] Circuit breaker?

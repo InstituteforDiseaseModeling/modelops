@@ -14,7 +14,7 @@ class StorageBackend(Protocol):
     Implementations include:
     - AzureBlobBackend: Azure Blob Storage
     - LocalFileBackend: Local filesystem (for development)
-    - Future: S3Backend, GCSBackend
+    - Future: GCSBackend
     """
     
     def exists(self, key: str) -> bool:

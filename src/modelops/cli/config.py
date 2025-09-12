@@ -112,7 +112,7 @@ def set(
     """Set a configuration value.
     
     Examples:
-        mops config set pulumi.backend_url s3://my-bucket
+        mops config set pulumi.backend_url azblob://my-container
         mops config set pulumi.organization myorg
         mops config set defaults.environment prod
         mops config set defaults.username alice

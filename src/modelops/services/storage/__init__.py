@@ -15,7 +15,7 @@ def get_cloud_backend(container: str = "cache") -> StorageBackend:
     
     This integrates with infrastructure provisioned by Pulumi:
     - Azure: Uses BlobStorage component outputs via connection string
-    - AWS: Will use S3Storage component outputs (future)
+    - Future: AWS support may be added
     - GCP: Will use GCSStorage component outputs (future)
     
     Args:
@@ -36,8 +36,7 @@ def get_cloud_backend(container: str = "cache") -> StorageBackend:
     
     # AWS detection (future)
     # if os.environ.get("AWS_ACCESS_KEY_ID"):
-    #     logger.info(f"Detected AWS environment, using bucket: {container}")
-    #     return S3Backend(bucket=container)
+    # Future: AWS support may be added here
     
     # GCP detection (future)
     # if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):

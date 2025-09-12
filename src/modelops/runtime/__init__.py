@@ -1,23 +1,7 @@
-"""Runtime utilities for ModelOps."""
+"""Runtime utilities for ModelOps.
 
-from .environment import ensure_bundle, ensure_venv, run_in_env
-from .runners import (
-    SimulationRunner,
-    DirectRunner,
-    BundleRunner,
-    CachedBundleRunner,
-    get_runner,
-)
+This module is being deprecated in favor of the WorkerPlugin architecture.
+"""
 
-__all__ = [
-    # Environment management
-    "ensure_bundle",
-    "ensure_venv",
-    "run_in_env",
-    # Runner protocol and implementations
-    "SimulationRunner",
-    "DirectRunner",
-    "BundleRunner",
-    "CachedBundleRunner",
-    "get_runner",
-]
+# Temporary empty module - functionality moved to WorkerPlugin architecture
+__all__ = []

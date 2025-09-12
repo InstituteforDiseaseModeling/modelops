@@ -1,0 +1,227 @@
+"""Direct execution environment for testing."""
+
+import base64
+import hashlib
+import importlib.metadata
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Dict, Any, Callable
+
+from modelops_contracts import SimTask, SimReturn, TableArtifact, task_id, sim_root
+from modelops_contracts.ports import ExecutionEnvironment, BundleRepository, CAS
+
+logger = logging.getLogger(__name__)
+
+
+class DirectExecEnv(ExecutionEnvironment):
+    """Direct execution environment for testing.
+    
+    This environment executes tasks directly in the current process.
+    Useful for testing and debugging, but provides no isolation.
+    """
+    
+    def __init__(self, bundle_repo: BundleRepository, cas: CAS):
+        """Initialize the execution environment.
+        
+        Args:
+            bundle_repo: Repository for fetching bundles
+            cas: Content-addressable storage for results
+        """
+        self.bundle_repo = bundle_repo
+        self.cas = cas
+        self._wire_fn_cache: Dict[str, Callable] = {}  # Cache wire functions by bundle digest
+    
+    def _discover_wire_function(self, bundle_path: Path) -> Callable:
+        """Discover wire function via Python entry points.
+        
+        Similar to subprocess_runner but runs in-process.
+        
+        Args:
+            bundle_path: Path to the bundle
+            
+        Returns:
+            The wire function callable
+            
+        Raises:
+            RuntimeError: If no wire function found
+        """
+        # Add bundle path to sys.path temporarily
+        if str(bundle_path) not in sys.path:
+            sys.path.insert(0, str(bundle_path))
+        
+        try:
+            # Check if this is the dev bundle (current working directory)
+            import os
+            if str(bundle_path) == os.getcwd():
+                # Use development wire function
+                try:
+                    from examples.dev_wire import wire_function
+                    return wire_function
+                except ImportError:
+                    pass
+            
+            # Look for modelops.wire entry point
+            eps = importlib.metadata.entry_points(group='modelops.wire')
+            
+            if not eps:
+                # For testing, try to import directly from test bundle
+                # This is a fallback for bundles without proper entry points
+                try:
+                    import test_bundle.wire
+                    return test_bundle.wire.wire_function
+                except ImportError:
+                    raise RuntimeError(
+                        "No modelops.wire entry point found. "
+                        "Bundle should register: [project.entry-points.'modelops.wire'] "
+                        "execute = 'module.wire:wire_function'"
+                    )
+            
+            eps_list = list(eps)
+            if len(eps_list) > 1:
+                names = [ep.name for ep in eps_list]
+                raise RuntimeError(f"Multiple modelops.wire entry points found: {names}")
+            
+            # Load the entry point
+            ep = eps_list[0]
+            logger.info(f"Using wire function from entry point: {ep.name} = {ep.value}")
+            return ep.load()
+        finally:
+            # Clean up sys.path
+            if str(bundle_path) in sys.path:
+                sys.path.remove(str(bundle_path))
+    
+    def run(self, task: SimTask) -> SimReturn:
+        """Execute a simulation task directly.
+        
+        Args:
+            task: Simulation task to execute
+            
+        Returns:
+            Simulation result with status and artifacts
+        """
+        try:
+            # Ensure bundle is available locally
+            digest, bundle_path = self.bundle_repo.ensure_local(task.bundle_ref)
+            
+            # Get or discover wire function for this bundle
+            if digest not in self._wire_fn_cache:
+                self._wire_fn_cache[digest] = self._discover_wire_function(bundle_path)
+            wire_fn = self._wire_fn_cache[digest]
+            
+            # Add bundle path to sys.path for execution
+            sys.path.insert(0, str(bundle_path))
+            
+            try:
+                # Execute the wire function
+                logger.info(f"Executing {task.entrypoint} with seed {task.seed}")
+                
+                # Call wire function - it returns Dict[str, bytes]
+                result_bytes = wire_fn(
+                    str(task.entrypoint) if task.entrypoint else "main",
+                    dict(task.params.params),
+                    task.seed
+                )
+                
+                # Process artifacts
+                artifact_refs = {}
+                for name, data in result_bytes.items():
+                    if not isinstance(data, bytes):
+                        logger.warning(f"Wire function returned non-bytes for {name}, converting")
+                        if isinstance(data, str):
+                            data = data.encode()
+                        else:
+                            data = json.dumps(data).encode()
+                    
+                    # Store in CAS
+                    checksum = hashlib.sha256(data).hexdigest()
+                    ref = self.cas.put(data, checksum)
+                    artifact_refs[name] = ref
+                
+                # Create proper sim_root and task_id
+                root = sim_root(
+                    bundle_ref=task.bundle_ref,
+                    params=dict(task.params.params),
+                    seed=task.seed,
+                    entrypoint=str(task.entrypoint) if task.entrypoint else "main"
+                )
+                
+                output_names = tuple(artifact_refs.keys())
+                tid = task_id(
+                    sim_root=root,
+                    entrypoint=str(task.entrypoint) if task.entrypoint else "main",
+                    outputs=output_names
+                )
+                
+                # Create table artifacts
+                outputs = {}
+                for name, ref in artifact_refs.items():
+                    # Get the data back to determine size
+                    data = self.cas.get(ref)
+                    outputs[name] = TableArtifact(
+                        ref=f"cas://{ref}",
+                        checksum=ref,  # ref is the checksum
+                        size=len(data),
+                        inline=None  # Not inlining for direct execution
+                    )
+                
+                return SimReturn(
+                    task_id=tid,
+                    sim_root=root,
+                    outputs=outputs
+                )
+                
+            finally:
+                # Clean up sys.path
+                if str(bundle_path) in sys.path:
+                    sys.path.remove(str(bundle_path))
+                
+        except Exception as e:
+            logger.exception(f"Direct execution failed for bundle {task.bundle_ref}")
+            # Create error result
+            root = sim_root(
+                bundle_ref=task.bundle_ref,
+                params=dict(task.params.params),
+                seed=task.seed,
+                entrypoint=str(task.entrypoint) if task.entrypoint else "main"
+            )
+            tid = task_id(
+                sim_root=root,
+                entrypoint=str(task.entrypoint) if task.entrypoint else "main",
+                outputs=()
+            )
+            
+            # Store error in table
+            error_data = json.dumps({
+                "error": str(e),
+                "type": type(e).__name__,
+                "params": dict(task.params.params),
+                "seed": task.seed
+            }).encode()
+            checksum = hashlib.sha256(error_data).hexdigest()
+            error_ref = self.cas.put(error_data, checksum)
+            
+            return SimReturn(
+                task_id=tid,
+                sim_root=root,
+                outputs={"error": TableArtifact(
+                    ref=f"cas://{error_ref}",
+                    checksum=checksum,
+                    size=len(error_data),
+                    inline=None
+                )}
+            )
+    
+    def health_check(self) -> Dict[str, Any]:
+        """Check health of execution environment."""
+        return {
+            'type': 'direct',
+            'status': 'healthy',
+            'cached_wire_functions': len(self._wire_fn_cache)
+        }
+    
+    def shutdown(self):
+        """Shutdown the execution environment."""
+        logger.info("Shutting down DirectExecEnv")
+        self._wire_fn_cache.clear()

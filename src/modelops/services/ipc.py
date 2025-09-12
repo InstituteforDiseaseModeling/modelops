@@ -37,6 +37,9 @@ def to_ipc_tables(data: Dict[str, Any]) -> Mapping[str, bytes]:
         elif isinstance(value, pa.Table):
             # Already an Arrow table
             table = value
+        elif hasattr(value, '__dataframe__'):
+            # Handle pandas DataFrame (anything following DataFrame protocol)
+            table = pa.Table.from_pandas(value)
         elif isinstance(value, dict):
             # Convert dict to Arrow table via polars for consistency
             # This ensures proper type handling
