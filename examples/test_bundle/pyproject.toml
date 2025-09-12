@@ -1,0 +1,17 @@
+[project]
+name = "test-bundle"
+version = "0.1.0"
+description = "Test simulation bundle for ModelOps"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+]
+
+[project.entry-points."modelops.wire"]
+execute = "test_bundle.wire:wire_function"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from modelops_contracts import SimTask, SimReturn, TableArtifact, task_id, sim_root
+from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo, task_id, sim_root
 from modelops_contracts.ports import ExecutionEnvironment, BundleRepository, CAS
 
 from ...worker.process_manager import WarmProcessManager
@@ -84,6 +84,16 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 seed=task.seed
             )
             
+            # Check if subprocess returned an error
+            if len(artifacts) == 1 and "error" in artifacts:
+                # Subprocess execution failed - decode error and re-raise
+                error_data = base64.b64decode(artifacts["error"])
+                error_info = json.loads(error_data)
+                raise RuntimeError(
+                    f"Subprocess execution failed: {error_info.get('error', 'Unknown error')} "
+                    f"(type: {error_info.get('type', 'Unknown')})"
+                )
+            
             # 3. CAS DECISIONS (infrastructure concern)
             artifact_refs = {}
             for name, data in artifacts.items():
@@ -157,26 +167,46 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 outputs=("error",)
             )
             
-            # Store error as artifact
-            error_data = json.dumps({
+            # Create error info
+            error_info = ErrorInfo(
+                error_type=type(e).__name__,
+                message=str(e),
+                retryable=False  # Could be smarter about this based on error type
+            )
+            
+            # Store full error details as artifact
+            error_details_data = json.dumps({
                 "error": str(e),
                 "type": type(e).__name__,
-                "bundle_ref": task.bundle_ref
+                "bundle_ref": task.bundle_ref,
+                "entrypoint": str(task.entrypoint) if task.entrypoint else "main",
+                "traceback": None  # Could capture traceback if needed
             }).encode()
-            checksum = hashlib.sha256(error_data).hexdigest()
-            error_ref = self.cas.put(error_data, checksum)
+            checksum = hashlib.sha256(error_details_data).hexdigest()
+            
+            # Store in CAS if large, otherwise inline
+            if len(error_details_data) > self.inline_artifact_max_bytes:
+                error_ref = self.cas.put(error_details_data, checksum)
+                error_details = TableArtifact(
+                    ref=f"cas://{error_ref}",
+                    checksum=checksum,
+                    size=len(error_details_data),
+                    inline=None
+                )
+            else:
+                error_details = TableArtifact(
+                    ref=None,
+                    checksum=checksum,
+                    size=len(error_details_data),
+                    inline=error_details_data
+                )
             
             return SimReturn(
                 task_id=tid,
                 sim_root=root,
-                outputs={
-                    "error": TableArtifact(
-                        ref=f"cas://{error_ref}",
-                        checksum=checksum,
-                        size=len(error_data),
-                        inline=None
-                    )
-                }
+                outputs={},  # Empty outputs for error case
+                error=error_info,
+                error_details=error_details
             )
     
     def health_check(self) -> Dict[str, Any]:

@@ -1,13 +1,16 @@
 """Warm process management for efficient subprocess reuse."""
 
 import base64
+import hashlib
 import logging
+import os
 import subprocess
 import sys
+import fcntl
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from .jsonrpc import JSONRPCClient
 
@@ -78,12 +81,24 @@ class WarmProcessManager:
             
             # Verify it's still alive
             if process.is_alive():
-                # Move to end (most recently used)
-                self._processes.move_to_end(bundle_digest)
-                process.use_count += 1
-                logger.debug(f"Reusing warm process for bundle {bundle_digest[:12]} "
-                           f"(use #{process.use_count})")
-                return process
+                # Validate the process still serves the correct digest
+                try:
+                    result = process.client.call("ready", {})
+                    if result.get("bundle_digest") == bundle_digest:
+                        # Move to end (most recently used)
+                        self._processes.move_to_end(bundle_digest)
+                        process.use_count += 1
+                        logger.debug(f"Reusing warm process for bundle {bundle_digest[:12]} "
+                                   f"(use #{process.use_count})")
+                        return process
+                    else:
+                        logger.warning(f"Process digest mismatch for {bundle_digest[:12]}")
+                        process.terminate()
+                        del self._processes[bundle_digest]
+                except Exception as e:
+                    logger.warning(f"Failed to validate process: {e}")
+                    process.terminate()
+                    del self._processes[bundle_digest]
             else:
                 # Process died, remove it
                 logger.warning(f"Warm process for bundle {bundle_digest[:12]} died")
@@ -94,10 +109,149 @@ class WarmProcessManager:
             # Evict least recently used
             self._evict_lru()
         
-        # Create new warm process
-        process = self._create_process(bundle_digest, bundle_path)
+        # Create new warm process with locking to prevent races
+        process = self._create_process_with_lock(bundle_digest, bundle_path)
         self._processes[bundle_digest] = process
         return process
+    
+    def _create_process_with_lock(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
+        """Create process with filesystem lock to prevent concurrent venv creation.
+        
+        Args:
+            bundle_digest: Bundle digest
+            bundle_path: Path to bundle
+            
+        Returns:
+            New WarmProcess
+        """
+        venv_key = self._get_venv_key(bundle_digest, bundle_path)
+        lock_file = self.venvs_dir / f"{venv_key}.lock"
+        
+        # Ensure lock file exists
+        lock_file.touch()
+        
+        with open(lock_file, 'r+') as lock:
+            # Acquire exclusive lock
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                # Check if another process created the venv while we waited
+                venv_path = self.venvs_dir / venv_key
+                python_bin = venv_path / "bin" / "python"
+                
+                if venv_path.exists() and python_bin.exists():
+                    logger.info(f"Venv created by another process: {venv_path}")
+                    # Just start the subprocess, venv already exists
+                    return self._start_subprocess(venv_path, bundle_path, bundle_digest)
+                
+                # Create the process (which creates venv)
+                return self._create_process(bundle_digest, bundle_path)
+            finally:
+                # Release lock
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    
+    def _start_subprocess(self, venv_path: Path, bundle_path: Path, bundle_digest: str) -> WarmProcess:
+        """Start a subprocess with existing venv.
+        
+        Args:
+            venv_path: Path to virtual environment
+            bundle_path: Path to bundle
+            bundle_digest: Bundle digest
+            
+        Returns:
+            New WarmProcess
+        """
+        logger.info(f"Starting subprocess with existing venv: {venv_path}")
+        
+        # Get path to standalone runner script
+        runner_script = Path(__file__).parent / "subprocess_runner.py"
+        if not runner_script.exists():
+            raise RuntimeError(f"Subprocess runner script not found: {runner_script}")
+        
+        # Use venv's Python for true isolation
+        venv_python = venv_path / "bin" / "python"
+        
+        # Clean environment
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"  # Ensure unbuffered output
+        
+        # Start the subprocess with venv's Python and standalone runner
+        process = subprocess.Popen(
+            [
+                str(venv_python),  # Use venv's Python for clean isolation
+                str(runner_script),
+                "--bundle-path", str(bundle_path),
+                "--venv-path", str(venv_path),
+                "--bundle-digest", bundle_digest
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,  # Binary mode for proper Content-Length framing
+            bufsize=0,   # Unbuffered for immediate communication
+            close_fds=True,  # Prevent fd leakage
+            env=env
+        )
+        
+        # Check for immediate failure
+        if process.poll() is not None:
+            # Process died immediately - capture stderr
+            stderr = process.stderr.read() or b"No stderr output"
+            stderr_text = stderr.decode('utf-8', errors='replace') if isinstance(stderr, bytes) else stderr
+            logger.error(f"Subprocess died immediately. Stderr: {stderr_text}")
+            raise RuntimeError(f"Subprocess failed to start: {stderr_text}")
+        
+        # Create JSON-RPC client
+        client = JSONRPCClient(process.stdin, process.stdout)
+        
+        # Wait for ready signal
+        try:
+            result = client.call("ready", {})
+            if not result.get("ready"):
+                raise RuntimeError(f"Process not ready: {result}")
+        except Exception as e:
+            process.terminate()
+            process.wait()
+            raise RuntimeError(f"Failed to initialize process: {e}")
+        
+        return WarmProcess(
+            process=process,
+            client=client,
+            bundle_digest=bundle_digest,
+            use_count=1
+        )
+    
+    def _compute_deps_hash(self, bundle_path: Path) -> str:
+        """Compute hash of dependency files.
+        
+        Args:
+            bundle_path: Path to the bundle
+            
+        Returns:
+            16-character hex digest of dependencies
+        """
+        hasher = hashlib.blake2b(digest_size=8)  # 16 hex chars
+        
+        # Hash lock files and dependency specs
+        for dep_file in ["uv.lock", "poetry.lock", "requirements.txt", "pyproject.toml"]:
+            dep_path = bundle_path / dep_file
+            if dep_path.exists():
+                hasher.update(dep_path.read_bytes())
+        
+        return hasher.hexdigest()
+    
+    def _get_venv_key(self, bundle_digest: str, bundle_path: Path) -> str:
+        """Generate venv directory name with all isolation factors.
+        
+        Args:
+            bundle_digest: Bundle content hash
+            bundle_path: Path to bundle
+            
+        Returns:
+            Venv key like: {digest[:12]}-py3.11-{deps[:8]}
+        """
+        py_version = f"py{sys.version_info.major}.{sys.version_info.minor}"
+        deps_hash = self._compute_deps_hash(bundle_path)
+        return f"{bundle_digest[:12]}-{py_version}-{deps_hash[:8]}"
     
     def _create_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Create a new warm subprocess.
@@ -111,19 +265,44 @@ class WarmProcessManager:
         """
         logger.info(f"Creating warm process for bundle {bundle_digest[:12]}")
         
-        # Set up the virtual environment path
-        venv_path = self.venvs_dir / bundle_digest
+        # Generate venv key with Python version and deps hash
+        venv_key = self._get_venv_key(bundle_digest, bundle_path)
+        venv_path = self.venvs_dir / venv_key
+        logger.info(f"Using venv path: {venv_path}")
         
-        # Create the subprocess
+        # Create venv if it doesn't exist
+        venv_python = venv_path / "bin" / "python"
+        if not venv_path.exists():
+            logger.info(f"Creating new venv at {venv_path}")
+            try:
+                subprocess.run(
+                    ["uv", "venv", str(venv_path)],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to create venv: {e.stderr}")
+                raise
+        
+        # Get path to standalone runner script
+        runner_script = Path(__file__).parent / "subprocess_runner.py"
+        if not runner_script.exists():
+            raise RuntimeError(f"Subprocess runner script not found: {runner_script}")
+        
+        # Clean environment
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"  # Ensure unbuffered output
+        
+        # Create the subprocess using venv's Python
         # The subprocess will:
-        # 1. Set up its virtual environment
-        # 2. Install bundle dependencies
+        # 1. Install bundle dependencies into venv
+        # 2. Discover wire function via entry points
         # 3. Start JSON-RPC server and wait for tasks
         process = subprocess.Popen(
             [
-                sys.executable,
-                "-m",
-                "modelops.worker.subprocess_runner",
+                str(venv_python),  # Use venv's Python for clean isolation
+                str(runner_script),
                 "--bundle-path", str(bundle_path),
                 "--venv-path", str(venv_path),
                 "--bundle-digest", bundle_digest
@@ -131,9 +310,19 @@ class WarmProcessManager:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            bufsize=0  # Unbuffered for real-time communication
+            text=False,  # Binary mode for proper Content-Length framing
+            bufsize=0,   # Unbuffered for immediate communication
+            close_fds=True,  # Prevent fd leakage
+            env=env
         )
+        
+        # Check for immediate failure
+        if process.poll() is not None:
+            # Process died immediately - capture stderr
+            stderr = process.stderr.read() or b"No stderr output"
+            stderr_text = stderr.decode('utf-8', errors='replace') if isinstance(stderr, bytes) else stderr
+            logger.error(f"Subprocess died immediately. Stderr: {stderr_text}")
+            raise RuntimeError(f"Subprocess failed to start: {stderr_text}")
         
         # Create JSON-RPC client for communication
         client = JSONRPCClient(process.stdin, process.stdout)

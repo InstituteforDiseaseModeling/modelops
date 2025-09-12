@@ -7,7 +7,7 @@ message boundary detection over stdio pipes.
 import json
 import logging
 import sys
-from typing import Any, Dict, Optional, TextIO
+from typing import Any, BinaryIO, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +30,20 @@ class JSONRPCProtocol:
     reliable message framing over pipes.
     """
     
-    def __init__(self, input_stream: TextIO = sys.stdin, 
-                 output_stream: TextIO = sys.stdout):
+    def __init__(self, input_stream: BinaryIO = None, 
+                 output_stream: BinaryIO = None):
         """Initialize protocol handler.
         
         Args:
-            input_stream: Input stream to read from
-            output_stream: Output stream to write to
+            input_stream: Binary input stream to read from
+            output_stream: Binary output stream to write to
         """
+        # Default to stdin/stdout in binary mode
+        if input_stream is None:
+            input_stream = sys.stdin.buffer if hasattr(sys.stdin, 'buffer') else sys.stdin
+        if output_stream is None:
+            output_stream = sys.stdout.buffer if hasattr(sys.stdout, 'buffer') else sys.stdout
+            
         self.input_stream = input_stream
         self.output_stream = output_stream
         self._next_id = 1
@@ -105,23 +111,24 @@ class JSONRPCProtocol:
             JSONRPCError: If message is invalid
             EOFError: If stream is closed
         """
-        # Read headers
+        # Read headers (binary mode)
         headers = {}
         while True:
             line = self.input_stream.readline()
             if not line:
                 raise EOFError("Stream closed while reading headers")
             
-            line = line.rstrip('\r\n')
-            if not line:
+            # Decode from bytes and strip CRLF
+            line_str = line.decode('utf-8').rstrip('\r\n')
+            if not line_str:
                 # Empty line marks end of headers
                 break
             
             # Parse header
-            if ':' not in line:
-                raise JSONRPCError(-32700, f"Invalid header: {line}")
+            if ':' not in line_str:
+                raise JSONRPCError(-32700, f"Invalid header: {line_str}")
             
-            key, value = line.split(':', 1)
+            key, value = line_str.split(':', 1)
             headers[key.strip()] = value.strip()
         
         # Check for Content-Length
@@ -133,15 +140,15 @@ class JSONRPCProtocol:
         except ValueError:
             raise JSONRPCError(-32700, f"Invalid Content-Length: {headers['Content-Length']}")
         
-        # Read body
+        # Read body (binary mode - already in bytes)
         body = self.input_stream.read(content_length)
         if len(body) != content_length:
             raise JSONRPCError(-32700, 
                 f"Incomplete message: expected {content_length} bytes, got {len(body)}")
         
-        # Parse JSON
+        # Parse JSON from bytes
         try:
-            message = json.loads(body)
+            message = json.loads(body.decode('utf-8'))
         except json.JSONDecodeError as e:
             raise JSONRPCError(-32700, f"Invalid JSON: {e}")
         
@@ -160,16 +167,16 @@ class JSONRPCProtocol:
         Args:
             message: Message to send
         """
-        # Serialize to JSON
+        # Serialize to JSON and encode to bytes
         body = json.dumps(message, separators=(',', ':'))
         body_bytes = body.encode('utf-8')
         
-        # Write Content-Length header
-        self.output_stream.write(f"Content-Length: {len(body_bytes)}\r\n")
-        self.output_stream.write("\r\n")
+        # Write Content-Length header (as bytes)
+        header = f"Content-Length: {len(body_bytes)}\r\n\r\n"
+        self.output_stream.write(header.encode('utf-8'))
         
-        # Write body
-        self.output_stream.write(body)
+        # Write body (as bytes - this was the bug!)
+        self.output_stream.write(body_bytes)
         self.output_stream.flush()
 
 
@@ -245,12 +252,12 @@ class JSONRPCServer:
 class JSONRPCClient:
     """Simple JSON-RPC client for parent process side."""
     
-    def __init__(self, stdin: TextIO, stdout: TextIO):
+    def __init__(self, stdin: BinaryIO, stdout: BinaryIO):
         """Initialize client with stdin/stdout of subprocess.
         
         Args:
-            stdin: Subprocess stdin (for writing)
-            stdout: Subprocess stdout (for reading)
+            stdin: Subprocess stdin (for writing) - binary mode
+            stdout: Subprocess stdout (for reading) - binary mode
         """
         # Note: We write to subprocess stdin and read from its stdout
         self.protocol = JSONRPCProtocol(input_stream=stdout, output_stream=stdin)

@@ -4,11 +4,8 @@ from modelops_contracts import (
     SimulationService, SimReturn, Future, UniqueParameterSet,
     Scalar, make_param_id, SimTask, EntryPointId
 )
-from typing import Any, List, Optional, Union, Dict, Tuple, Callable
+from typing import List, Optional
 import logging
-import os
-import numpy as np
-from .utils import resolve_function, import_function
 from .cache import SimulationCache
 # from .aggregation import AggregationService  # TODO: Update for new SimTask interface
 
@@ -112,7 +109,7 @@ class BaseSimulationService(SimulationService):
             replicate = SimTask(
                 entrypoint=task.entrypoint,
                 params=task.params,
-                seed=task.seed + seed_offset + i,
+                seed=task.seed + seed_offset + i, # TODO -- better seed policy needed?
                 bundle_ref=task.bundle_ref
             )
             
@@ -121,35 +118,6 @@ class BaseSimulationService(SimulationService):
         
         return futures
     
-    def gather_and_aggregate(self, futures: List[Future[SimReturn]],
-                             aggregator: Union[str, Callable]) -> SimReturn:
-        """Gather and aggregate with support for both string refs and callables.
-        
-        Execution strategy depends on aggregator type:
-        - String refs ("module:function"): Aggregation runs ON workers,
-          avoiding data transfer of all replicates to client
-        - Callable objects: Runs locally after gathering all results
-        
-        Args:
-            futures: List of futures from replicated simulations
-            aggregator: Either:
-                - String reference like "numpy:mean" or "mymodule:aggregate_fn"
-                - Callable that takes List[SimReturn] -> SimReturn
-                
-        Returns:
-            Aggregated result as SimReturn
-        """
-        if isinstance(aggregator, str):
-            # For string refs, resolve to function
-            aggregator = resolve_function(aggregator)
-        
-        # Local aggregation (LocalSimulationService or callable aggregator)
-        results = self.gather(futures)
-        
-        if callable(aggregator):
-            return aggregator(results)
-        else:
-            raise ValueError(f"Invalid aggregator type: {type(aggregator)}")
 
 
 class LocalSimulationService(BaseSimulationService):
@@ -181,6 +149,7 @@ class LocalSimulationService(BaseSimulationService):
         # Create bundle repository based on config
         if config.bundle_source == "file":
             bundle_repo = FileBundleRepository(
+                # TODO fix?
                 bundles_dir=config.bundles_dir or "/tmp/modelops/bundles",
                 cache_dir=config.bundles_cache_dir
             )

@@ -34,6 +34,12 @@ class RuntimeConfig:
     mem_limit_bytes: Optional[int] = None
     inline_artifact_max_bytes: int = 64_000  # Artifacts smaller than this are inlined
     
+    # Process pool configuration
+    force_fresh_venv: bool = False  # Never reuse venvs (for debugging)
+    validate_deps_on_reuse: bool = True  # Check deps haven't changed
+    max_process_reuse_count: int = 1000  # Restart after N uses (future)
+    process_ttl_seconds: int = 3600  # Max age before restart (future)
+    
     @classmethod
     def from_env(cls) -> "RuntimeConfig":
         """Load configuration from environment variables.
@@ -68,6 +74,12 @@ class RuntimeConfig:
         mem_limit = os.environ.get("MODELOPS_MEM_LIMIT_BYTES")
         if mem_limit:
             config.mem_limit_bytes = int(mem_limit)
+        
+        # Process pool configuration
+        config.force_fresh_venv = os.environ.get("MODELOPS_FORCE_FRESH_VENV", "false").lower() == "true"
+        config.validate_deps_on_reuse = os.environ.get("MODELOPS_VALIDATE_DEPS", "true").lower() == "true"
+        config.max_process_reuse_count = int(os.environ.get("MODELOPS_MAX_PROCESS_REUSE", config.max_process_reuse_count))
+        config.process_ttl_seconds = int(os.environ.get("MODELOPS_PROCESS_TTL", config.process_ttl_seconds))
         
         return config
     

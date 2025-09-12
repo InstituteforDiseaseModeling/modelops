@@ -1,8 +1,11 @@
 """File-based bundle repository for local development."""
 
+import fcntl
 import hashlib
 import logging
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Tuple
 
@@ -55,7 +58,6 @@ class FileBundleRepository:
         # Handle special development bundle ref
         if bundle_ref == "local://dev":
             # Use current working directory for development
-            import os
             source_path = Path(os.getcwd())
         elif bundle_ref.startswith("file://"):
             # Strip file:// prefix if present
@@ -97,16 +99,43 @@ class FileBundleRepository:
             logger.info(f"Bundle {digest[:12]} already cached at {cache_path}")
             return digest, cache_path
         
-        # Copy bundle to cache
-        logger.info(f"Caching bundle from {source_path} to {cache_path}")
-        try:
-            shutil.copytree(source_path, cache_path)
-            return digest, cache_path
-        except Exception as e:
-            # Clean up on failure
-            if cache_path.exists():
-                shutil.rmtree(cache_path)
-            raise ValueError(f"Failed to cache bundle: {e}")
+        # Use file locking to prevent concurrent caching
+        lock_file = self.cache_dir / f".{digest}.lock"
+        lock_file.touch()  # Ensure lock file exists
+        
+        with open(lock_file, 'r+') as lock:
+            # Acquire exclusive lock
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                # Double-check after acquiring lock (another process may have cached it)
+                if cache_path.exists():
+                    logger.info(f"Bundle {digest[:12]} cached by another process")
+                    return digest, cache_path
+                
+                # Copy bundle to cache atomically
+                logger.info(f"Caching bundle from {source_path} to {cache_path}")
+                
+                # Use temp directory in same filesystem for atomic move
+                temp_dir = tempfile.mkdtemp(dir=self.cache_dir, prefix=f".tmp_{digest[:8]}_")
+                temp_path = Path(temp_dir) / "bundle"
+                
+                try:
+                    shutil.copytree(source_path, temp_path)
+                    # Atomic rename (on same filesystem)
+                    os.replace(temp_path, cache_path)
+                    # Clean up temp dir
+                    os.rmdir(temp_dir)
+                    return digest, cache_path
+                except Exception as e:
+                    # Clean up on failure
+                    if Path(temp_dir).exists():
+                        shutil.rmtree(temp_dir)
+                    if cache_path.exists():
+                        shutil.rmtree(cache_path)
+                    raise ValueError(f"Failed to cache bundle: {e}")
+            finally:
+                # Release lock
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     
     def _compute_digest(self, path: Path) -> str:
         """Compute SHA256 digest of a directory.

@@ -45,7 +45,7 @@ def create_test_tasks(bundle_ref: str, n_tasks: int = 5) -> List[SimTask]:
         param_dict = {
             "alpha": 0.1 * (i + 1),
             "beta": 2.0,
-            "n_samples": 10000
+            "n_samples": 100  # Reduced to avoid large messages
         }
         params = UniqueParameterSet(
             params=param_dict,
@@ -75,7 +75,8 @@ def main():
     bundle_ref = "file:///Users/vsb/projects/work/modelops/examples/test_bundle"
     
     # Set up runtime configuration
-    os.environ["MODELOPS_EXECUTOR_TYPE"] = "direct"  # Use direct execution for testing
+    # os.environ["MODELOPS_EXECUTOR_TYPE"] = "direct"  # Use direct execution for testing
+    os.environ["MODELOPS_EXECUTOR_TYPE"] = "isolated_warm"
     os.environ["MODELOPS_BUNDLE_SOURCE"] = "file"
     os.environ["MODELOPS_BUNDLES_DIR"] = "/Users/vsb/projects/work/modelops/examples"
     os.environ["MODELOPS_CAS_BACKEND"] = "memory"
@@ -120,12 +121,29 @@ def main():
         print(f"     Seed: {task.seed}")
         print(f"     Params: {dict(task.params.params)}")
         print(f"     Task ID: {result.task_id[:16]}...")
-        print(f"     Outputs: {list(result.outputs.keys())}")
-        if "error" in result.outputs:
-            print(f"     ERROR: Task failed")
+        
+        # Check for errors using the new error field
+        if result.error:
+            print(f"     Status: FAILED")
+            print(f"     Error: {result.error.message}")
+            print(f"     Error Type: {result.error.error_type}")
+            print(f"     Retryable: {result.error.retryable}")
+            
+            # Optionally decode full error details if needed
+            if result.error_details and result.error_details.inline:
+                import json
+                try:
+                    details = json.loads(result.error_details.inline)
+                    if 'entrypoint' in details:
+                        print(f"     Entrypoint: {details['entrypoint']}")
+                except Exception:
+                    pass  # Ignore decode errors for details
+        else:
+            print(f"     Status: SUCCESS")
+            print(f"     Outputs: {list(result.outputs.keys())}")
     
     # Check success
-    successful = sum(1 for r in results if "table" in r.outputs)
+    successful = sum(1 for r in results if not r.error and "table" in r.outputs)
     print(f"\n7. Summary: {successful}/{len(results)} tasks completed successfully")
     
     # Clean up
