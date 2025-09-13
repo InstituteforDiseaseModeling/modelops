@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import fcntl
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,16 +52,18 @@ class WarmProcessManager:
     when the pool is full.
     """
     
-    def __init__(self, max_processes: int = 128, venvs_dir: Path = Path("/tmp/modelops/venvs")):
+    def __init__(self, max_processes: int = 128, venvs_dir: Path = Path("/tmp/modelops/venvs"), force_fresh_venv: bool = False):
         """Initialize the process manager.
         
         Args:
             max_processes: Maximum number of warm processes to maintain
             venvs_dir: Directory for virtual environments
+            force_fresh_venv: Force fresh venv creation for each execution (debugging)
         """
         self.max_processes = max_processes
         self.venvs_dir = Path(venvs_dir)
         self.venvs_dir.mkdir(parents=True, exist_ok=True)
+        self.force_fresh_venv = force_fresh_venv
         
         # Use OrderedDict for LRU behavior
         self._processes: OrderedDict[str, WarmProcess] = OrderedDict()
@@ -75,6 +78,19 @@ class WarmProcessManager:
         Returns:
             WarmProcess ready to execute tasks
         """
+        # Skip cache entirely when forcing fresh venvs
+        if self.force_fresh_venv:
+            logger.info(f"Forcing fresh venv for bundle {bundle_digest[:12]} (MODELOPS_FORCE_FRESH_VENV=true)")
+            # Still need to check pool size
+            if len(self._processes) >= self.max_processes:
+                self._evict_lru()
+            # Create new process with unique venv
+            process = self._create_process_with_lock(bundle_digest, bundle_path)
+            # Use a unique key for storage to prevent reuse
+            unique_key = f"{bundle_digest}-{uuid.uuid4().hex[:8]}"
+            self._processes[unique_key] = process
+            return process
+        
         # Check if we have a warm process for this digest
         if bundle_digest in self._processes:
             process = self._processes[bundle_digest]
@@ -194,11 +210,21 @@ class WarmProcessManager:
         
         # Check for immediate failure
         if process.poll() is not None:
-            # Process died immediately - capture stderr
-            stderr = process.stderr.read() or b"No stderr output"
-            stderr_text = stderr.decode('utf-8', errors='replace') if isinstance(stderr, bytes) else stderr
-            logger.error(f"Subprocess died immediately. Stderr: {stderr_text}")
-            raise RuntimeError(f"Subprocess failed to start: {stderr_text}")
+            # Process died immediately - capture all available output
+            stderr = process.stderr.read() if process.stderr else b""
+            stdout = process.stdout.read() if process.stdout else b""
+            
+            # Decode with error handling
+            stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "No stderr output"
+            stdout_text = stdout.decode('utf-8', errors='replace') if stdout else "No stdout output"
+            
+            logger.error(f"Subprocess died immediately with exit code {process.returncode}")
+            logger.error(f"Stderr: {stderr_text}")
+            logger.error(f"Stdout: {stdout_text}")
+            
+            # Include both in error message for debugging
+            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}\nStdout: {stdout_text}"
+            raise RuntimeError(error_msg)
         
         # Create JSON-RPC client
         client = JSONRPCClient(process.stdin, process.stdout)
@@ -248,10 +274,18 @@ class WarmProcessManager:
             
         Returns:
             Venv key like: {digest[:12]}-py3.11-{deps[:8]}
+            Or with force_fresh_venv: {digest[:12]}-py3.11-{deps[:8]}-{uuid[:8]}
         """
         py_version = f"py{sys.version_info.major}.{sys.version_info.minor}"
         deps_hash = self._compute_deps_hash(bundle_path)
-        return f"{bundle_digest[:12]}-{py_version}-{deps_hash[:8]}"
+        base_key = f"{bundle_digest[:12]}-{py_version}-{deps_hash[:8]}"
+        
+        # Add unique suffix when forcing fresh venvs
+        if self.force_fresh_venv:
+            unique_id = str(uuid.uuid4())[:8]
+            return f"{base_key}-{unique_id}"
+        
+        return base_key
     
     def _create_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Create a new warm subprocess.
@@ -318,11 +352,21 @@ class WarmProcessManager:
         
         # Check for immediate failure
         if process.poll() is not None:
-            # Process died immediately - capture stderr
-            stderr = process.stderr.read() or b"No stderr output"
-            stderr_text = stderr.decode('utf-8', errors='replace') if isinstance(stderr, bytes) else stderr
-            logger.error(f"Subprocess died immediately. Stderr: {stderr_text}")
-            raise RuntimeError(f"Subprocess failed to start: {stderr_text}")
+            # Process died immediately - capture all available output
+            stderr = process.stderr.read() if process.stderr else b""
+            stdout = process.stdout.read() if process.stdout else b""
+            
+            # Decode with error handling
+            stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "No stderr output"
+            stdout_text = stdout.decode('utf-8', errors='replace') if stdout else "No stdout output"
+            
+            logger.error(f"Subprocess died immediately with exit code {process.returncode}")
+            logger.error(f"Stderr: {stderr_text}")
+            logger.error(f"Stdout: {stdout_text}")
+            
+            # Include both in error message for debugging
+            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}\nStdout: {stdout_text}"
+            raise RuntimeError(error_msg)
         
         # Create JSON-RPC client for communication
         client = JSONRPCClient(process.stdin, process.stdout)

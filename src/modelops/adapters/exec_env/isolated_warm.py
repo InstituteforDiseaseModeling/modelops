@@ -30,7 +30,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         venvs_dir: Path,
         mem_limit_bytes: Optional[int] = None,
         max_warm_processes: int = 128,
-        inline_artifact_max_bytes: int = 64_000
+        inline_artifact_max_bytes: int = 64_000,
+        force_fresh_venv: bool = False
     ):
         """Initialize the execution environment.
         
@@ -41,6 +42,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             mem_limit_bytes: Optional memory limit per process
             max_warm_processes: Maximum number of warm processes
             inline_artifact_max_bytes: Max size for inline artifacts (vs CAS)
+            force_fresh_venv: Force fresh venv creation for each execution (debugging)
         """
         self.bundle_repo = bundle_repo
         self.cas = cas
@@ -51,7 +53,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         # Create process manager
         self._process_manager = WarmProcessManager(
             venvs_dir=venvs_dir,
-            max_processes=max_warm_processes
+            max_processes=max_warm_processes,
+            force_fresh_venv=force_fresh_venv
         )
     
     def run(self, task: SimTask) -> SimReturn:

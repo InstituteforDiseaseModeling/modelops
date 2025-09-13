@@ -231,3 +231,39 @@ Critical test scenarios:
 5. Process death handled gracefully
 6. LRU eviction works correctly
 7. Python version isolation maintained
+
+## Performance Benchmarks
+
+### Warm Process Pool vs Fresh Venv Creation
+
+Benchmark comparing cached venv reuse vs forced fresh venv creation for every execution:
+
+```bash
+hyperfine \
+  --command-name 'cached venv' \
+    'uv run python examples/test_simulation_e2e.py' \
+  --command-name 'fresh venv' \
+    'MODELOPS_FORCE_FRESH_VENV=true uv run python examples/test_simulation_e2e.py'
+```
+
+**Results:**
+```
+Benchmark 1: cached venv
+  Time (mean ± σ):      2.582 s ±  0.371 s    [User: 0.326 s, System: 0.088 s]
+  Range (min … max):    2.390 s …  3.606 s    10 runs
+
+Benchmark 2: fresh venv
+  Time (mean ± σ):     42.486 s ±  2.603 s    [User: 0.395 s, System: 0.124 s]
+  Range (min … max):   40.659 s … 49.510 s    10 runs
+
+Summary
+  cached venv ran
+   16.45 ± 2.57 times faster than fresh venv
+```
+
+**Key Findings:**
+- Warm process pool provides **16.45x speedup** over fresh venv creation
+- Cached execution: ~2.6 seconds average
+- Fresh venv creation: ~42.5 seconds average
+- The performance gain justifies the added complexity of process pool management
+- `MODELOPS_FORCE_FRESH_VENV=true` remains available for debugging dependency issues

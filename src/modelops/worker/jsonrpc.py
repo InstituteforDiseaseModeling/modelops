@@ -129,16 +129,17 @@ class JSONRPCProtocol:
                 raise JSONRPCError(-32700, f"Invalid header: {line_str}")
             
             key, value = line_str.split(':', 1)
-            headers[key.strip()] = value.strip()
+            # Store headers with lowercase keys for case-insensitive lookup
+            headers[key.strip().lower()] = value.strip()
         
-        # Check for Content-Length
-        if 'Content-Length' not in headers:
+        # Check for Content-Length (case-insensitive)
+        if 'content-length' not in headers:
             raise JSONRPCError(-32700, "Missing Content-Length header")
         
         try:
-            content_length = int(headers['Content-Length'])
+            content_length = int(headers['content-length'])
         except ValueError:
-            raise JSONRPCError(-32700, f"Invalid Content-Length: {headers['Content-Length']}")
+            raise JSONRPCError(-32700, f"Invalid Content-Length: {headers['content-length']}")
         
         # Read body (binary mode - already in bytes)
         body = self.input_stream.read(content_length)

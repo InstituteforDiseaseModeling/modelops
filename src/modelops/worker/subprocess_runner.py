@@ -2,13 +2,46 @@
 """
 Standalone subprocess runner for isolated execution.
 
-- No dependency on ModelOps; JSON-RPC is inlined below.
-- Executed by WarmProcessManager *with the venv's Python interpreter*.
-- Communicates via JSON-RPC 2.0 over stdin/stdout using Content-Length framing.
+CRITICAL: This module MUST remain standalone with NO ModelOps dependencies!
+
+Why standalone is absolutely necessary:
+
+1. This script runs inside isolated virtual environments (venvs) that contain
+   ONLY the researcher/user's bundle dependencies, not ModelOps itself.
+   
+2. Environment isolation is crucial for:
+   - Preventing dependency conflicts between bundles and ModelOps
+   - Ensuring reproducible execution environments
+   - Allowing bundles with incompatible dependencies to run on the same system
+   - Maintaining clean separation between infrastructure (ModelOps) and science (bundles)
+
+3. Even if ModelOps were available on PyPI, we would NOT install it in bundle
+   venvs because:
+   - Bundles may require different versions of libraries that ModelOps uses
+   - We don't want bundle code to accidentally import/depend on ModelOps
+   - The bundle environment should be exactly what the scientist specified
+
+4. Communication pattern:
+   - WarmProcessManager (has ModelOps) spawns this script with venv's Python
+   - WarmProcess in proces_manager.py does use the jsonrpc.py module in ModelOps
+   - This script (no ModelOps) runs inside the venv
+   - Communication via JSON-RPC 2.0 over stdin/stdout (language-agnostic)
+   - All data serialized to JSON/base64 for clean boundary
+
+5. Why JSON-RPC is inlined here:
+   - Cannot import from modelops.worker.jsonrpc (ModelOps not in venv)
+   - Must be self-contained for true isolation
+   - The protocol is simple enough to inline without issues
+
+Debugging note: After extensive debugging, we found that mixing Python
+environments (parent with ModelOps, child without) caused subtle issues.
+The solution is complete isolation with this standalone runner.
 """
 
 import argparse
 import base64
+import contextlib
+import fcntl
 import hashlib
 import json
 import logging
@@ -16,8 +49,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # -----------------------------------------------------------------------------
 # Logging (stderr only; stdout is reserved for JSON-RPC)
@@ -62,17 +96,19 @@ class JSONRPCProtocol:
 
     def read_message(self) -> Dict[str, Any]:
         headers: Dict[str, str] = {}
-        # Read headers until CRLF
+        # Read headers until blank line (accept CRLF or LF)
         while True:
             line = self._in.readline()
             if not line:
                 raise EOFError("stdin closed")
-            if line == b"\r\n":
+            # Accept both CRLF and LF as blank line delimiter
+            if line in (b"\r\n", b"\n"):
                 break
             s = line.decode("utf-8").rstrip("\r\n")
             if ":" not in s:
                 raise JSONRPCError(-32700, f"Invalid header: {s}")
             k, v = s.split(":", 1)
+            # Store headers with lowercase keys for case-insensitive lookup
             headers[k.strip().lower()] = v.strip()
 
         if "content-length" not in headers:
@@ -140,6 +176,14 @@ class SubprocessRunner:
     def _setup(self) -> None:
         logger.info("Setting up bundle %s", self.bundle_digest[:12])
         logger.info("Interpreter: %s", sys.executable)
+        
+        # Validate we're running in the expected venv
+        if not sys.executable.startswith(str(self.venv_path)):
+            logger.warning(
+                "Interpreter mismatch: expected %s/bin/python, got %s",
+                self.venv_path, sys.executable
+            )
+        
         deps_marker = self.venv_path / ".deps_installed"
         wanted = self._deps_fingerprint()
 
@@ -147,15 +191,78 @@ class SubprocessRunner:
         if deps_marker.exists():
             have = deps_marker.read_text().strip()
             if have == wanted:
-                need_install = False
+                # Functional verification: try to discover the wire function
+                # This is the ultimate test that everything is properly installed
+                try:
+                    # Try to discover wire function (but don't save it yet)
+                    test_wire = self._discover_wire_function()
+                    # If we got here, installation is good
+                    need_install = False
+                    logger.info("Dependencies verified (wire function discovered successfully)")
+                except Exception as e:
+                    # Discovery failed - packages not properly installed
+                    logger.warning("Marker exists but wire discovery failed (%s), will reinstall", e)
+                    # Delete the bad marker
+                    if deps_marker.exists():
+                        deps_marker.unlink()
+                    need_install = True
 
         if need_install:
-            self._install_dependencies()
-            deps_marker.write_text(wanted)
+            # Use file locking to prevent concurrent installations
+            lock_file = self.venv_path / ".install.lock"
+            lock_file.touch(exist_ok=True)
+            
+            with open(lock_file, 'r+') as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    # Check again after acquiring lock (double-check pattern)
+                    if deps_marker.exists():
+                        have = deps_marker.read_text().strip()
+                        if have == wanted:
+                            logger.info("Dependencies installed by another process")
+                            need_install = False
+                    
+                    if need_install:
+                        try:
+                            self._install_dependencies()
+                            # Only write marker if installation succeeded
+                            self._atomic_write(deps_marker, wanted)
+                        except Exception as e:
+                            logger.error("Failed to install dependencies: %s", e)
+                            # Clean up bad marker if it somehow exists
+                            if deps_marker.exists():
+                                deps_marker.unlink()
+                            # Don't write marker if installation failed
+                            raise
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
         self.wire_fn = self._discover_wire_function()
 
-    def _run(self, cmd: list[str]) -> None:
+    def _atomic_write(self, path: Path, content: str) -> None:
+        """Write file atomically using temp file + rename.
+        
+        Args:
+            path: Target file path
+            content: Content to write
+        """
+        # Create temp file in same directory for atomic rename
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp"
+        )
+        try:
+            os.write(temp_fd, content.encode('utf-8'))
+            os.close(temp_fd)
+            # Atomic rename (on same filesystem)
+            os.replace(temp_path, path)
+        except:
+            os.close(temp_fd)
+            os.unlink(temp_path)
+            raise
+    
+    def _run(self, cmd: list) -> None:
         logger.info("Running: %s", " ".join(cmd))
         env = {**os.environ, "PYTHONNOUSERSITE": "1"}  # keep user-site out
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -166,18 +273,25 @@ class SubprocessRunner:
             raise RuntimeError(f"Install failed: {' '.join(cmd)}")
 
     def _install_dependencies(self) -> None:
+        logger.info("Installing dependencies for bundle at %s", self.bundle_path)
         pyproject = self.bundle_path / "pyproject.toml"
         requirements = self.bundle_path / "requirements.txt"
 
         # Prefer uv if present (fast), else pip
+        # IMPORTANT: We ARE running inside the venv (sys.executable is venv python)
+        # But uv needs to be told which Python to use explicitly
         uv = shutil.which("uv")
         if pyproject.exists():
+            logger.info("Found pyproject.toml, installing with %s", "uv" if uv else "pip")
             if uv:
+                # Need --python flag to tell uv which venv to install into
                 self._run([uv, "pip", "install", "--python", sys.executable, str(self.bundle_path)])
             else:
                 self._run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", str(self.bundle_path)])
         elif requirements.exists():
+            logger.info("Found requirements.txt, installing with %s", "uv" if uv else "pip")
             if uv:
+                # Need --python flag to tell uv which venv to install into
                 self._run([uv, "pip", "install", "--python", sys.executable, "-r", str(requirements)])
             else:
                 self._run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", str(requirements)])
@@ -298,7 +412,11 @@ class SubprocessRunner:
 
         logger.info("Executing %s (seed=%s)", entrypoint, seed)
         try:
-            result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
+            # Redirect stdout to stderr during wire function execution
+            # This prevents user prints from corrupting JSON-RPC frames
+            with contextlib.redirect_stdout(sys.stderr):
+                result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
+            
             artifacts: Dict[str, str] = {}
             for name, data in result_bytes.items():
                 if not isinstance(data, (bytes, bytearray)):

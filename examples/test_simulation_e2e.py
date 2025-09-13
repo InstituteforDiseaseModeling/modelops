@@ -148,7 +148,12 @@ def main():
     
     # Clean up
     client.close()
-    print("\n✅ Test complete!")
+    
+    # Show appropriate status emoji
+    if successful == len(results):
+        print("\n✅ Test complete!")
+    else:
+        print("\n❌ Test failed!")
     
     return successful == len(results)
 

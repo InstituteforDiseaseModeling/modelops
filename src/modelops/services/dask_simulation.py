@@ -36,6 +36,7 @@ def _worker_run_task(task: SimTask) -> SimReturn:
     return worker.modelops_runtime.execute(task)
 
 
+
 class DaskFutureAdapter:
     """Adapt Dask Future to our Future protocol."""
     

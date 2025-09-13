@@ -186,7 +186,9 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
                 cas=cas,
                 venvs_dir=Path(config.venvs_dir),
                 mem_limit_bytes=config.mem_limit_bytes,
-                max_warm_processes=config.max_warm_processes
+                max_warm_processes=config.max_warm_processes,
+                inline_artifact_max_bytes=config.inline_artifact_max_bytes,
+                force_fresh_venv=config.force_fresh_venv
             )
         elif config.executor_type == 'direct':
             # Simple in-process execution for testing
