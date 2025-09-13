@@ -49,3 +49,12 @@ dev = [
 
 [tool.hatch.build]
 packages = ["src/modelops", "examples"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: Integration tests that require Dask cluster",
+    "slow: Tests that take a long time to run",
+]
+# Run unit tests by default, integration tests with: pytest -m integration
+addopts = "-m 'not integration'"

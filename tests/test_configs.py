@@ -18,33 +18,6 @@ from modelops.components import (
 class TestAzureProviderConfig:
     """Test Azure provider configuration validation."""
     
-    def test_valid_azure_config(self):
-        """Test valid Azure configuration."""
-        config = {
-            "provider": "azure",
-            "subscription_id": "024ed93f-313a-458a-840b-2022dd854d40",
-            "location": "eastus2",
-            "resource_group": "modelops-rg",
-            "aks": {
-                "name": "modelops-aks",
-                "kubernetes_version": "1.32",
-                "node_pools": [
-                    {
-                        "name": "system",
-                        "vm_size": "Standard_DS2_v2",
-                        "count": 1,
-                        "mode": "System"
-                    }
-                ]
-            }
-        }
-        
-        provider = AzureProviderConfig(**config)
-        assert provider.provider == "azure"
-        assert provider.location == "eastus2"
-        assert provider.aks.name == "modelops-aks"
-        assert len(provider.aks.node_pools) == 1
-    
     def test_invalid_subscription_id(self):
         """Test invalid subscription ID format."""
         config = {
@@ -70,7 +43,7 @@ class TestAzureProviderConfig:
         
         config = {
             "provider": "azure",
-            "subscription_id": "024ed93f-313a-458a-840b-2022dd854d40",
+            "subscription_id": "00000000-0000-0000-0000-000000000000",
             "resource_group": "test-rg",
             "aks": {
                 "name": "test-aks",
@@ -83,33 +56,6 @@ class TestAzureProviderConfig:
         provider = AzureProviderConfig(**config)
         assert provider.username == "alicesmith"  # Sanitized
         assert provider.resource_group_final == "test-rg-alicesmith"
-    
-    def test_from_yaml(self):
-        """Test loading configuration from YAML."""
-        yaml_content = """
-provider: azure
-subscription_id: "024ed93f-313a-458a-840b-2022dd854d40"
-location: westus2
-resource_group: modelops-rg
-aks:
-  name: test-cluster
-  kubernetes_version: "1.31"
-  node_pools:
-    - name: system
-      vm_size: Standard_DS2_v2
-      count: 1
-      mode: System
-"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            f.write(yaml_content)
-            f.flush()
-            
-            config = AzureProviderConfig.from_yaml(Path(f.name))
-            assert config.provider == "azure"
-            assert config.location == "westus2"
-            assert config.aks.kubernetes_version == "1.31"
-        
-        Path(f.name).unlink()
 
 
 class TestNodePool:

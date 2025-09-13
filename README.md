@@ -1,27 +1,41 @@
 # ModelOps
 
-Infrastructure orchestration for distributed machine learning experimentation and optimization.
+[![Tests](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml)
+
+Infrastructure orchestration for distributed machine learning experimentation
+and optimization.
 
 ## Overview
 
-ModelOps provides the infrastructure layer ("the hands") for running distributed ML experiments, implementing the contracts defined in `modelops-contracts` and providing runtime infrastructure for `calabaria` (the science/algorithm layer).
+ModelOps provides the infrastructure layer ("the hands") for running
+distributed ML experiments, implementing the contracts defined in
+`modelops-contracts` and providing runtime infrastructure for `calabaria` (the
+science/algorithm layer).
 
 ## Architecture
 
 ModelOps implements a four-stack architecture using Pulumi:
 
-1. **Registry Stack** (`mops registry`): Creates container registry (ACR for Azure)
-2. **Infrastructure Stack** (`mops infra`): Creates cloud resources (AKS, resource groups, networking)
-3. **Workspace Stack** (`mops workspace`): Deploys Dask clusters on Kubernetes for simulation execution
-4. **Adaptive Stack** (`mops adaptive`): Manages ephemeral optimization runs (Optuna, MCMC, etc.)
+1. **Registry Stack** (`mops registry`): Creates container registry (ACR for
+   Azure)
+2. **Infrastructure Stack** (`mops infra`): Creates cloud resources (AKS,
+   resource groups, networking)
+3. **Workspace Stack** (`mops workspace`): Deploys Dask clusters on Kubernetes
+   for simulation execution
+4. **Adaptive Stack** (`mops adaptive`): Manages ephemeral optimization runs
+   (Optuna, MCMC, etc.)
 
-Each stack references outputs from previous stacks using Pulumi StackReferences, enabling clean separation of concerns and independent lifecycle management.
+Each stack references outputs from previous stacks using Pulumi
+StackReferences, enabling clean separation of concerns and independent
+lifecycle management.
 
 ### Key Components
 
 - **SimulationService**: Implementations for local and distributed execution
-- **Four-Stack Management**: Pulumi-based infrastructure provisioning with registry isolation
-- **Provider Abstraction**: Cloud-agnostic infrastructure management (Azure MVP, AWS/GCP coming)
+- **Four-Stack Management**: Pulumi-based infrastructure provisioning with
+  registry isolation
+- **Provider Abstraction**: Cloud-agnostic infrastructure management (Azure
+  MVP, AWS/GCP coming)
 - **Centralized Naming**: Consistent resource naming across environments
 
 ## Installation

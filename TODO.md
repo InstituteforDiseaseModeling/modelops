@@ -15,7 +15,6 @@ MKL_NUM_THREADS=1
 NUMEXPR_NUM_THREADS=1
 ```
 
-- [ ] Is `runners.py` deprecated?
 
 - [ ] Can we test the simulation service on local Dask easily? Especially
   aggregations to prevent regressions.

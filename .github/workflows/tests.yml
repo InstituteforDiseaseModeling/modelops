@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: modelops
+
+      - name: Checkout modelops-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: vsbuffalo/modelops-contracts
+          path: modelops-contracts
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout modelops-bundle
+        uses: actions/checkout@v4
+        with:
+          repository: vsbuffalo/modelops-bundle
+          path: modelops-bundle
+          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up uv with Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-dependency-glob: |
+            **/pyproject.toml
+            **/uv.lock
+
+      - name: Sync dependencies
+        run: |
+          cd modelops
+          uv sync --frozen
+
+      - name: Run unit tests
+        run: |
+          cd modelops
+          uv run pytest tests/ --cov=src/modelops --cov-report=term-missing -v
+
+      - name: Run integration tests
+        run: |
+          cd modelops
+          uv run pytest tests/integration/ -m integration -v

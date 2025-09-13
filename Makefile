@@ -88,9 +88,17 @@ help:
 install:
 	uv sync
 
-## Run tests
+## Run unit tests (default)
 test:
 	uv run pytest tests/
+
+## Run integration tests (requires more resources)
+test-integration:
+	uv run pytest tests/ -m integration -v
+
+## Run all tests (unit + integration)
+test-all:
+	uv run pytest tests/ -m "" -v
 
 ## Run linters
 lint:
