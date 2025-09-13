@@ -58,6 +58,13 @@ help:
 	@echo "  make test              # Run tests"
 	@echo "  make lint              # Run linters"
 	@echo ""
+	@echo "Local Dask Commands:"
+	@echo "  make dask-local        # Start local Dask cluster"
+	@echo "  make dask-stop         # Stop local Dask cluster"
+	@echo "  make test-e2e          # Run e2e tests with Dask"
+	@echo "  make test-e2e-fresh    # Run e2e tests with fresh venvs (debugging)"
+	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
+	@echo ""
 	@echo "Docker Commands:"
 	@echo "  make build            # Build and push AMD64 images (use -j2 for parallel)"
 	@echo "  make build-mac        # Build images for dev Mac (Apple Silicon/ARM64)"
@@ -346,6 +353,56 @@ run-simulation-local:
 ## Run simulation on Dask
 run-simulation-dask:
 	PYTHONPATH=. uv run python examples/run_dask_simulation.py --test pi -n 10
+
+# === Local Dask Development ===
+
+.PHONY: dask-local dask-stop test-e2e test-e2e-fresh benchmark-venv
+
+## Start local Dask cluster for development
+dask-local:
+	@echo "Starting local Dask cluster..."
+	@uv run python examples/start_local_dask.py &
+	@sleep 2
+	@echo "✓ Dask cluster started at tcp://localhost:8786"
+	@echo "  Dashboard: http://localhost:8787"
+
+## Stop local Dask cluster
+dask-stop:
+	@echo "Stopping local Dask cluster..."
+	@pkill -f "start_local_dask.py" 2>/dev/null || true
+	@pkill -f "dask scheduler" 2>/dev/null || true
+	@pkill -f "dask worker" 2>/dev/null || true
+	@echo "✓ Dask cluster stopped"
+
+## Run end-to-end tests with local Dask
+test-e2e:
+	@echo "Starting Dask and running e2e tests..."
+	@$(MAKE) dask-local
+	@sleep 3
+	@uv run python examples/test_simulation_e2e.py
+	@$(MAKE) dask-stop
+
+## Run e2e tests with fresh venvs (slow, for debugging)
+test-e2e-fresh:
+	@echo "Starting Dask and running e2e tests with fresh venvs..."
+	@$(MAKE) dask-local
+	@sleep 3
+	@MODELOPS_FORCE_FRESH_VENV=true uv run python examples/test_simulation_e2e.py
+	@$(MAKE) dask-stop
+
+## Benchmark warm pool vs fresh venv performance
+benchmark-venv:
+	@echo "Starting Dask for benchmark..."
+	@$(MAKE) dask-local
+	@sleep 3
+	@echo "Running hyperfine benchmark..."
+	@hyperfine \
+	  --command-name 'cached venv' \
+	    'uv run python examples/test_simulation_e2e.py' \
+	  --command-name 'fresh venv' \
+	    'MODELOPS_FORCE_FRESH_VENV=true uv run python examples/test_simulation_e2e.py' \
+	  --warmup 1
+	@$(MAKE) dask-stop
 
 # === State Cleanup Targets ===
 
