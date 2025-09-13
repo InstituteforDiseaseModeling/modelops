@@ -339,6 +339,39 @@ if __name__ == "__main__":
             os.unlink(script_path)
             if proc.poll() is None:
                 proc.terminate()
+    
+    def test_subprocess_70kb_issue(self):
+        """Test subprocess handling of 70KB message (reproduces integration test issue)."""
+        script_path = self.create_echo_subprocess()
+        
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, script_path],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0  # Unbuffered like in process_manager.py
+            )
+            
+            client = JSONRPCClient(proc.stdin, proc.stdout)
+            
+            # Test with 70KB message like in the failing test
+            large_data = "x" * 70000
+            result = client.call("echo", {"data": large_data})
+            assert result["data"] == large_data
+            
+            # Test even larger - 100KB
+            large_data = "x" * 100000  
+            result = client.call("echo", {"data": large_data})
+            assert result["data"] == large_data
+            
+            client.call("shutdown", {})
+            proc.wait(timeout=1)
+            
+        finally:
+            os.unlink(script_path)
+            if proc.poll() is None:
+                proc.terminate()
 
     def test_subprocess_concurrent_calls(self):
         """Test multiple rapid calls to subprocess."""
@@ -371,6 +404,59 @@ if __name__ == "__main__":
 
 class TestStressScenarios:
     """Stress tests to find edge cases."""
+    
+    def test_exactly_65kb_boundary(self):
+        """Test message exactly at 65KB boundary (common buffer size)."""
+        # Create message exactly at 65KB boundary
+        target_size = 65536
+        padding_size = target_size - len('{"jsonrpc":"2.0","method":"test","params":{"data":""},"id":1}')
+        large_data = "x" * padding_size
+        
+        message = {
+            "jsonrpc": "2.0",
+            "method": "test",
+            "params": {"data": large_data},
+            "id": 1
+        }
+        
+        # Write message
+        output_stream = BytesIO()
+        protocol = JSONRPCProtocol(None, output_stream)
+        protocol._write_message(message)
+        
+        # Read it back
+        output_stream.seek(0)
+        input_stream = BytesIO(output_stream.read())
+        protocol2 = JSONRPCProtocol(input_stream, None)
+        read_message = protocol2.read_message()
+        
+        assert read_message == message
+        assert len(json.dumps(read_message).encode()) >= 65536
+    
+    def test_70kb_message_handling(self):
+        """Test message at 70KB (reproduces integration test failure)."""
+        # Create 70KB message like in integration test
+        large_data = "x" * 70000
+        message = {
+            "jsonrpc": "2.0",
+            "method": "test",
+            "params": {"data": large_data},
+            "id": 1
+        }
+        
+        # Write message
+        output_stream = BytesIO()
+        protocol = JSONRPCProtocol(None, output_stream)
+        protocol._write_message(message)
+        
+        # Read it back - this should fail with current implementation
+        output_stream.seek(0)
+        input_stream = BytesIO(output_stream.read())
+        protocol2 = JSONRPCProtocol(input_stream, None)
+        read_message = protocol2.read_message()
+        
+        assert read_message == message
+        assert len(read_message["params"]["data"]) == 70000
 
     def test_partial_write_handling(self):
         """Test handling when write is interrupted."""

@@ -201,6 +201,9 @@ class WarmProcessManager:
         env["PYTHONUNBUFFERED"] = "1"  # Ensure unbuffered output
         
         # Start the subprocess with venv's Python and standalone runner
+        # CRITICAL: Use DEVNULL for stderr to prevent deadlock with large messages
+        # The subprocess logs to stderr, and if the stderr pipe buffer fills up
+        # while we're writing large data to stdin, we get a deadlock.
         process = subprocess.Popen(
             [
                 str(venv_python),  # Use venv's Python for clean isolation
@@ -211,7 +214,7 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,  # Prevent deadlock with large messages
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
@@ -343,6 +346,7 @@ class WarmProcessManager:
         # 1. Install bundle dependencies into venv
         # 2. Discover wire function via entry points
         # 3. Start JSON-RPC server and wait for tasks
+        # CRITICAL: Use DEVNULL for stderr to prevent deadlock with large messages
         process = subprocess.Popen(
             [
                 str(venv_python),  # Use venv's Python for clean isolation
@@ -353,7 +357,7 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,  # Prevent deadlock with large messages
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage

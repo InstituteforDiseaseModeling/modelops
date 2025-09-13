@@ -14,6 +14,30 @@ from ..worker.config import RuntimeConfig
 logger = logging.getLogger(__name__)
 
 
+class TaskKeys:
+    """Dask task key generation following hyphenated convention.
+    
+    Dask groups tasks by the substring before the first hyphen in the key.
+    For example: 'sim-abc123-4' groups as 'sim', 'agg-def456' groups as 'agg'.
+    Using underscores causes each task to be its own group in the dashboard.
+    """
+    
+    @staticmethod
+    def sim_key(param_id: str, replicate_idx: int) -> str:
+        """Generate simulation task key: sim-{param_id[:8]}-{idx}"""
+        return f"sim-{param_id[:8]}-{replicate_idx}"
+    
+    @staticmethod
+    def agg_key(param_id: str) -> str:
+        """Generate aggregation task key: agg-{param_id[:8]}"""
+        return f"agg-{param_id[:8]}"
+    
+    @staticmethod
+    def single_sim_key(seed: int, bundle_ref: str) -> str:
+        """Generate single simulation key: sim-{seed}-{bundle[:12]}"""
+        return f"sim-{seed}-{bundle_ref[:12]}"
+
+
 def _worker_run_task(task: SimTask) -> SimReturn:
     """Execute task on worker using plugin-initialized runtime.
     
@@ -109,7 +133,7 @@ class DaskSimulationService(SimulationService):
         plugin = ModelOpsWorkerPlugin(self.config)
         
         # Register it with the cluster
-        self.client.register_worker_plugin(plugin, name="modelops-runtime-v1")
+        self.client.register_plugin(plugin, name="modelops-runtime-v1")
         
         self._plugin_installed = True
         logger.info("Worker plugin installed successfully")
@@ -128,7 +152,7 @@ class DaskSimulationService(SimulationService):
             _worker_run_task,
             task,
             pure=False,  # Tasks have unique IDs
-            key=f"sim-{task.seed}-{task.bundle_ref[:12]}"  # For debugging
+            key=TaskKeys.single_sim_key(task.seed, task.bundle_ref)  # For debugging
         )
         
         return DaskFutureAdapter(dask_future)
@@ -161,7 +185,7 @@ class DaskSimulationService(SimulationService):
             _worker_run_task,
             tasks,
             pure=False,
-            key=[f"sim-{t.seed}-{t.bundle_ref[:12]}" for t in tasks]
+            key=[TaskKeys.single_sim_key(t.seed, t.bundle_ref) for t in tasks]
         )
         
         return [DaskFutureAdapter(f) for f in dask_futures]
@@ -187,7 +211,10 @@ class DaskSimulationService(SimulationService):
         """
         # Submit individual replicates
         tasks = replicate_set.tasks()
-        keys = replicate_set.replicate_keys()
+        
+        # Generate proper Dask keys for dashboard grouping
+        param_id = replicate_set.base_task.params.param_id
+        keys = [TaskKeys.sim_key(param_id, i) for i in range(replicate_set.n_replicates)]
         
         # Use map for efficient batch submission
         replicate_futures = self.client.map(
@@ -230,7 +257,7 @@ class DaskSimulationService(SimulationService):
                 replicate_futures,
                 target_entrypoint,
                 replicate_set.base_task.bundle_ref,
-                key=f"agg_{param_id[:8]}",
+                key=TaskKeys.agg_key(param_id),
                 pure=False
             )
             

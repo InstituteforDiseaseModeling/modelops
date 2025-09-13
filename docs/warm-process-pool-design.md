@@ -267,3 +267,37 @@ Summary
 - Fresh venv creation: ~42.5 seconds average
 - The performance gain justifies the added complexity of process pool management
 - `MODELOPS_FORCE_FRESH_VENV=true` remains available for debugging dependency issues
+
+## Known Issues & Solutions
+
+### JSON-RPC Subprocess Deadlock with Large Messages
+
+**Issue**: When sending large messages (>65KB) through subprocess pipes, a deadlock can occur between parent and child processes.
+
+**Root Cause**: 
+The subprocess logs to stderr while the parent writes to stdin. If the stderr pipe buffer fills (default ~65KB on many systems), the subprocess blocks on stderr write while the parent blocks on stdin write, creating a deadlock.
+
+**Deadlock Sequence**:
+1. Parent sends large message (70KB) → writes to subprocess stdin
+2. Subprocess starts reading the message headers
+3. While reading, subprocess logs something → writes to stderr
+4. Stderr pipe buffer fills up (buffer full at ~65KB)
+5. Subprocess blocks on stderr write
+6. Parent is still writing to stdin (hasn't finished the 70KB)
+7. **DEADLOCK**: Parent blocked on stdin write, child blocked on stderr write
+
+**Solution Implemented**: 
+Changed `stderr=subprocess.PIPE` to `stderr=subprocess.DEVNULL` in `process_manager.py` to prevent the deadlock. This prevents the stderr buffer from filling up and blocking the subprocess.
+
+**Alternative Solutions for Future**:
+1. **Thread-based stderr reader**: Continuously drain stderr in a separate thread
+2. **Larger pipe buffer**: Some systems allow increasing pipe buffer size via fcntl
+3. **Conditional logging**: Disable subprocess logging in production mode
+4. **File-based logging**: Redirect stderr to a file instead of pipe
+5. **Async I/O**: Use asyncio for non-blocking pipe operations
+
+**Trade-offs**:
+- Current solution (DEVNULL) loses subprocess logs but prevents deadlock
+- Logs are primarily for debugging during development
+- Production stability takes precedence over debug visibility
+- Can add environment variable to enable stderr capture with proper reader thread if needed

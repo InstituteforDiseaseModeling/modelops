@@ -56,4 +56,6 @@ jobs:
       - name: Run integration tests
         run: |
           cd modelops
-          uv run pytest tests/integration/ -m integration -v
+          # Run with timeout per test and overall job timeout
+          uv run pytest tests/integration/ -m integration -v --timeout=60 --timeout-method=thread
+        timeout-minutes: 10  # GitHub Actions timeout for the whole step
