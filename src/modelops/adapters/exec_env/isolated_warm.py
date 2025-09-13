@@ -5,9 +5,11 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
+from dataclasses import replace
 
 from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo, task_id, sim_root
+from modelops_contracts.simulation import AggregationTask, AggregationReturn
 from modelops_contracts.ports import ExecutionEnvironment, BundleRepository, CAS
 
 from ...worker.process_manager import WarmProcessManager
@@ -211,6 +213,91 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 error=error_info,
                 error_details=error_details
             )
+    
+    def run_aggregation(self, task: AggregationTask) -> AggregationReturn:
+        """Execute aggregation task using warm process pool.
+        
+        This is the infrastructure adapter for aggregation, handling:
+        1. Bundle resolution (same as simulation)
+        2. Process management (reuses warm pool!)
+        3. CAS for large results
+        4. Error handling
+        
+        Args:
+            task: AggregationTask with target and sim results
+            
+        Returns:
+            AggregationReturn with loss and diagnostics
+        """
+        try:
+            # 1. BUNDLE RESOLUTION - same as simulation!
+            digest, bundle_path = self.bundle_repo.ensure_local(task.bundle_ref)
+            
+            # 2. Handle CAS references in SimReturns
+            # If any results have cas_ref instead of inline, fetch them
+            resolved_returns = []
+            for sr in task.sim_returns:
+                resolved_outputs = {}
+                for name, artifact in sr.outputs.items():
+                    if artifact.ref and artifact.ref.startswith("cas://") and not artifact.inline:
+                        # Fetch from CAS
+                        cas_ref = artifact.ref[6:]  # Remove "cas://" prefix
+                        data = self.cas.get(cas_ref)
+                        resolved_artifact = replace(artifact, inline=data)
+                        resolved_outputs[name] = resolved_artifact
+                    else:
+                        resolved_outputs[name] = artifact
+                
+                resolved_return = replace(sr, outputs=resolved_outputs)
+                resolved_returns.append(resolved_return)
+            
+            # 3. Serialize SimReturns for JSON-RPC transport
+            serialized_returns = []
+            for sr in resolved_returns:
+                sr_dict = {
+                    'task_id': sr.task_id,
+                    'sim_root': sr.sim_root,
+                    'outputs': {}
+                }
+                
+                for name, artifact in sr.outputs.items():
+                    sr_dict['outputs'][name] = {
+                        'size': artifact.size,
+                        'checksum': artifact.checksum,
+                        'inline': base64.b64encode(artifact.inline).decode('ascii') if artifact.inline else None,
+                        'cas_ref': artifact.ref
+                    }
+                
+                serialized_returns.append(sr_dict)
+            
+            # 4. EXECUTE aggregation in warm process
+            result = self._process_manager.execute_aggregation(
+                bundle_digest=digest,
+                bundle_path=bundle_path,
+                target_entrypoint=str(task.target_entrypoint),
+                sim_returns=serialized_returns,
+                target_data=task.target_data
+            )
+            
+            # Check if subprocess returned an error
+            if 'error' in result:
+                error_msg = result['error']
+                error_type = result.get('type', 'Unknown')
+                raise RuntimeError(f"Aggregation failed in subprocess: {error_msg} (type: {error_type})")
+            
+            # 5. Create AggregationReturn
+            return AggregationReturn(
+                aggregation_id=task.aggregation_id(),
+                loss=result['loss'],
+                diagnostics=result.get('diagnostics', {}),
+                outputs={},  # Could add aggregated outputs
+                n_replicates=result.get('n_replicates', len(task.sim_returns))
+            )
+            
+        except Exception as e:
+            logger.error(f"Aggregation execution failed: {e}")
+            # Re-raise the exception for debugging
+            raise
     
     def health_check(self) -> Dict[str, Any]:
         """Check health of execution environment."""

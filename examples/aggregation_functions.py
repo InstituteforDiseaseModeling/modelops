@@ -9,6 +9,7 @@ import polars as pl
 from typing import Dict, List
 from modelops.services.ipc import to_ipc_tables, from_ipc_tables
 from modelops_contracts import SimReturn
+import base64
 
 
 def epidemic_simulation(params: dict, seed: int) -> dict:
@@ -88,3 +89,42 @@ def percentile_aggregator(results: List[SimReturn]) -> SimReturn:
     ]).sort("day")
     
     return to_ipc_tables({"percentiles": aggregated})
+
+
+def compute_loss(sim_returns: List[Dict], target_data: Dict = None) -> Dict:
+    """Simple loss computation for testing aggregation.
+    
+    This function is called by the subprocess runner when executing
+    an aggregation task. It receives serialized SimReturns and computes
+    a loss value.
+    
+    Args:
+        sim_returns: List of simulation results (serialized as dicts)
+        target_data: Optional empirical data for comparison
+        
+    Returns:
+        Dict with 'loss' and optional 'diagnostics'
+    """
+    # Extract some values from the sim returns for a simple loss calculation
+    n_returns = len(sim_returns)
+    
+    # Simple mock loss - just use the number of replicates
+    # In real use, this would extract data from sim_returns and compare to targets
+    loss = 1.0 / (1.0 + n_returns)  # Loss decreases with more replicates
+    
+    # Add some diagnostics
+    diagnostics = {
+        "n_replicates": n_returns,
+        "method": "simple_mock"
+    }
+    
+    # If we have actual simulation outputs, we could process them
+    if sim_returns and sim_returns[0].get('outputs'):
+        # Count total outputs
+        total_outputs = sum(len(sr.get('outputs', {})) for sr in sim_returns)
+        diagnostics['total_outputs'] = total_outputs
+    
+    return {
+        "loss": loss,
+        "diagnostics": diagnostics
+    }

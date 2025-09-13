@@ -119,13 +119,22 @@ class JSONRPCProtocol:
                 raise EOFError("Stream closed while reading headers")
             
             # Decode from bytes and strip CRLF
-            line_str = line.decode('utf-8').rstrip('\r\n')
+            try:
+                line_str = line.decode('utf-8').rstrip('\r\n')
+            except UnicodeDecodeError:
+                # Partial or corrupted read
+                raise JSONRPCError(-32700, f"Invalid header encoding: {line[:20]!r}")
+            
             if not line_str:
                 # Empty line marks end of headers
                 break
             
             # Parse header
             if ':' not in line_str:
+                # Check if this might be a partial read
+                if len(line_str) < 10 and line_str.isalpha():
+                    # Likely a partial header - the stream is corrupted
+                    raise JSONRPCError(-32700, f"Invalid header (partial read?): {line_str}")
                 raise JSONRPCError(-32700, f"Invalid header: {line_str}")
             
             key, value = line_str.split(':', 1)
@@ -142,10 +151,19 @@ class JSONRPCProtocol:
             raise JSONRPCError(-32700, f"Invalid Content-Length: {headers['content-length']}")
         
         # Read body (binary mode - already in bytes)
-        body = self.input_stream.read(content_length)
-        if len(body) != content_length:
-            raise JSONRPCError(-32700, 
-                f"Incomplete message: expected {content_length} bytes, got {len(body)}")
+        # CRITICAL: Must read in a loop as read() may return fewer bytes than requested
+        body_chunks = []
+        bytes_remaining = content_length
+        while bytes_remaining > 0:
+            chunk = self.input_stream.read(bytes_remaining)
+            if not chunk:
+                # EOF before getting all data
+                raise JSONRPCError(-32700, 
+                    f"Incomplete message: expected {content_length} bytes, got {content_length - bytes_remaining}")
+            body_chunks.append(chunk)
+            bytes_remaining -= len(chunk)
+        
+        body = b''.join(body_chunks)
         
         # Parse JSON from bytes
         try:

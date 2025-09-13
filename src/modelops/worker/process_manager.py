@@ -11,7 +11,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List, Any
 
 from .jsonrpc import JSONRPCClient
 
@@ -98,7 +98,9 @@ class WarmProcessManager:
             # Verify it's still alive
             if process.is_alive():
                 # Validate the process still serves the correct digest
+                # This can fail if the process is dying or pipes are broken
                 try:
+                    # Set a short timeout for validation
                     result = process.client.call("ready", {})
                     if result.get("bundle_digest") == bundle_digest:
                         # Move to end (most recently used)
@@ -111,10 +113,18 @@ class WarmProcessManager:
                         logger.warning(f"Process digest mismatch for {bundle_digest[:12]}")
                         process.terminate()
                         del self._processes[bundle_digest]
+                except (EOFError, BrokenPipeError, ConnectionError) as e:
+                    # Expected errors when process is dying
+                    logger.debug(f"Process appears to be dying: {e}")
+                    process.terminate()
+                    if bundle_digest in self._processes:
+                        del self._processes[bundle_digest]
                 except Exception as e:
+                    # Unexpected errors - log as warning
                     logger.warning(f"Failed to validate process: {e}")
                     process.terminate()
-                    del self._processes[bundle_digest]
+                    if bundle_digest in self._processes:
+                        del self._processes[bundle_digest]
             else:
                 # Process died, remove it
                 logger.warning(f"Warm process for bundle {bundle_digest[:12]} died")
@@ -440,8 +450,71 @@ class WarmProcessManager:
             # Process might be broken, remove it
             logger.error(f"Task execution failed: {e}")
             process.terminate()
-            if bundle_digest in self._processes:
-                del self._processes[bundle_digest]
+            # Can't reliably remove by digest when force_fresh_venv is True
+            # Just remove the matching process object if we find it
+            for key, proc in list(self._processes.items()):
+                if proc is process:
+                    del self._processes[key]
+                    break
+            raise
+    
+    def execute_aggregation(
+        self, 
+        bundle_digest: str, 
+        bundle_path: Path,
+        target_entrypoint: str,
+        sim_returns: List[Dict[str, Any]],  # Already serialized SimReturns
+        target_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Execute aggregation task in a warm process.
+        
+        This reuses the SAME warm process pool as simulations!
+        The process already has the bundle installed and can run
+        target evaluation code just like simulation code.
+        
+        Args:
+            bundle_digest: Bundle digest (for process selection)
+            bundle_path: Path to the bundle
+            target_entrypoint: Target evaluation entrypoint
+            sim_returns: List of simulation results (already serialized)
+            target_data: Optional empirical data
+            
+        Returns:
+            Aggregation result with loss and diagnostics
+        """
+        # Get or create warm process - SAME pool as simulations!
+        process = self.get_process(bundle_digest, bundle_path)
+        
+        try:
+            # Execute aggregation via JSON-RPC
+            result = process.client.call(
+                "aggregate",  # New method!
+                {
+                    "target_entrypoint": target_entrypoint,
+                    "sim_returns": sim_returns,
+                    "target_data": target_data
+                }
+            )
+            
+            # Check for errors
+            if 'error' in result:
+                raise RuntimeError(
+                    f"Aggregation failed: {result['error']} "
+                    f"(type: {result.get('type', 'Unknown')})"
+                )
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Aggregation execution failed: {e}")
+            # Process might be dead, remove it
+            process.terminate()
+            # Can't reliably remove by digest when force_fresh_venv is True
+            # Just remove the matching process object if we find it
+            for key, proc in list(self._processes.items()):
+                if proc is process:
+                    del self._processes[key]
+                    break
             raise
     
     def shutdown_all(self):

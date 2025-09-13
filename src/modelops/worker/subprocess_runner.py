@@ -45,6 +45,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -432,6 +433,126 @@ class SubprocessRunner:
             err = json.dumps({"error": str(e), "type": type(e).__name__, "entrypoint": entrypoint}).encode("utf-8")
             return {"error": base64.b64encode(err).decode("ascii")}
 
+    def aggregate(
+        self,
+        target_entrypoint: str,
+        sim_returns: List[Dict[str, Any]],  # Serialized SimReturns
+        target_data: Optional[Dict[str, Any]] = None,
+        bundle_digest: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute target evaluation/aggregation in the subprocess.
+        
+        This runs a target entrypoint (like 'targets.covid/deaths') which
+        computes loss by comparing simulation outputs to empirical data.
+        
+        Args:
+            target_entrypoint: Target evaluation entrypoint
+            sim_returns: List of simulation results (serialized)
+            target_data: Optional empirical data for comparison
+            bundle_digest: Optional bundle digest for validation
+            
+        Returns:
+            Aggregation result with loss and diagnostics
+        """
+        if bundle_digest and bundle_digest != self.bundle_digest:
+            raise ValueError(f"Bundle digest mismatch: expected {self.bundle_digest}, got {bundle_digest}")
+        
+        logger.info("Executing aggregation %s with %d results", target_entrypoint, len(sim_returns))
+        
+        try:
+            # Ensure bundle is in sys.path for imports
+            if str(self.bundle_path) not in sys.path:
+                sys.path.insert(0, str(self.bundle_path))
+            
+            # Parse target entrypoint to get import path and target name
+            import_path, target_name = target_entrypoint.rsplit("/", 1)
+            
+            # Import the target module - handle different formats
+            parts = import_path.split(".")
+            
+            # Special case: if first part is 'dummy', skip it (for contract validation workaround)
+            if parts[0] == "dummy" and len(parts) > 1:
+                # Remove dummy prefix, use the rest
+                import_path = ".".join(parts[1:])
+                parts = parts[1:]
+            
+            if len(parts) == 1:
+                # Simple module like "targets"
+                module = __import__(import_path)
+                # Get the target function directly from module
+                evaluator = getattr(module, target_name)
+            elif len(parts) == 2:
+                # Module.Class format like "targets.COVID"
+                module_name, class_name = parts
+                module = __import__(module_name, fromlist=[class_name])
+                target_class = getattr(module, class_name)
+                
+                # Look for evaluate method or callable
+                if hasattr(target_class, 'evaluate'):
+                    evaluator = target_class.evaluate
+                elif callable(target_class):
+                    evaluator = target_class
+                else:
+                    # Try to get specific target method
+                    evaluator = getattr(target_class, target_name)
+            else:
+                # Complex module path like "my.package.module"
+                # Import the full module path
+                module = __import__(import_path, fromlist=[""])
+                # Try to get the target function/class
+                if hasattr(module, target_name):
+                    evaluator = getattr(module, target_name)
+                else:
+                    # Maybe it's a class with the last part as class name
+                    *module_parts, class_name = parts
+                    module_path = ".".join(module_parts)
+                    module = __import__(module_path, fromlist=[class_name])
+                    target_class = getattr(module, class_name)
+                    evaluator = getattr(target_class, target_name)
+            
+            # Deserialize SimReturns back to objects
+            # For now we'll pass the raw dicts since we don't have SimReturn class here
+            # The evaluator will need to handle the dict format
+            
+            # Debug logging
+            logger.info(f"Calling evaluator {evaluator.__name__} with {len(sim_returns)} returns")
+            logger.info(f"First SimReturn keys: {list(sim_returns[0].keys()) if sim_returns else 'None'}")
+            
+            # Redirect stdout to stderr during evaluation
+            with contextlib.redirect_stdout(sys.stderr):
+                # Call the target evaluator
+                # It should return a dict with 'loss' and optionally 'diagnostics'
+                result = evaluator(sim_returns, target_data)
+            
+            logger.info(f"Evaluator returned: {result}")
+            
+            # Validate result structure
+            if not isinstance(result, dict):
+                raise ValueError(f"Target evaluator must return dict, got {type(result)}")
+            if 'loss' not in result:
+                raise ValueError("Target evaluator must return 'loss' in result dict")
+            
+            # Ensure loss is finite
+            loss = float(result['loss'])
+            if not math.isfinite(loss):
+                raise ValueError(f"Loss must be finite, got {loss}")
+            
+            # Package result for JSON-RPC transport
+            return {
+                "loss": loss,
+                "diagnostics": result.get('diagnostics', {}),
+                "n_replicates": len(sim_returns),
+                "outputs": {}  # Could add aggregated outputs here if needed
+            }
+            
+        except Exception as e:
+            logger.exception("Aggregation failed")
+            return {
+                "error": str(e),
+                "type": type(e).__name__,
+                "target_entrypoint": target_entrypoint
+            }
+
 # -----------------------------------------------------------------------------
 # Main loop
 # -----------------------------------------------------------------------------
@@ -467,6 +588,10 @@ def main() -> None:
                     if not isinstance(params, dict):
                         raise JSONRPCError(-32602, "Invalid params (expected object)")
                     rpc.send_response(req_id, runner.execute(**params))
+                elif method == "aggregate":
+                    if not isinstance(params, dict):
+                        raise JSONRPCError(-32602, "Invalid params (expected object)")
+                    rpc.send_response(req_id, runner.aggregate(**params))
                 elif method == "shutdown":
                     rpc.send_response(req_id, {"ok": True})
                     logger.info("Shutdown requested")
