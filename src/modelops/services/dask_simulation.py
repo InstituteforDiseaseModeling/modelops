@@ -19,7 +19,8 @@ class TaskKeys:
     
     Dask groups tasks by the substring before the first hyphen in the key.
     For example: 'sim-abc123-4' groups as 'sim', 'agg-def456' groups as 'agg'.
-    Using underscores causes each task to be its own group in the dashboard.
+    Using underscores causes each task to be its own group in the dashboard, 
+    messing up the colors in task streams.
     """
     
     @staticmethod
@@ -77,6 +78,7 @@ def _worker_run_aggregation(task: AggregationTask) -> AggregationReturn:
         )
     
     # Use the IsolatedWarmExecEnv's run_aggregation method
+    # TODO: why go around the modelops_runtime? 
     return worker.modelops_exec_env.run_aggregation(task)
 
 
@@ -224,6 +226,8 @@ class DaskSimulationService(SimulationService):
             key=keys  # Explicit keys for tracking
         )
         
+        # TODO: we should support iteration over many targets? 
+        # or should the Targets abstraction encapsulate that?
         if target_entrypoint:
             # Submit aggregation that runs ON WORKER
             # This is the magic - no data comes back to client!

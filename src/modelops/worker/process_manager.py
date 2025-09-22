@@ -8,8 +8,9 @@ import subprocess
 import sys
 import fcntl
 import uuid
+import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Any
 
@@ -21,11 +22,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WarmProcess:
     """A warm subprocess ready to execute tasks."""
-    
+
     process: subprocess.Popen
     client: JSONRPCClient
     bundle_digest: str
     use_count: int = 0
+    _lock: threading.RLock = field(default_factory=threading.RLock)  # Reentrant lock for same thread
     
     def is_alive(self) -> bool:
         """Check if the process is still running."""
@@ -33,15 +35,36 @@ class WarmProcess:
     
     def terminate(self):
         """Terminate the process gracefully."""
-        if self.is_alive():
-            try:
-                # Try graceful shutdown first
-                self.process.terminate()
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                # Force kill if graceful shutdown fails
-                self.process.kill()
-                self.process.wait()
+        with self._lock:
+            if self.is_alive():
+                try:
+                    # Try graceful shutdown first
+                    self.process.terminate()
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    # Force kill if graceful shutdown fails
+                    self.process.kill()
+                    self.process.wait()
+
+    def safe_call(self, method: str, params: dict, timeout: float = 10.0):
+        """Make a thread-safe JSON-RPC call to the subprocess.
+
+        Args:
+            method: Method name to call
+            params: Method parameters
+            timeout: Timeout in seconds
+
+        Returns:
+            Result from the subprocess
+
+        Raises:
+            Various exceptions if the call fails
+        """
+        with self._lock:
+            if not self.is_alive():
+                raise RuntimeError("Process is not alive")
+
+            return self.client.call(method, params)
 
 
 class WarmProcessManager:
@@ -100,8 +123,8 @@ class WarmProcessManager:
                 # Validate the process still serves the correct digest
                 # This can fail if the process is dying or pipes are broken
                 try:
-                    # Set a short timeout for validation
-                    result = process.client.call("ready", {})
+                    # Use safe_call to prevent race conditions
+                    result = process.safe_call("ready", {}, timeout=5.0)
                     if result.get("bundle_digest") == bundle_digest:
                         # Move to end (most recently used)
                         self._processes.move_to_end(bundle_digest)
@@ -244,20 +267,23 @@ class WarmProcessManager:
         
         # Wait for ready signal
         try:
-            result = client.call("ready", {})
+            # Create WarmProcess first so we can use safe_call
+            warm_process = WarmProcess(
+                process=process,
+                client=client,
+                bundle_digest=bundle_digest,
+                use_count=1
+            )
+
+            result = warm_process.safe_call("ready", {}, timeout=10.0)
             if not result.get("ready"):
                 raise RuntimeError(f"Process not ready: {result}")
+
+            return warm_process
         except Exception as e:
             process.terminate()
             process.wait()
             raise RuntimeError(f"Failed to initialize process: {e}")
-        
-        return WarmProcess(
-            process=process,
-            client=client,
-            bundle_digest=bundle_digest,
-            use_count=1
-        )
     
     def _compute_deps_hash(self, bundle_path: Path) -> str:
         """Compute hash of dependency files.
@@ -437,8 +463,8 @@ class WarmProcessManager:
         process = self.get_process(bundle_digest, bundle_path)
         
         try:
-            # Execute task via JSON-RPC
-            result = process.client.call(
+            # Execute task via JSON-RPC using safe_call
+            result = process.safe_call(
                 "execute",
                 {
                     "entrypoint": entrypoint,
@@ -490,8 +516,8 @@ class WarmProcessManager:
         process = self.get_process(bundle_digest, bundle_path)
         
         try:
-            # Execute aggregation via JSON-RPC
-            result = process.client.call(
+            # Execute aggregation via JSON-RPC using safe_call
+            result = process.safe_call(
                 "aggregate",  # New method!
                 {
                     "target_entrypoint": target_entrypoint,
