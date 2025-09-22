@@ -1,0 +1,359 @@
+"""Unified provenance-based storage for simulation results.
+
+This module provides a single storage system that replaces both the
+SimulationCache and CAS (Content-Addressed Storage). It uses input-addressed
+storage (hash of inputs) rather than content-addressed storage.
+"""
+
+import json
+import hashlib
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from dataclasses import asdict, dataclass
+
+from modelops_contracts import (
+    SimTask,
+    SimReturn,
+    TableArtifact,
+    BundleManifest,
+    task_id,
+    sim_root
+)
+from modelops_contracts.simulation import AggregationTask, AggregationReturn
+
+from .provenance_schema import ProvenanceSchema, DEFAULT_SCHEMA
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StoredResult:
+    """Result stored with metadata and manifest."""
+    metadata: Dict[str, Any]  # SimTask/AggTask metadata
+    manifest: Optional[BundleManifest]  # For indexing/querying
+    result: Any  # SimReturn or AggregationReturn
+
+
+class ProvenanceStore:
+    """Unified storage for all simulation and aggregation results.
+
+    Uses provenance-based (input-addressed) storage to enable
+    efficient caching and invalidation. For MVP, always stores
+    as blobs on disk and returns inline in memory.
+    """
+
+    def __init__(
+        self,
+        storage_dir: Path,
+        schema: ProvenanceSchema = DEFAULT_SCHEMA
+    ):
+        """Initialize provenance store.
+
+        Args:
+            storage_dir: Root directory for storage
+            schema: Schema for path generation
+        """
+        self.storage_dir = Path(storage_dir)
+        self.schema = schema
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Initialized ProvenanceStore with schema '{schema.name}' at {storage_dir}")
+
+    def get_sim(self, task: SimTask) -> Optional[SimReturn]:
+        """Retrieve simulation result if it exists.
+
+        Args:
+            task: Simulation task specification
+
+        Returns:
+            SimReturn if found, None otherwise
+        """
+        # Generate storage path
+        path_context = self._sim_path_context(task)
+        result_dir = self.storage_dir / self.schema.sim_path(**path_context)
+
+        if not result_dir.exists():
+            return None
+
+        try:
+            # Load metadata
+            metadata_file = result_dir / "metadata.json"
+            if not metadata_file.exists():
+                logger.warning(f"Missing metadata.json in {result_dir}")
+                return None
+
+            with open(metadata_file, "r") as f:
+                metadata = json.load(f)
+
+            # Load result
+            result_file = result_dir / "result.json"
+            if not result_file.exists():
+                logger.warning(f"Missing result.json in {result_dir}")
+                return None
+
+            with open(result_file, "r") as f:
+                result_data = json.load(f)
+
+            # Reconstruct SimReturn with TableArtifacts
+            outputs = {}
+            for name, artifact_data in result_data.get("outputs", {}).items():
+                # For MVP, always store as blob and load inline
+                artifact_file = result_dir / f"artifact_{name}.arrow"
+                if artifact_file.exists():
+                    with open(artifact_file, "rb") as f:
+                        inline_data = f.read()
+                    outputs[name] = TableArtifact(
+                        size=len(inline_data),
+                        inline=inline_data,
+                        checksum=artifact_data["checksum"]
+                    )
+                else:
+                    logger.warning(f"Missing artifact file: {artifact_file}")
+
+            return SimReturn(
+                task_id=result_data["task_id"],
+                sim_root=result_data["sim_root"],
+                outputs=outputs,
+                cached=True
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to load simulation result from {result_dir}: {e}")
+            return None
+
+    def put_sim(self, task: SimTask, result: SimReturn) -> str:
+        """Store simulation result.
+
+        Args:
+            task: Simulation task specification
+            result: Simulation result to store
+
+        Returns:
+            Storage path for the result
+        """
+        # Generate storage path
+        path_context = self._sim_path_context(task)
+        result_dir = self.storage_dir / self.schema.sim_path(**path_context)
+        result_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Store metadata
+            metadata = {
+                "bundle_ref": task.bundle_ref,
+                "entrypoint": str(task.entrypoint),
+                "params": dict(task.params.params),
+                "seed": task.seed,
+                "outputs": task.outputs,
+                "param_id": task.params.param_id
+            }
+            with open(result_dir / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            # Store manifest if available
+            if task.bundle_manifest:
+                manifest_data = {
+                    "bundle_digest": task.bundle_manifest.bundle_digest,
+                    "bundle_ref": task.bundle_manifest.bundle_ref,
+                    "models": {
+                        k: asdict(v) for k, v in task.bundle_manifest.models.items()
+                    },
+                    "version": task.bundle_manifest.version
+                }
+                with open(result_dir / "manifest.json", "w") as f:
+                    json.dump(manifest_data, f, indent=2)
+
+            # Store result metadata
+            result_data = {
+                "task_id": result.task_id,
+                "sim_root": result.sim_root,
+                "outputs": {}
+            }
+
+            # Store artifacts as separate blob files
+            for name, artifact in result.outputs.items():
+                # For MVP, always store as blob
+                if artifact.inline:
+                    artifact_file = result_dir / f"artifact_{name}.arrow"
+                    with open(artifact_file, "wb") as f:
+                        f.write(artifact.inline)
+
+                # Store artifact metadata
+                result_data["outputs"][name] = {
+                    "size": artifact.size,
+                    "checksum": artifact.checksum
+                }
+
+            with open(result_dir / "result.json", "w") as f:
+                json.dump(result_data, f, indent=2)
+
+            logger.debug(f"Stored simulation result at {result_dir}")
+            return str(result_dir)
+
+        except Exception as e:
+            logger.error(f"Failed to store simulation result: {e}")
+            raise
+
+    def get_agg(self, task: AggregationTask) -> Optional[AggregationReturn]:
+        """Retrieve aggregation result if it exists.
+
+        Args:
+            task: Aggregation task specification
+
+        Returns:
+            AggregationReturn if found, None otherwise
+        """
+        # Generate storage path
+        path_context = self._agg_path_context(task)
+        result_dir = self.storage_dir / self.schema.agg_path(**path_context)
+
+        if not result_dir.exists():
+            return None
+
+        try:
+            # Load result
+            result_file = result_dir / "result.json"
+            if not result_file.exists():
+                return None
+
+            with open(result_file, "r") as f:
+                result_data = json.load(f)
+
+            return AggregationReturn(
+                aggregation_id=result_data["aggregation_id"],
+                loss=result_data["loss"],
+                diagnostics=result_data.get("diagnostics", {}),
+                outputs={},  # Could reconstruct if needed
+                n_replicates=result_data["n_replicates"]
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to load aggregation result: {e}")
+            return None
+
+    def put_agg(self, task: AggregationTask, result: AggregationReturn) -> str:
+        """Store aggregation result.
+
+        Args:
+            task: Aggregation task specification
+            result: Aggregation result to store
+
+        Returns:
+            Storage path for the result
+        """
+        # Generate storage path
+        path_context = self._agg_path_context(task)
+        result_dir = self.storage_dir / self.schema.agg_path(**path_context)
+        result_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Store metadata
+            metadata = {
+                "bundle_ref": task.bundle_ref,
+                "target_entrypoint": str(task.target_entrypoint),
+                "n_sim_returns": len(task.sim_returns)
+            }
+            with open(result_dir / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            # Store result
+            result_data = {
+                "aggregation_id": result.aggregation_id,
+                "loss": result.loss,
+                "diagnostics": result.diagnostics,
+                "n_replicates": result.n_replicates
+            }
+            with open(result_dir / "result.json", "w") as f:
+                json.dump(result_data, f, indent=2)
+
+            logger.debug(f"Stored aggregation result at {result_dir}")
+            return str(result_dir)
+
+        except Exception as e:
+            logger.error(f"Failed to store aggregation result: {e}")
+            raise
+
+    def list_results(
+        self,
+        result_type: str = "sim",
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """List stored results with metadata.
+
+        Args:
+            result_type: "sim" or "agg"
+            limit: Maximum number of results
+
+        Returns:
+            List of result metadata dicts
+        """
+        results = []
+        search_dir = self.storage_dir / self.schema.name / f"v{self.schema.version}" / f"{result_type}s"
+
+        if not search_dir.exists():
+            return results
+
+        # Walk directory tree
+        for result_dir in search_dir.rglob("metadata.json"):
+            if len(results) >= limit:
+                break
+
+            try:
+                with open(result_dir, "r") as f:
+                    metadata = json.load(f)
+                    metadata["path"] = str(result_dir.parent)
+                    results.append(metadata)
+            except Exception as e:
+                logger.warning(f"Failed to read metadata from {result_dir}: {e}")
+
+        return results
+
+    def _sim_path_context(self, task: SimTask) -> Dict[str, Any]:
+        """Generate path context for simulation task."""
+        context = {
+            "bundle_digest": hashlib.blake2b(
+                task.bundle_ref.encode(), digest_size=32
+            ).hexdigest(),
+            "param_id": task.params.param_id,
+            "seed": task.seed
+        }
+
+        # Add model_digest if using token invalidation
+        if task.bundle_manifest and "model_digest" in self.schema.sim_path_template:
+            context["model_digest"] = task.model_digest or "unknown"
+
+        return context
+
+    def _agg_path_context(self, task: AggregationTask) -> Dict[str, Any]:
+        """Generate path context for aggregation task."""
+        context = {
+            "bundle_digest": hashlib.blake2b(
+                task.bundle_ref.encode(), digest_size=32
+            ).hexdigest(),
+            "target": str(task.target_entrypoint).replace("/", "_"),
+            "aggregation_id": task.aggregation_id()
+        }
+
+        # Add model digest if available and using token invalidation
+        if "model_digest" in self.schema.agg_path_template:
+            # Would need to extract from first SimReturn's manifest
+            context["model_digest"] = "unknown"  # Placeholder
+
+        return context
+
+    def clear_schema(self, schema_name: Optional[str] = None):
+        """Clear all data for a schema (for testing/debugging).
+
+        Args:
+            schema_name: Schema to clear, or current schema if None
+        """
+        target_schema = schema_name or self.schema.name
+        schema_dir = self.storage_dir / target_schema
+
+        if schema_dir.exists():
+            import shutil
+            shutil.rmtree(schema_dir)
+            logger.info(f"Cleared schema '{target_schema}' data")
+        else:
+            logger.info(f"Schema '{target_schema}' has no data to clear")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, Callable
 
 from modelops_contracts import SimTask, SimReturn, TableArtifact, task_id, sim_root
-from modelops_contracts.ports import ExecutionEnvironment, BundleRepository, CAS
+from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +22,15 @@ class DirectExecEnv(ExecutionEnvironment):
     Useful for testing and debugging, but provides no isolation.
     """
     
-    def __init__(self, bundle_repo: BundleRepository, cas: CAS):
+    def __init__(self, bundle_repo: BundleRepository, storage_dir: Path = None):
         """Initialize the execution environment.
-        
+
         Args:
             bundle_repo: Repository for fetching bundles
-            cas: Content-addressable storage for results
+            storage_dir: Directory for provenance-based storage (optional)
         """
         self.bundle_repo = bundle_repo
-        self.cas = cas
+        self.storage_dir = storage_dir or Path("/tmp/modelops/provenance")
         self._wire_fn_cache: Dict[str, Callable] = {}  # Cache wire functions by bundle digest
     
     def _discover_wire_function(self, bundle_path: Path) -> Callable:
@@ -124,8 +124,8 @@ class DirectExecEnv(ExecutionEnvironment):
                     task.seed
                 )
                 
-                # Process artifacts
-                artifact_refs = {}
+                # Process artifacts (always inline for direct execution)
+                outputs = {}
                 for name, data in result_bytes.items():
                     if not isinstance(data, bytes):
                         logger.warning(f"Wire function returned non-bytes for {name}, converting")
@@ -133,11 +133,13 @@ class DirectExecEnv(ExecutionEnvironment):
                             data = data.encode()
                         else:
                             data = json.dumps(data).encode()
-                    
-                    # Store in CAS
-                    checksum = hashlib.sha256(data).hexdigest()
-                    ref = self.cas.put(data, checksum)
-                    artifact_refs[name] = ref
+
+                    checksum = hashlib.blake2b(data, digest_size=32).hexdigest()
+                    outputs[name] = TableArtifact(
+                        size=len(data),
+                        inline=data,
+                        checksum=checksum
+                    )
                 
                 # Create proper sim_root and task_id
                 root = sim_root(
@@ -147,24 +149,12 @@ class DirectExecEnv(ExecutionEnvironment):
                     entrypoint=str(task.entrypoint) if task.entrypoint else "main"
                 )
                 
-                output_names = tuple(artifact_refs.keys())
+                output_names = tuple(outputs.keys())
                 tid = task_id(
                     sim_root=root,
                     entrypoint=str(task.entrypoint) if task.entrypoint else "main",
                     outputs=output_names
                 )
-                
-                # Create table artifacts
-                outputs = {}
-                for name, ref in artifact_refs.items():
-                    # Get the data back to determine size
-                    data = self.cas.get(ref)
-                    outputs[name] = TableArtifact(
-                        ref=f"cas://{ref}",
-                        checksum=ref,  # ref is the checksum
-                        size=len(data),
-                        inline=None  # Not inlining for direct execution
-                    )
                 
                 return SimReturn(
                     task_id=tid,

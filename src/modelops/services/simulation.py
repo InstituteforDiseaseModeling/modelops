@@ -6,7 +6,6 @@ from modelops_contracts import (
 )
 from typing import List, Optional
 import logging
-from .cache import SimulationCache
 # from .aggregation import AggregationService  # TODO: Update for new SimTask interface
 
 # Logger for capturing Dask warnings
@@ -16,20 +15,15 @@ logger = logging.getLogger(__name__)
 
 class BaseSimulationService(SimulationService):
     """Base implementation with common functionality.
-    
+
     Provides:
-    - Cache integration for deduplication
     - Batch submission helpers
     - Standard logging
     """
-    
-    def __init__(self, cache: Optional[SimulationCache] = None):
-        """Initialize with optional cache.
-        
-        Args:
-            cache: Optional SimulationCache for result deduplication.
-        """
-        self.cache = cache
+
+    def __init__(self):
+        """Initialize base simulation service."""
+        pass
         # self.aggregation_service = aggregation_service or AggregationService()  # TODO: Update
     
     def submit_batch(self, tasks: List[SimTask], *, 
@@ -49,17 +43,7 @@ class BaseSimulationService(SimulationService):
         futures = []
         
         for task in tasks:
-            # Check cache if policy allows
-            if cache_policy in ("read_write",) and self.cache:
-                cached = self.cache.get(task)
-                if cached is not None:
-                    # Return cached result wrapped as completed future
-                    from concurrent.futures import Future as ConcurrentFuture
-                    future = ConcurrentFuture()
-                    future.set_result(cached)
-                    futures.append(future)
-                    continue
-            
+            # Caching now handled at execution environment level
             # Submit to execution
             future = self.submit(task)
             futures.append(future)
@@ -78,14 +62,7 @@ class BaseSimulationService(SimulationService):
             List of simulation results
         """
         results = self.gather(futures)
-        
-        # Update cache with new results
-        if self.cache:
-            for task, result in zip(tasks, results):
-                # Only cache successful results
-                if hasattr(result, 'status') and result.status.value == "COMPLETED":
-                    self.cache.put(task, result)
-        
+        # Caching now handled at execution environment level
         return results
     
     def submit_replicated(self, task: SimTask, n_replicates: int, *,
@@ -130,22 +107,18 @@ class LocalSimulationService(BaseSimulationService):
     - Environments without Kubernetes
     """
     
-    def __init__(self, cache: Optional[SimulationCache] = None):
-        """Initialize with optional cache.
-        
-        Args:
-            cache: Optional SimulationCache for result deduplication.
-        """
-        super().__init__(cache=cache)
+    def __init__(self):
+        """Initialize local simulation service."""
+        super().__init__()
         # Import here to avoid circular dependency
         from ..core.executor import SimulationExecutor
         from ..adapters.exec_env.direct import DirectExecEnv
         from ..adapters.bundle.file_repo import FileBundleRepository
-        from ..adapters.cas.memory_cas import MemoryCAS
         from ..worker.config import RuntimeConfig
-        
+        from pathlib import Path
+
         config = RuntimeConfig.from_env()
-        
+
         # Create bundle repository based on config
         if config.bundle_source == "file":
             bundle_repo = FileBundleRepository(
@@ -155,12 +128,10 @@ class LocalSimulationService(BaseSimulationService):
             )
         else:
             raise NotImplementedError(f"LocalSimulationService doesn't support bundle_source={config.bundle_source} yet")
-        
-        # Create CAS (memory for local)
-        cas = MemoryCAS()
-        
+
         # Create execution environment with proper dependencies
-        exec_env = DirectExecEnv(bundle_repo=bundle_repo, cas=cas)
+        storage_dir = Path("/tmp/modelops/provenance")
+        exec_env = DirectExecEnv(bundle_repo=bundle_repo, storage_dir=storage_dir)
         self.executor = SimulationExecutor(exec_env)
     
     def submit(self, task: SimTask) -> Future[SimReturn]:
@@ -179,11 +150,7 @@ class LocalSimulationService(BaseSimulationService):
         try:
             # Use executor to run the task
             result = self.executor.execute(task)
-            
-            # Store in cache if available
-            if self.cache:
-                self.cache.put(task, result)
-            
+            # Caching now handled at execution environment level
             future.set_result(result)
         except Exception as e:
             future.set_exception(e)

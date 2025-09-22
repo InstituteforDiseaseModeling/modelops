@@ -14,9 +14,11 @@ from dataclasses import replace
 
 from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo, task_id, sim_root
 from modelops_contracts.simulation import AggregationTask, AggregationReturn
-from modelops_contracts.ports import ExecutionEnvironment, BundleRepository, CAS
+from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
 
 from ...worker.process_manager import WarmProcessManager
+from ...services.provenance_store import ProvenanceStore
+from ...services.provenance_schema import ProvenanceSchema, DEFAULT_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -32,30 +34,35 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
     def __init__(
         self,
         bundle_repo: BundleRepository,
-        cas: CAS,
         venvs_dir: Path,
+        storage_dir: Path,
         mem_limit_bytes: Optional[int] = None,
         max_warm_processes: int = 128,
-        inline_artifact_max_bytes: int = 64_000,
+        provenance_schema: Optional[ProvenanceSchema] = None,
         force_fresh_venv: bool = False
     ):
         """Initialize the execution environment.
-        
+
         Args:
             bundle_repo: Repository for fetching bundles
-            cas: Content-addressable storage for results
             venvs_dir: Directory for virtual environments
+            storage_dir: Directory for provenance-based storage
             mem_limit_bytes: Optional memory limit per process
             max_warm_processes: Maximum number of warm processes
-            inline_artifact_max_bytes: Max size for inline artifacts (vs CAS)
+            provenance_schema: Schema for storage paths (default: bundle invalidation)
             force_fresh_venv: Force fresh venv creation for each execution (debugging)
         """
         self.bundle_repo = bundle_repo
-        self.cas = cas
         self.venvs_dir = venvs_dir
+        self.storage_dir = storage_dir
         self.mem_limit_bytes = mem_limit_bytes
-        self.inline_artifact_max_bytes = inline_artifact_max_bytes
-        
+
+        # Create provenance store
+        self.provenance = ProvenanceStore(
+            storage_dir=storage_dir,
+            schema=provenance_schema or DEFAULT_SCHEMA
+        )
+
         # Create process manager
         self._process_manager = WarmProcessManager(
             venvs_dir=venvs_dir,
@@ -72,6 +79,12 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Returns:
             SimReturn with status and artifacts
         """
+        # Check provenance store first
+        stored = self.provenance.get_sim(task)
+        if stored:
+            logger.debug(f"Cache hit for task {task.task_id()}")
+            return stored
+
         try:
             # 1. Resolve bundle
             digest, bundle_path = self._resolve_bundle(task.bundle_ref)
@@ -86,7 +99,12 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             )
 
             # 3. Create return value
-            return self._create_sim_return(task, raw_artifacts)
+            result = self._create_sim_return(task, raw_artifacts)
+
+            # 4. Store in provenance
+            self.provenance.put_sim(task, result)
+
+            return result
 
         except Exception as e:
             return self._create_error_return(
@@ -106,17 +124,20 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Returns:
             AggregationReturn with loss and diagnostics
         """
+        # Check provenance store first
+        stored = self.provenance.get_agg(task)
+        if stored:
+            logger.debug(f"Cache hit for aggregation {task.aggregation_id()}")
+            return stored
+
         try:
             # 1. Resolve bundle
             digest, bundle_path = self._resolve_bundle(task.bundle_ref)
 
-            # 2. Resolve CAS references
-            resolved_returns = self._resolve_cas_references(task.sim_returns)
+            # 2. Serialize for subprocess (sim_returns already have inline data)
+            serialized_returns = self._serialize_sim_returns(task.sim_returns)
 
-            # 3. Serialize for subprocess
-            serialized_returns = self._serialize_sim_returns(resolved_returns)
-
-            # 4. Execute aggregation
+            # 3. Execute aggregation
             result = self._process_manager.execute_aggregation(
                 bundle_digest=digest,
                 bundle_path=bundle_path,
@@ -125,19 +146,24 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 target_data=task.target_data
             )
 
-            # 5. Handle errors and return
+            # 4. Handle errors and return
             if 'error' in result:
                 error_msg = result['error']
                 error_type = result.get('type', 'Unknown')
                 raise RuntimeError(f"Aggregation failed in subprocess: {error_msg} (type: {error_type})")
 
-            return AggregationReturn(
+            agg_return = AggregationReturn(
                 aggregation_id=task.aggregation_id(),
                 loss=result['loss'],
                 diagnostics=result.get('diagnostics', {}),
                 outputs={},  # Could add aggregated outputs
                 n_replicates=result.get('n_replicates', len(task.sim_returns))
             )
+
+            # 5. Store in provenance
+            self.provenance.put_agg(task, agg_return)
+
+            return agg_return
 
         except Exception as e:
             logger.error(f"Aggregation execution failed: {e}")
@@ -167,28 +193,6 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         """
         return self.bundle_repo.ensure_local(bundle_ref)
 
-    def _handle_artifacts(self, raw_artifacts: Dict[str, Any]) -> Dict[str, str]:
-        """Convert raw artifacts to CAS refs or inline data.
-
-        Args:
-            raw_artifacts: Raw artifacts from subprocess
-
-        Returns:
-            Dict mapping artifact names to CAS refs or inline data URIs
-        """
-        artifact_refs = {}
-        for name, data in raw_artifacts.items():
-            # Data comes back as base64-encoded strings from subprocess
-            decoded_data = base64.b64decode(data) if isinstance(data, str) else data
-
-            if len(decoded_data) > self.inline_artifact_max_bytes:  # Large artifact
-                checksum = hashlib.sha256(decoded_data).hexdigest()
-                ref = self.cas.put(decoded_data, checksum)
-                artifact_refs[name] = f"cas://{ref}"
-            else:  # Small artifact - inline
-                artifact_refs[name] = f"inline:{base64.b64encode(decoded_data).decode()}"
-
-        return artifact_refs
 
     def _create_sim_return(self, task: SimTask, raw_artifacts: Dict[str, Any]) -> SimReturn:
         """Create SimReturn from task and raw subprocess artifacts.
@@ -212,9 +216,6 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 f"(type: {error_info.get('type', 'Unknown')})"
             )
 
-        # Convert to artifact refs
-        artifact_refs = self._handle_artifacts(raw_artifacts)
-
         # Create proper sim_root and task_id
         root = sim_root(
             bundle_ref=task.bundle_ref,
@@ -223,35 +224,26 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             entrypoint=str(task.entrypoint) if task.entrypoint else "main"
         )
 
-        # Determine output names
-        output_names = tuple(artifact_refs.keys())
+        # Convert raw artifacts to TableArtifacts (always inline for MVP)
+        outputs = {}
+        for name, data in raw_artifacts.items():
+            # Data comes back as base64-encoded strings from subprocess
+            decoded_data = base64.b64decode(data) if isinstance(data, str) else data
+            checksum = hashlib.blake2b(decoded_data, digest_size=32).hexdigest()
+
+            outputs[name] = TableArtifact(
+                size=len(decoded_data),
+                inline=decoded_data,
+                checksum=checksum
+            )
+
+        # Determine output names for task_id
+        output_names = tuple(outputs.keys())
         tid = task_id(
             sim_root=root,
             entrypoint=str(task.entrypoint) if task.entrypoint else "main",
             outputs=output_names
         )
-
-        # Convert artifact_refs to TableArtifacts
-        outputs = {}
-        for name, ref in artifact_refs.items():
-            if ref.startswith("cas://"):
-                checksum = ref[6:]  # Remove "cas://" prefix
-                # We don't have size info here, estimate from original data
-                outputs[name] = TableArtifact(
-                    ref=ref,
-                    checksum=checksum,
-                    size=0,  # Size unknown at this point
-                    inline=None
-                )
-            elif ref.startswith("inline:"):
-                inline_data = base64.b64decode(ref[7:])
-                checksum = hashlib.sha256(inline_data).hexdigest()
-                outputs[name] = TableArtifact(
-                    ref=None,
-                    checksum=checksum,
-                    size=len(inline_data),
-                    inline=inline_data
-                )
 
         return SimReturn(
             task_id=tid,
@@ -259,44 +251,18 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             outputs=outputs
         )
 
-    def _resolve_cas_references(self, sim_returns: List[SimReturn]) -> List[SimReturn]:
-        """Resolve CAS references to inline data for aggregation.
 
-        Args:
-            sim_returns: List of SimReturns that may have CAS references
-
-        Returns:
-            List of SimReturns with CAS data resolved to inline
-        """
-        resolved_returns = []
-        for sr in sim_returns:
-            resolved_outputs = {}
-            for name, artifact in sr.outputs.items():
-                if artifact.ref and artifact.ref.startswith("cas://") and not artifact.inline:
-                    # Fetch from CAS
-                    cas_ref = artifact.ref[6:]  # Remove "cas://" prefix
-                    data = self.cas.get(cas_ref)
-                    resolved_artifact = replace(artifact, inline=data)
-                    resolved_outputs[name] = resolved_artifact
-                else:
-                    resolved_outputs[name] = artifact
-
-            resolved_return = replace(sr, outputs=resolved_outputs)
-            resolved_returns.append(resolved_return)
-
-        return resolved_returns
-
-    def _serialize_sim_returns(self, resolved_returns: List[SimReturn]) -> List[Dict]:
+    def _serialize_sim_returns(self, sim_returns: List[SimReturn]) -> List[Dict]:
         """Serialize SimReturns for JSON-RPC transport.
 
         Args:
-            resolved_returns: List of SimReturns with resolved inline data
+            sim_returns: List of SimReturns with inline data
 
         Returns:
             List of serialized SimReturn dicts for subprocess communication
         """
         serialized_returns = []
-        for sr in resolved_returns:
+        for sr in sim_returns:
             sr_dict = {
                 'task_id': sr.task_id,
                 'sim_root': sr.sim_root,
@@ -304,11 +270,14 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             }
 
             for name, artifact in sr.outputs.items():
+                # For MVP, always use inline data
+                if not artifact.inline:
+                    raise ValueError(f"Artifact {name} missing inline data for aggregation")
+
                 sr_dict['outputs'][name] = {
                     'size': artifact.size,
                     'checksum': artifact.checksum,
-                    'inline': base64.b64encode(artifact.inline).decode('ascii') if artifact.inline else None,
-                    'cas_ref': artifact.ref
+                    'inline': base64.b64encode(artifact.inline).decode('ascii')
                 }
 
             serialized_returns.append(sr_dict)
@@ -350,7 +319,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             retryable=False  # Could be smarter about this based on error type
         )
 
-        # Store full error details as artifact
+        # Store full error details as artifact (always inline for MVP)
         error_details_data = json.dumps({
             "error": str(exception),
             "type": type(exception).__name__,
@@ -358,24 +327,13 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             "entrypoint": entrypoint,
             "traceback": None  # Could capture traceback if needed
         }).encode()
-        checksum = hashlib.sha256(error_details_data).hexdigest()
+        checksum = hashlib.blake2b(error_details_data, digest_size=32).hexdigest()
 
-        # Store in CAS if large, otherwise inline
-        if len(error_details_data) > self.inline_artifact_max_bytes:
-            error_ref = self.cas.put(error_details_data, checksum)
-            error_details = TableArtifact(
-                ref=f"cas://{error_ref}",
-                checksum=checksum,
-                size=len(error_details_data),
-                inline=None
-            )
-        else:
-            error_details = TableArtifact(
-                ref=None,
-                checksum=checksum,
-                size=len(error_details_data),
-                inline=error_details_data
-            )
+        error_details = TableArtifact(
+            size=len(error_details_data),
+            inline=error_details_data,
+            checksum=checksum
+        )
 
         return SimReturn(
             task_id=tid,

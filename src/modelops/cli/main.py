@@ -14,7 +14,7 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status
+from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results
 
 # Register sub-commands
 app.add_typer(
@@ -63,6 +63,12 @@ app.add_typer(
     status.app,
     name="status",
     help="Show comprehensive infrastructure status"
+)
+
+app.add_typer(
+    results.app,
+    name="results",
+    help="View and manage simulation results"
 )
 
 

@@ -10,7 +10,7 @@ from typing import Optional
 
 from dask.distributed import WorkerPlugin
 from modelops_contracts.ports import (
-    ExecutionEnvironment, BundleRepository, CAS
+    ExecutionEnvironment, BundleRepository
 )
 
 from .config import RuntimeConfig
@@ -45,14 +45,14 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         config = self.config or RuntimeConfig.from_env()
         config.validate()
         
-        # Create CAS adapter
-        cas = self._make_cas(config)
-        
+        # Storage directory for provenance store
+        storage_dir = Path(config.storage_dir or "/tmp/modelops/provenance")
+
         # Create bundle repository
         bundle_repo = self._make_bundle_repository(config)
-        
+
         # Create execution environment with its dependencies
-        exec_env = self._make_execution_environment(config, bundle_repo, cas)
+        exec_env = self._make_execution_environment(config, bundle_repo, storage_dir)
         
         # Create the core domain executor with single dependency
         from modelops.core.executor import SimulationExecutor
@@ -84,29 +84,6 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
             finally:
                 delattr(worker, 'modelops_runtime')
     
-    def _make_cas(self, config: RuntimeConfig) -> CAS:
-        """Instantiate the appropriate CAS adapter.
-        
-        Args:
-            config: Runtime configuration
-            
-        Returns:
-            CAS implementation based on config
-        """
-        # TODO: should be an interface here, not a branch
-        # or, a to_cas() method on config.
-        if config.cas_backend == 'azure':
-            from modelops.adapters.cas.azure_cas import AzureCAS
-            return AzureCAS(
-                container=config.cas_bucket,
-                prefix=config.cas_prefix,
-                storage_account=config.azure_storage_account
-            )
-        elif config.cas_backend == 'memory':
-            from modelops.adapters.cas.memory_cas import MemoryCAS
-            return MemoryCAS()
-        else:
-            raise ValueError(f"Unknown CAS backend: {config.cas_backend}")
     
     def _make_bundle_repository(self, config: RuntimeConfig) -> BundleRepository:
         """Instantiate the appropriate bundle repository adapter.
@@ -167,14 +144,14 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         self,
         config: RuntimeConfig,
         bundle_repo: BundleRepository,
-        cas: CAS
+        storage_dir: Path
     ) -> ExecutionEnvironment:
         """Instantiate the appropriate execution environment.
         
         Args:
             config: Runtime configuration
             bundle_repo: Bundle repository for fetching code
-            cas: CAS for storing outputs
+            storage_dir: Directory for provenance-based storage
             
         Returns:
             ExecutionEnvironment implementation based on config
@@ -183,11 +160,10 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
             from modelops.adapters.exec_env.isolated_warm import IsolatedWarmExecEnv
             return IsolatedWarmExecEnv(
                 bundle_repo=bundle_repo,
-                cas=cas,
                 venvs_dir=Path(config.venvs_dir),
+                storage_dir=storage_dir,
                 mem_limit_bytes=config.mem_limit_bytes,
                 max_warm_processes=config.max_warm_processes,
-                inline_artifact_max_bytes=config.inline_artifact_max_bytes,
                 force_fresh_venv=config.force_fresh_venv
             )
         elif config.executor_type == 'direct':
@@ -195,7 +171,7 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
             from modelops.adapters.exec_env.direct import DirectExecEnv
             return DirectExecEnv(
                 bundle_repo=bundle_repo,
-                cas=cas
+                storage_dir=storage_dir
             )
         else:
             raise ValueError(f"Unknown executor type: {config.executor_type}")
