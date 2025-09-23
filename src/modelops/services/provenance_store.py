@@ -109,9 +109,33 @@ class ProvenanceStore:
                 else:
                     logger.warning(f"Missing artifact file: {artifact_file}")
 
+            # Reconstruct error info if present
+            error = None
+            error_details = None
+            if "error" in result_data:
+                error = ErrorInfo(
+                    error_type=result_data["error"]["error_type"],
+                    message=result_data["error"]["message"],
+                    retryable=result_data["error"]["retryable"]
+                )
+
+                # Load error details if present
+                if "error_details" in result_data:
+                    error_file = result_dir / "error_details.arrow"
+                    if error_file.exists():
+                        with open(error_file, "rb") as f:
+                            error_data = f.read()
+                        error_details = TableArtifact(
+                            size=len(error_data),
+                            inline=error_data,
+                            checksum=result_data["error_details"]["checksum"]
+                        )
+
             return SimReturn(
                 task_id=result_data["task_id"],
                 outputs=outputs,
+                error=error,
+                error_details=error_details,
                 cached=True
             )
 
@@ -154,6 +178,25 @@ class ProvenanceStore:
                 "task_id": result.task_id,
                 "outputs": {}
             }
+
+            # Store error info if present
+            if result.error:
+                result_data["error"] = {
+                    "error_type": result.error.error_type,
+                    "message": result.error.message,
+                    "retryable": result.error.retryable
+                }
+
+                # Store error details if present
+                if result.error_details:
+                    error_file = result_dir / "error_details.arrow"
+                    if result.error_details.inline:
+                        with open(error_file, "wb") as f:
+                            f.write(result.error_details.inline)
+                    result_data["error_details"] = {
+                        "size": result.error_details.size,
+                        "checksum": result.error_details.checksum
+                    }
 
             # Store artifacts as separate blob files
             for name, artifact in result.outputs.items():
