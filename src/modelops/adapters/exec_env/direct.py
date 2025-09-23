@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Callable
 
-from modelops_contracts import SimTask, SimReturn, TableArtifact, task_id, sim_root
+from modelops_contracts import SimTask, SimReturn, TableArtifact
 from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
 
 logger = logging.getLogger(__name__)
@@ -141,24 +141,15 @@ class DirectExecEnv(ExecutionEnvironment):
                         checksum=checksum
                     )
                 
-                # Create proper sim_root and task_id
-                root = sim_root(
-                    bundle_ref=task.bundle_ref,
-                    params=dict(task.params.params),
-                    seed=task.seed,
-                    entrypoint=str(task.entrypoint) if task.entrypoint else "main"
-                )
-                
+                # Create simple task_id from params and seed
+                param_id = task.params.param_id
+                seed_str = str(task.seed)
                 output_names = tuple(outputs.keys())
-                tid = task_id(
-                    sim_root=root,
-                    entrypoint=str(task.entrypoint) if task.entrypoint else "main",
-                    outputs=output_names
-                )
-                
+                tid_components = f"{param_id[:16]}-{seed_str}-{','.join(sorted(output_names))}"
+                tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
+
                 return SimReturn(
                     task_id=tid,
-                    sim_root=root,
                     outputs=outputs
                 )
                 
@@ -169,18 +160,10 @@ class DirectExecEnv(ExecutionEnvironment):
                 
         except Exception as e:
             logger.exception(f"Direct execution failed for bundle {task.bundle_ref}")
-            # Create error result
-            root = sim_root(
-                bundle_ref=task.bundle_ref,
-                params=dict(task.params.params),
-                seed=task.seed,
-                entrypoint=str(task.entrypoint) if task.entrypoint else "main"
-            )
-            tid = task_id(
-                sim_root=root,
-                entrypoint=str(task.entrypoint) if task.entrypoint else "main",
-                outputs=()
-            )
+            # Create simple task_id for error case
+            param_id = task.params.param_id
+            tid_components = f"{param_id[:16]}-{task.seed}-error"
+            tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
             
             # Store error in table
             error_data = json.dumps({
@@ -194,7 +177,6 @@ class DirectExecEnv(ExecutionEnvironment):
             
             return SimReturn(
                 task_id=tid,
-                sim_root=root,
                 outputs={"error": TableArtifact(
                     ref=f"cas://{error_ref}",
                     checksum=checksum,

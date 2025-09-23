@@ -62,10 +62,8 @@ class TestLocalSimulationService:
             inline=test_data,
             checksum=checksum
         )
-        # sim_root must be 64-char hex string
         mock_result = SimReturn(
             task_id="test-task-123",
-            sim_root="a" * 64,  # Valid 64-char hex string
             outputs={"result": artifact}
         )
         mock_executor.execute.return_value = mock_result
@@ -272,7 +270,6 @@ class TestSimulationIntegration:
         
         mock_result = SimReturn(
             task_id="test-123",
-            sim_root="b" * 64,  # Valid 64-char hex string
             outputs={
                 "pi_estimate": pi_artifact,
                 "error": error_artifact

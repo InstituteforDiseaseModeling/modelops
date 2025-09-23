@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any, List, Tuple
 from dataclasses import replace
 
-from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo, task_id, sim_root
+from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo
 from modelops_contracts.simulation import AggregationTask, AggregationReturn
 from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
 
@@ -80,9 +80,12 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             SimReturn with status and artifacts
         """
         # Check provenance store first
+        # TODO: add flag to turn this cache lookup off? 
         stored = self.provenance.get_sim(task)
         if stored:
-            logger.debug(f"Cache hit for task {task.task_id()}")
+            # Generate a task identifier for logging
+            task_ident = f"{task.params.param_id[:8]}-seed{task.seed}"
+            logger.debug(f"Cache hit for task {task_ident}")
             return stored
 
         try:
@@ -126,6 +129,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         """
         # Check provenance store first
         stored = self.provenance.get_agg(task)
+        # TODO: add flag to turn this cache lookup off? 
         if stored:
             logger.debug(f"Cache hit for aggregation {task.aggregation_id()}")
             return stored
@@ -216,13 +220,10 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 f"(type: {error_info.get('type', 'Unknown')})"
             )
 
-        # Create proper sim_root and task_id
-        root = sim_root(
-            bundle_ref=task.bundle_ref,
-            params=dict(task.params.params),
-            seed=task.seed,
-            entrypoint=str(task.entrypoint) if task.entrypoint else "main"
-        )
+        # Create simple task_id from params and seed
+        # Use param_id + seed + outputs for uniqueness
+        param_id = task.params.param_id
+        seed_str = str(task.seed)
 
         # Convert raw artifacts to TableArtifacts (always inline for MVP)
         outputs = {}
@@ -237,17 +238,13 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 checksum=checksum
             )
 
-        # Determine output names for task_id
+        # Generate task_id from components
         output_names = tuple(outputs.keys())
-        tid = task_id(
-            sim_root=root,
-            entrypoint=str(task.entrypoint) if task.entrypoint else "main",
-            outputs=output_names
-        )
+        tid_components = f"{param_id[:16]}-{seed_str}-{','.join(sorted(output_names))}"
+        tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
         return SimReturn(
             task_id=tid,
-            sim_root=root,
             outputs=outputs
         )
 
@@ -265,7 +262,6 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         for sr in sim_returns:
             sr_dict = {
                 'task_id': sr.task_id,
-                'sim_root': sr.sim_root,
                 'outputs': {}
             }
 
@@ -299,18 +295,11 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         """
         logger.exception(f"Task execution failed for bundle {bundle_ref}")
 
-        # Create error structure
-        root = sim_root(
-            bundle_ref=bundle_ref,
-            params=params,
-            seed=seed,
-            entrypoint=entrypoint
-        )
-        tid = task_id(
-            sim_root=root,
-            entrypoint=entrypoint,
-            outputs=("error",)
-        )
+        # Create simple task_id for error case
+        from modelops_contracts import make_param_id
+        param_id = make_param_id(params)
+        tid_components = f"{param_id[:16]}-{seed}-error"
+        tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
         # Create error info
         error_info = ErrorInfo(
@@ -337,7 +326,6 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
         return SimReturn(
             task_id=tid,
-            sim_root=root,
             outputs={},  # Empty outputs for error case
             error=error_info,
             error_details=error_details

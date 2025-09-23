@@ -16,9 +16,7 @@ from modelops_contracts import (
     SimTask,
     SimReturn,
     TableArtifact,
-    BundleManifest,
-    task_id,
-    sim_root
+    ErrorInfo
 )
 from modelops_contracts.simulation import AggregationTask, AggregationReturn
 
@@ -30,9 +28,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StoredResult:
-    """Result stored with metadata and manifest."""
+    """Result stored with metadata."""
     metadata: Dict[str, Any]  # SimTask/AggTask metadata
-    manifest: Optional[BundleManifest]  # For indexing/querying
     result: Any  # SimReturn or AggregationReturn
 
 
@@ -114,7 +111,6 @@ class ProvenanceStore:
 
             return SimReturn(
                 task_id=result_data["task_id"],
-                sim_root=result_data["sim_root"],
                 outputs=outputs,
                 cached=True
             )
@@ -151,23 +147,11 @@ class ProvenanceStore:
             with open(result_dir / "metadata.json", "w") as f:
                 json.dump(metadata, f, indent=2)
 
-            # Store manifest if available
-            if task.bundle_manifest:
-                manifest_data = {
-                    "bundle_digest": task.bundle_manifest.bundle_digest,
-                    "bundle_ref": task.bundle_manifest.bundle_ref,
-                    "models": {
-                        k: asdict(v) for k, v in task.bundle_manifest.models.items()
-                    },
-                    "version": task.bundle_manifest.version
-                }
-                with open(result_dir / "manifest.json", "w") as f:
-                    json.dump(manifest_data, f, indent=2)
+            # No longer storing manifest - removed from SimTask
 
             # Store result metadata
             result_data = {
                 "task_id": result.task_id,
-                "sim_root": result.sim_root,
                 "outputs": {}
             }
 
@@ -319,9 +303,12 @@ class ProvenanceStore:
             "seed": task.seed
         }
 
-        # Add model_digest if using token invalidation
-        if task.bundle_manifest and "model_digest" in self.schema.sim_path_template:
-            context["model_digest"] = task.model_digest or "unknown"
+        # For token invalidation, would need model_digest from bundle
+        # For now, use bundle_digest as fallback
+        if "model_digest" in self.schema.sim_path_template:
+            context["model_digest"] = hashlib.blake2b(
+                task.bundle_ref.encode(), digest_size=32
+            ).hexdigest()
 
         return context
 
@@ -335,10 +322,12 @@ class ProvenanceStore:
             "aggregation_id": task.aggregation_id()
         }
 
-        # Add model digest if available and using token invalidation
+        # For token invalidation, would need model_digest from bundle
+        # For now, use bundle_digest as fallback
         if "model_digest" in self.schema.agg_path_template:
-            # Would need to extract from first SimReturn's manifest
-            context["model_digest"] = "unknown"  # Placeholder
+            context["model_digest"] = hashlib.blake2b(
+                task.bundle_ref.encode(), digest_size=32
+            ).hexdigest()
 
         return context
 

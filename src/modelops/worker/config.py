@@ -30,6 +30,7 @@ class RuntimeConfig:
     # Execution environment
     executor_type: str = "isolated_warm"  # "isolated_warm", "direct"
     venvs_dir: str = "/tmp/modelops/venvs"
+    storage_dir: str = "/tmp/modelops/provenance"  # Provenance storage location
     max_warm_processes: int = 128
     mem_limit_bytes: Optional[int] = None
     inline_artifact_max_bytes: int = 64_000  # Artifacts smaller than this are inlined
@@ -68,6 +69,7 @@ class RuntimeConfig:
         # Execution environment
         config.executor_type = os.environ.get("MODELOPS_EXECUTOR_TYPE", config.executor_type)
         config.venvs_dir = os.environ.get("MODELOPS_VENVS_DIR", config.venvs_dir)
+        config.storage_dir = os.environ.get("MODELOPS_STORAGE_DIR", config.storage_dir)
         config.max_warm_processes = int(os.environ.get("MODELOPS_MAX_WARM_PROCESSES", config.max_warm_processes))
         config.inline_artifact_max_bytes = int(os.environ.get("MODELOPS_INLINE_ARTIFACT_MAX_BYTES", config.inline_artifact_max_bytes))
         

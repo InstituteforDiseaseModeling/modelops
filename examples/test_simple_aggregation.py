@@ -17,7 +17,6 @@ def main():
         sim_returns = [
             SimReturn(
                 task_id="a" * 64,  # Valid 64-char hex
-                sim_root="b" * 64,  # Valid 64-char hex
                 outputs={
                     "result": TableArtifact(
                         ref=None,
@@ -29,7 +28,6 @@ def main():
             ),
             SimReturn(
                 task_id="c" * 64,  # Valid 64-char hex
-                sim_root="d" * 64,  # Valid 64-char hex
                 outputs={
                     "result": TableArtifact(
                         ref=None,
