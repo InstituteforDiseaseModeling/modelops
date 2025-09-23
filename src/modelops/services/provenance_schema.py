@@ -176,4 +176,4 @@ TOKEN_INVALIDATION_SCHEMA = ProvenanceSchema(
     agg_path_template="aggs/{hash(model_digest)[:12]}/target_{target}/agg_{aggregation_id}"
 )
 
-DEFAULT_SCHEMA = BUNDLE_INVALIDATION_SCHEMA
+DEFAULT_SCHEMA = TOKEN_INVALIDATION_SCHEMA

@@ -1,0 +1,40 @@
+# Job Runner Image for executing SimJob/CalibrationJob
+FROM python:3.13-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for running jobs
+RUN useradd -m -u 1000 runner
+
+# Set working directory
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    "dask[distributed]==2024.8.0" \
+    azure-storage-blob \
+    kubernetes
+
+# Copy local repositories (these must exist at build time)
+# Build context should be the parent directory containing all repos
+COPY modelops-contracts /tmp/modelops-contracts
+COPY modelops /tmp/modelops
+
+# Install modelops packages
+RUN pip install --no-cache-dir \
+    /tmp/modelops-contracts \
+    /tmp/modelops \
+    && rm -rf /tmp/modelops-contracts /tmp/modelops
+
+# Switch to non-root user
+USER 1000
+
+# Set Python path
+ENV PYTHONPATH=/app:$PYTHONPATH
+
+# Run the job runner module
+CMD ["python", "-m", "modelops.runners.job_runner"]

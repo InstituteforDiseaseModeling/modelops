@@ -31,6 +31,7 @@ PYTHON_VERSION ?= 3.11
 # Image names
 SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
 WORKER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
+RUNNER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-job-runner
 SMOKETEST_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-smoketest
 
 # GHCR Configuration
@@ -66,9 +67,9 @@ help:
 	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
 	@echo ""
 	@echo "Docker Commands:"
-	@echo "  make build            # Build and push AMD64 images (use -j2 for parallel)"
+	@echo "  make build            # Build and push AMD64 images (scheduler, worker, runner)"
 	@echo "  make build-mac        # Build images for dev Mac (Apple Silicon/ARM64)"
-	@echo "  make build-multiarch  # Build both images (use -j2 for parallel)"
+	@echo "  make build-multiarch  # Build all images for AMD64 deployment"
 	@echo "  make setup-buildx     # Setup Docker buildx for multi-arch"
 	@echo "  make release          # Tag and push release version"
 	@echo "  make update-cluster   # Update cluster with new images"
@@ -124,7 +125,7 @@ setup-buildx:
 ## Build images for local Mac (Apple Silicon native)
 build-mac:
 	@echo "Building for local mac dev architecture (Apple Silicon)..."
-	$(MAKE) build-scheduler build-worker build-smoketest
+	$(MAKE) build-scheduler build-worker build-runner build-smoketest
 	@echo "✓ Built local images with version: $(VERSION)"
 
 ## Build and push multi-arch scheduler image
@@ -153,6 +154,19 @@ build-multiarch-worker: setup-buildx ghcr-login
 		$(BUILD_CONTEXT)
 	@echo "✓ Worker image built and pushed: $(WORKER_IMAGE):$(TAG)"
 
+## Build and push multi-arch runner image
+build-multiarch-runner: setup-buildx ghcr-login
+	@echo "Building multi-arch runner image for platforms: $(PLATFORMS)"
+	@docker buildx build \
+		--platform $(PLATFORMS) \
+		-f docker/Dockerfile.runner \
+		-t $(RUNNER_IMAGE):$(TAG) \
+		-t $(RUNNER_IMAGE):$(VERSION) \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
+		$(BUILD_CONTEXT)
+	@echo "✓ Runner image built and pushed: $(RUNNER_IMAGE):$(TAG)"
+
 ## Build and push multi-arch smoketest image
 build-multiarch-smoketest: setup-buildx ghcr-login
 	@echo "Building multi-arch smoketest image for platforms: $(PLATFORMS)"
@@ -165,8 +179,8 @@ build-multiarch-smoketest: setup-buildx ghcr-login
 		$(BUILD_CONTEXT)/modelops
 	@echo "✓ Smoketest image built and pushed: $(SMOKETEST_IMAGE):$(TAG)"
 
-## Build and push both multi-architecture images (can be parallelized with -j)
-build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarch-smoketest
+## Build and push all multi-architecture images (can be parallelized with -j)
+build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarch-runner build-multiarch-smoketest
 	@echo "✓ All multi-arch images built and pushed for: $(PLATFORMS)"
 	@echo "  $(SCHEDULER_IMAGE):$(TAG)"
 	@echo "  $(SCHEDULER_IMAGE):$(VERSION)"
@@ -192,6 +206,16 @@ build-worker:
 	docker build \
 		-f docker/Dockerfile.worker \
 		-t $(WORKER_IMAGE):$(TAG) \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		$(BUILD_CONTEXT)
+
+## Build job runner image
+build-runner:
+	@echo "Building job runner image: $(RUNNER_IMAGE):$(TAG)"
+	@echo "Note: Requires ../modelops-contracts to exist"
+	docker build \
+		-f docker/Dockerfile.runner \
+		-t $(RUNNER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		$(BUILD_CONTEXT)
 
@@ -249,7 +273,7 @@ check-visibility:
 		PRIVATE_PKGS=$$(curl -s -H "Authorization: Bearer $(GHCR_PAT)" \
 			-H "X-GitHub-Api-Version: 2022-11-28" \
 			"https://api.github.com/orgs/$(ORG)/packages?package_type=container&visibility=private" \
-			| jq -r '.[].name' 2>/dev/null | grep -E "$(PROJECT)-dask-(scheduler|worker)" || true); \
+			| jq -r '.[].name' 2>/dev/null | grep -E "$(PROJECT)-(dask-(scheduler|worker)|job-runner)" || true); \
 		if [ -n "$$PRIVATE_PKGS" ]; then \
 			echo "❌ The following packages are PRIVATE and need to be made public:"; \
 			echo "$$PRIVATE_PKGS" | sed 's/^/   - /'; \
@@ -274,8 +298,10 @@ release:
 	fi
 	docker tag $(SCHEDULER_IMAGE):$(TAG) $(SCHEDULER_IMAGE):$(RELEASE_VERSION)
 	docker tag $(WORKER_IMAGE):$(TAG) $(WORKER_IMAGE):$(RELEASE_VERSION)
+	docker tag $(RUNNER_IMAGE):$(TAG) $(RUNNER_IMAGE):$(RELEASE_VERSION)
 	docker push $(SCHEDULER_IMAGE):$(RELEASE_VERSION)
 	docker push $(WORKER_IMAGE):$(RELEASE_VERSION)
+	docker push $(RUNNER_IMAGE):$(RELEASE_VERSION)
 	@echo "✓ Released version $(RELEASE_VERSION)"
 
 # === Azure ACR Targets (Preserved for Future Use) ===
@@ -308,18 +334,20 @@ update-cluster:
 ## Rollout new images to running Dask deployments
 rollout-images:
 	@echo "Rolling out latest images to Dask deployments in namespace: $(NAMESPACE)"
-	@kubectl rollout restart deployment dask-scheduler -n $(NAMESPACE)
-	@kubectl rollout restart deployment dask-workers -n $(NAMESPACE)
+	@kubectl rollout restart deployment dask-scheduler -n $(NAMESPACE) 2>/dev/null || true
+	@kubectl rollout restart deployment dask-workers -n $(NAMESPACE) 2>/dev/null || true
+	@# Note: Job runners are one-shot K8s Jobs, not deployments - they pick up new images on next submission
 	@echo "Waiting for rollouts to complete..."
-	@kubectl rollout status deployment dask-scheduler -n $(NAMESPACE) --timeout=120s
-	@kubectl rollout status deployment dask-workers -n $(NAMESPACE) --timeout=120s
+	@kubectl rollout status deployment dask-scheduler -n $(NAMESPACE) --timeout=120s 2>/dev/null || true
+	@kubectl rollout status deployment dask-workers -n $(NAMESPACE) --timeout=120s 2>/dev/null || true
 	@echo "✓ New images rolled out successfully"
-	@kubectl get pods -n $(NAMESPACE) | grep -E "dask-|NAME"
+	@echo "Note: Job runners will use new image on next job submission"
+	@kubectl get pods -n $(NAMESPACE) | grep -E "dask-|job-|NAME"
 
 ## Clean Docker images
 clean-images:
-	docker rmi $(SCHEDULER_IMAGE):$(TAG) $(WORKER_IMAGE):$(TAG) || true
-	docker rmi $(SCHEDULER_IMAGE):$(VERSION) $(WORKER_IMAGE):$(VERSION) || true
+	docker rmi $(SCHEDULER_IMAGE):$(TAG) $(WORKER_IMAGE):$(TAG) $(RUNNER_IMAGE):$(TAG) || true
+	docker rmi $(SCHEDULER_IMAGE):$(VERSION) $(WORKER_IMAGE):$(VERSION) $(RUNNER_IMAGE):$(VERSION) || true
 
 ## Show current images in cluster
 show-images:

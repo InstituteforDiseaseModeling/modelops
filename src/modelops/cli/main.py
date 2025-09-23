@@ -14,7 +14,7 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results
+from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs
 
 # Register sub-commands
 app.add_typer(
@@ -69,6 +69,12 @@ app.add_typer(
     results.app,
     name="results",
     help="View and manage simulation results"
+)
+
+app.add_typer(
+    jobs.app,
+    name="jobs",
+    help="Submit and manage simulation jobs"
 )
 
 

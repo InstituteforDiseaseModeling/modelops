@@ -322,7 +322,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                                 command=[
                                     "dask-worker",
                                     "tcp://dask-scheduler:8786",
-                                    "--nprocs", str(worker_processes),
+                                    "--nworkers", str(worker_processes),
                                     "--nthreads", str(worker_threads),
                                     "--memory-limit", memory_limit
                                 ],
