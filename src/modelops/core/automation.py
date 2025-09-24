@@ -4,11 +4,27 @@ This module provides simplified interfaces for common Pulumi operations,
 eliminating repetitive code in CLI modules.
 """
 
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 import pulumi.automation as auto
 from .paths import ensure_work_dir, get_backend_url
 from .naming import StackNaming
+
+
+def configure_quiet_environment():
+    """Configure environment variables to suppress noisy output from gRPC/Pulumi."""
+    # Suppress gRPC warnings about fork support
+    os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
+    # Set gRPC verbosity to error only
+    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+    # Suppress Pulumi's colorized output in non-TTY environments
+    if not os.isatty(1):  # stdout is not a TTY
+        os.environ.setdefault("NO_COLOR", "1")
+
+
+# Apply quiet configuration on module import
+configure_quiet_environment()
 
 
 def workspace_options(project: str, work_dir: Path) -> auto.LocalWorkspaceOptions:

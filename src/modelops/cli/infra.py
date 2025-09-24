@@ -1,386 +1,386 @@
-"""Infrastructure management CLI commands.
+"""Unified infrastructure management CLI.
 
-Provider-agnostic infrastructure provisioning using ComponentResources.
+Orchestrates all infrastructure components with a single command.
 """
 
 import typer
-import pulumi
 from pathlib import Path
-from typing import Optional
-from ..core import StackNaming, automation
-from ..core.automation import get_output_value
-from ..components import AzureProviderConfig
-from .utils import handle_pulumi_error, resolve_env
-from .display import (
-    console, success, warning, error, info, section, dim,
-    commands, info_dict
-)
-from .common_options import env_option, yes_option, config_option
+from typing import Optional, List
 
-app = typer.Typer(help="Manage infrastructure (Azure, AWS, GCP, local)")
+from ..client import InfrastructureService
+from ..components.specs.infra import UnifiedInfraSpec
+from .display import console, success, error, info, section, warning
+from .common_options import env_option, yes_option
+
+app = typer.Typer(help="Unified infrastructure management")
 
 
 @app.command()
 def up(
-    config: Path = config_option(help_text="Provider configuration file (YAML)"),
-    env: Optional[str] = env_option()
+    config: Path = typer.Argument(
+        ...,
+        help="Infrastructure configuration file (YAML)",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True
+    ),
+    components: Optional[List[str]] = typer.Option(
+        None,
+        "--components", "-c",
+        help="Specific components to provision (registry,cluster,storage,workspace)"
+    ),
+    env: Optional[str] = env_option(),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force reprovisioning"),
+    plan: bool = typer.Option(False, "--plan", help="Show what would be done without doing it"),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
 ):
-    """Create infrastructure from zero based on provider config.
-    
-    This command reads a YAML configuration file and provisions
-    infrastructure using Pulumi ComponentResources. The provider type
-    is specified in the config file.
-    
-    Example:
-        mops infra up --config ~/.modelops/providers/azure.yaml
     """
+    Provision infrastructure from unified configuration.
+
+    This orchestrates cluster, storage, workspace provisioning in the correct order.
+
+    Example:
+        mops infra up infrastructure.yaml
+        mops infra up infrastructure.yaml --components storage,workspace
+        mops infra up infrastructure.yaml --plan
+    """
+    from .utils import resolve_env
+
     env = resolve_env(env)
-    
-    # Load and validate configuration
-    provider_config = AzureProviderConfig.from_yaml(config)
-    
-    section(f"Creating {provider_config.provider} infrastructure from zero...")
-    info_dict({
-        "Config": str(config),
-        "Environment": env,
-        "Resource Group": f"{provider_config.resource_group}-{env}-rg-{provider_config.username}"
-    })
-    
-    def pulumi_program():
-        """Pulumi program that creates infrastructure using ComponentResource."""
-        import pulumi
-        
-        if provider_config.provider == "azure":
-            from ..infra.components.azure import ModelOpsCluster
-            # Pass validated config dict to component with environment
-            config_dict = provider_config.to_pulumi_config()
-            config_dict["environment"] = env
-            cluster = ModelOpsCluster("modelops", config_dict)
-            
-            # Export outputs at the stack level for access via StackReference
-            pulumi.export("kubeconfig", cluster.kubeconfig)
-            pulumi.export("cluster_name", cluster.cluster_name)
-            pulumi.export("resource_group", cluster.resource_group)
-            pulumi.export("location", cluster.location)
-            pulumi.export("provider", pulumi.Output.from_input("azure"))
-            
-            return cluster
-        else:
-            raise ValueError(f"Provider '{provider_config.provider}' not yet implemented")
-    
+
+    # Load spec
     try:
-        warning("\nCreating resources (this may take several minutes)...")
-        outputs = automation.up("infra", env, None, pulumi_program, on_output=dim)
-        
-        # Verify kubeconfig exists in outputs
-        if not get_output_value(outputs, "kubeconfig"):
-            error("No kubeconfig returned from infrastructure creation")
-            raise typer.Exit(1)
-        
-        success("\n✓ Infrastructure created successfully!")
-        info_dict({
-            "Provider": provider_config.provider,
-            "Stack": StackNaming.get_stack_name('infra', env)
-        })
-        
-        section("Stack outputs saved. Query with:")
-        commands([
-            ("", f"pulumi stack output --stack {StackNaming.get_stack_name('infra', env)} --cwd ~/.modelops/pulumi/infra")
-        ])
-        
-        section("Get kubeconfig:")
-        commands([
-            ("", f"pulumi stack output kubeconfig --show-secrets --stack {StackNaming.get_stack_name('infra', env)} --cwd ~/.modelops/pulumi/infra")
-        ])
-        
-        section("Next steps:")
-        info("  1. Run 'mops workspace up' to deploy Dask")
-        info("  2. Run 'mops adaptive up' to start optimization")
-        
+        spec = UnifiedInfraSpec.from_yaml(str(config))
     except Exception as e:
-        error(f"\nError creating infrastructure: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/infra", StackNaming.get_stack_name('infra', env))
+        error(f"Failed to load configuration: {e}")
         raise typer.Exit(1)
+
+    # Create service
+    service = InfrastructureService(env)
+
+    if plan:
+        # Preview mode
+        section(f"Infrastructure plan for environment: {env}")
+        preview = service.preview(spec, components)
+
+        if json_output:
+            import json
+            console.print(json.dumps(preview, indent=2))
+        else:
+            if preview["to_create"]:
+                info("Components to create:")
+                for comp in preview["to_create"]:
+                    info(f"  + {comp}")
+            if preview["to_update"]:
+                info("Components to update:")
+                for comp in preview["to_update"]:
+                    info(f"  ~ {comp}")
+            if preview["no_change"]:
+                info("Components unchanged:")
+                for comp in preview["no_change"]:
+                    info(f"  = {comp}")
+
+        raise typer.Exit(0)
+
+    section(f"Provisioning infrastructure for environment: {env}")
+    info(f"Components: {', '.join(components or spec.get_components())}")
+
+    result = service.provision(spec, components, verbose, force)
+
+    if json_output:
+        console.print(result.to_json())
+    else:
+        if result.success:
+            success("\n✓ Infrastructure provisioned successfully!")
+
+            # Show key outputs
+            if "cluster" in result.outputs:
+                cluster_outputs = result.outputs.get("cluster", {})
+                cluster_name = cluster_outputs.get("cluster_name")
+                if cluster_name:
+                    info(f"\nCluster: {cluster_name}")
+
+            if "storage" in result.outputs:
+                storage_outputs = result.outputs.get("storage", {})
+                account_name = storage_outputs.get("account_name")
+                if account_name:
+                    info(f"Storage: {account_name}")
+
+            if "workspace" in result.outputs:
+                workspace_outputs = result.outputs.get("workspace", {})
+                dashboard_url = workspace_outputs.get("dashboard_url")
+                if dashboard_url:
+                    info(f"Dask Dashboard: {dashboard_url}")
+
+            if result.logs_path:
+                info(f"\nLogs: {result.logs_path}")
+        else:
+            error("\n✗ Some components failed to provision")
+            for comp, err in result.errors.items():
+                error(f"  {comp}: {err}")
+            raise typer.Exit(1)
 
 
 @app.command()
 def down(
-    config: Path = config_option(help_text="Provider configuration file (YAML)"),
+    components: Optional[List[str]] = typer.Option(
+        None,
+        "--components", "-c",
+        help="Specific components to destroy"
+    ),
     env: Optional[str] = env_option(),
-    delete_rg: bool = typer.Option(
-        False,
-        "--delete-rg",
-        help="Also delete the resource group (dangerous!)"
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Skip dependency checks and force destruction"
-    ),
-    yes: bool = yes_option()
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip dependency checks"),
+    with_deps: bool = typer.Option(False, "--with-deps", help="Also destroy dependent components"),
+    plan: bool = typer.Option(False, "--plan", help="Show what would be done"),
+    yes: bool = yes_option(),
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
 ):
-    """Destroy infrastructure, optionally keeping resource group.
-    
-    By default, destroys AKS cluster and ACR but preserves the resource group.
-    Use --delete-rg to also delete the resource group.
     """
+    Destroy infrastructure components.
+
+    Destroys components in reverse dependency order.
+
+    Example:
+        mops infra down
+        mops infra down --components workspace
+        mops infra down --with-deps --components cluster
+    """
+    from .utils import resolve_env
+
     env = resolve_env(env)
-    
-    # Load and validate configuration
-    provider_config = AzureProviderConfig.from_yaml(config)
-    
-    # Check for dependent stacks unless forced
-    if not force:
-        import subprocess
-        from ..core.paths import WORK_DIRS
-        
-        dependent_stacks = []
-        for component in ["workspace", "storage", "adaptive"]:
-            if component not in WORK_DIRS:
-                continue
-            
-            stack_name = StackNaming.get_stack_name(component, env)
-            work_dir = WORK_DIRS[component]
-            
-            # Check if stack exists
-            cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                # Stack exists, check if it has resources
-                cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name, "--show-urns"]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if "URN" in result.stdout:
-                    dependent_stacks.append(component)
-        
-        if dependent_stacks:
-            warning("\n⚠️  Dependent stacks detected!")
-            info("The following stacks depend on this infrastructure:")
-            for stack in dependent_stacks:
-                info(f"  • {stack}")
-            
-            info("\nDestroying infrastructure will make these stacks unreachable.")
-            info("Consider cleaning them up first:")
-            commands([
-                ("Recommended", f"mops {' '.join(dependent_stacks)} down"),
-                ("Or use", "mops cleanup all")
-            ])
-            
-            if not yes:
-                confirm = typer.confirm("\nDestroy infrastructure anyway?")
-                if not confirm:
-                    success("Destruction cancelled")
-                    raise typer.Exit(0)
-    
-    # Confirm destruction
+
+    service = InfrastructureService(env)
+
+    if plan:
+        # Just show what would be done
+        components_to_destroy = components or ["workspace", "storage", "cluster", "registry"]
+        info(f"Would destroy: {', '.join(components_to_destroy)}")
+        raise typer.Exit(0)
+
     if not yes:
-        if delete_rg:
-            error("\n⚠️  WARNING: Complete Destruction")
-            info("This will destroy the ENTIRE resource group and ALL resources")
-            info("This action cannot be undone!")
+        if components:
+            warning(f"This will destroy: {', '.join(components)}")
         else:
-            warning("\n⚠️  Infrastructure Teardown")
-            info(f"This will destroy {provider_config.provider} resources (AKS, ACR)")
-            info("but will preserve the resource group for future use.")
-        
-        confirm = typer.confirm("\nAre you sure you want to proceed?")
-        if not confirm:
-            success("Destruction cancelled")
+            warning("This will destroy ALL infrastructure")
+
+        if not typer.confirm("Continue?"):
+            success("Cancelled")
             raise typer.Exit(0)
-    
-    try:
-        warning(f"\nDestroying {provider_config.provider} infrastructure...")
-        
-        if not delete_rg:
-            info("Note: Resource group is protected and will be retained.")
-        
-        # Destroy using automation helper
-        automation.destroy("infra", env, on_output=dim)
-        
-        if delete_rg and provider_config.provider == "azure":
-            # Use centralized naming to compute RG name
-            import subprocess
-            rg_name = StackNaming.get_resource_group_name(env, provider_config.username)
-            
-            warning(f"\nDeleting resource group '{rg_name}'...")
-            # Use Azure CLI to delete the retained RG
-            subprocess.run(["az", "group", "delete", "-n", rg_name, "--yes", "--no-wait"], check=False)
-            success("\n✓ Infrastructure destroyed; resource group deletion initiated")
+
+    result = service.destroy(components, verbose, force, with_deps)
+
+    if json_output:
+        console.print(result.to_json())
+    else:
+        if result.success:
+            success("\n✓ Infrastructure destroyed")
         else:
-            success("\n✓ Infrastructure destroyed; resource group retained")
-            info("Resource group preserved for future deployments")
-        
-    except Exception as e:
-        error(f"\nError destroying infrastructure: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/infra", StackNaming.get_stack_name('infra', env))
-        raise typer.Exit(1)
+            error("\n✗ Some components failed to destroy")
+            for comp, err in result.errors.items():
+                error(f"  {comp}: {err}")
+            raise typer.Exit(1)
 
 
 @app.command()
 def status(
     env: Optional[str] = env_option(),
-    provider: Optional[str] = typer.Option(
-        None,
-        "--provider", "-p",
-        help="Cloud provider (azure, aws, gcp)"
-    )
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed operational information"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output in JSON format"),
+    show_outputs: bool = typer.Option(False, "--outputs", "-o", help="Show stack outputs")
 ):
-    """Show current infrastructure status from Pulumi stack."""
-    from .utils import resolve_provider
-    
+    """
+    Show infrastructure status.
+
+    Displays the status of all infrastructure components.
+    Use --detailed to see connection commands and operational info.
+
+    Example:
+        mops infra status                # Basic overview
+        mops infra status --detailed      # Full operational details
+        mops infra status --json
+        mops infra status --outputs
+    """
+    from .utils import resolve_env
+
     env = resolve_env(env)
-    provider = resolve_provider(provider)
-    
-    stack_name = StackNaming.get_stack_name("infra", env)
-    
-    try:
-        outputs = automation.outputs("infra", env)
-        
-        if not outputs:
-            warning("Infrastructure stack exists but has no outputs")
-            info("The infrastructure may not be fully deployed.")
-            raise typer.Exit(0)
-        
-        section("Infrastructure Status")
-        info_dict({
-            "Stack": stack_name,
-            "Cluster": get_output_value(outputs, 'cluster_name', 'unknown'),
-            "Resource Group": get_output_value(outputs, 'resource_group', 'unknown'),
-            "Location": get_output_value(outputs, 'location', 'unknown')
-        })
-        
-        if get_output_value(outputs, "kubeconfig"):
-            success("  ✓ Kubeconfig available")
-        else:
-            error("  ✗ Kubeconfig missing")
-        
-        section("Query outputs:")
-        commands([
-            ("", f"pulumi stack output --stack {stack_name} --cwd ~/.modelops/pulumi/infra")
-        ])
-        
-        section("Next steps:")
-        info("  1. Run 'mops workspace up' to deploy Dask")
-        info("  2. Run 'mops adaptive up' to start optimization")
-        
-    except Exception as e:
-        error(f"Error querying infrastructure status: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/infra", stack_name)
-        raise typer.Exit(1)
+
+    service = InfrastructureService(env)
+    status = service.get_status()
+
+    if json_output:
+        import json
+        status_dict = {k: v.to_json() for k, v in status.items()}
+        console.print(json.dumps(status_dict, indent=2))
+    else:
+        section(f"Infrastructure Status ({env})")
+
+        for component, component_status in status.items():
+            state = component_status.phase.value
+            symbol = "✓" if component_status.deployed else "✗"
+
+            console.print(f"  {symbol} {component}: {state}")
+
+            if component_status.deployed and component_status.details:
+                # Show key details
+                details = component_status.details
+
+                if component == "cluster":
+                    if "cluster_name" in details:
+                        console.print(f"      cluster: {details['cluster_name']}")
+                    if "connectivity" in details:
+                        conn_status = "connected" if details["connectivity"] else "unreachable"
+                        console.print(f"      status: {conn_status}")
+
+                elif component == "storage":
+                    if "account_name" in details:
+                        console.print(f"      account: {details['account_name']}")
+                    if "container_count" in details:
+                        console.print(f"      containers: {details['container_count']}")
+
+                elif component == "workspace":
+                    if "workers" in details:
+                        console.print(f"      workers: {details['workers']}")
+                    if "autoscaling" in details and details["autoscaling"]:
+                        console.print(f"      autoscaling: enabled")
+
+                elif component == "registry":
+                    if "registry_name" in details:
+                        console.print(f"      name: {details['registry_name']}")
+
+        # Show detailed operational information
+        if detailed:
+            section("\n=== Operational Details ===")
+
+            # Get outputs for connection details
+            outputs = service.get_outputs()
+
+            # Workspace details
+            if "workspace" in status and status["workspace"].deployed:
+                info("\n[bold]Workspace (Dask):[/bold]")
+                namespace = outputs.get("workspace", {}).get("namespace", "modelops-dask-dev")
+                info(f"  Namespace: {namespace}")
+                info("\n  Port-forward commands:")
+                info(f"    kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786")
+                info(f"    kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
+                info("\n  Access URLs (after port-forwarding):")
+                info("    Scheduler: tcp://localhost:8786")
+                info("    Dashboard: http://localhost:8787")
+                info("\n  Monitoring:")
+                info(f"    Logs: kubectl logs -n {namespace} -l app=dask-scheduler")
+                info(f"    Workers: kubectl get pods -n {namespace} -l app=dask-worker")
+
+            # Registry details
+            if "registry" in status and status["registry"].deployed:
+                registry_details = status["registry"].details
+                registry_name = registry_details.get("registry_name", "")
+                login_server = registry_details.get("login_server", "")
+
+                if registry_name:
+                    info("\n[bold]Registry (ACR):[/bold]")
+                    info(f"  Login server: {login_server}")
+                    info("\n  Commands:")
+                    info(f"    Login: az acr login --name {registry_name}")
+                    info(f"    Push: docker push {login_server}/image:tag")
+                    info(f"    List: az acr repository list --name {registry_name}")
+
+            # Storage details
+            if "storage" in status and status["storage"].deployed:
+                storage_details = status["storage"].details
+                account_name = storage_details.get("account_name", "")
+
+                if account_name:
+                    info("\n[bold]Storage (Blob):[/bold]")
+                    info(f"  Account: {account_name}")
+                    info("\n  Setup connection:")
+                    info("    mops storage connection-string > ~/.modelops/storage.env")
+                    info("    source ~/.modelops/storage.env")
+                    info("\n  Containers:")
+                    containers = storage_details.get("containers", [])
+                    if isinstance(containers, list):
+                        for container in containers[:5]:  # Show first 5
+                            if isinstance(container, dict):
+                                info(f"    • {container.get('name', 'unnamed')}")
+                            else:
+                                info(f"    • {container}")
+
+            # Cluster details
+            if "cluster" in status and status["cluster"].deployed:
+                cluster_details = status["cluster"].details
+                cluster_name = cluster_details.get("cluster_name", "")
+
+                if cluster_name:
+                    info("\n[bold]Cluster (AKS):[/bold]")
+                    info(f"  Name: {cluster_name}")
+                    info("\n  Kubeconfig:")
+                    info("    mops cluster kubeconfig --merge")
+                    info(f"    kubectl config use-context {cluster_name}")
+
+        if show_outputs:
+            section("\nOutputs")
+            outputs = service.get_outputs()
+            for comp, comp_outputs in outputs.items():
+                if comp_outputs:
+                    info(f"\n{comp}:")
+                    for key, value in comp_outputs.items():
+                        # Skip large values
+                        if isinstance(value, str) and len(value) > 100:
+                            info(f"  {key}: <truncated>")
+                        else:
+                            info(f"  {key}: {value}")
 
 
 @app.command()
-def kubeconfig(
-    env: Optional[str] = env_option(),
-    output: Optional[Path] = typer.Option(
+def outputs(
+    component: Optional[str] = typer.Argument(
         None,
-        "--output", "-o",
-        help="Write kubeconfig to file instead of stdout"
+        help="Specific component to get outputs for"
     ),
-    merge: bool = typer.Option(
-        False,
-        "--merge",
-        help="Merge with existing ~/.kube/config"
-    )
+    env: Optional[str] = env_option(),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output in JSON format"),
+    show_secrets: bool = typer.Option(False, "--show-secrets", help="Show secret values")
 ):
-    """Get kubeconfig from infrastructure state.
-    
-    Fetches the current kubeconfig from Pulumi state and either
-    displays it, saves it to a file, or merges it with existing config.
-    
-    Examples:
-        mops infra kubeconfig                    # Display to stdout
-        mops infra kubeconfig -o kubeconfig.yaml # Save to file
-        mops infra kubeconfig --merge            # Update ~/.kube/config
     """
+    Get infrastructure outputs.
+
+    Retrieves outputs from infrastructure stacks.
+
+    Example:
+        mops infra outputs
+        mops infra outputs cluster
+        mops infra outputs --json
+    """
+    from .utils import resolve_env
+
     env = resolve_env(env)
-    stack_name = StackNaming.get_stack_name("infra", env)
-    
-    try:
-        # Get outputs from infrastructure stack
-        outputs = automation.outputs("infra", env, refresh=False)
-        
+
+    service = InfrastructureService(env)
+    outputs = service.get_outputs(component, show_secrets)
+
+    if json_output:
+        import json
+        console.print(json.dumps(outputs, indent=2, default=str))
+    else:
         if not outputs:
-            error("No infrastructure found")
-            info("Run 'mops infra up' to create infrastructure first")
-            raise typer.Exit(1)
-        
-        kubeconfig_yaml = get_output_value(outputs, "kubeconfig")
-        if not kubeconfig_yaml:
-            error("No kubeconfig found in infrastructure outputs")
-            info("Infrastructure may not be fully deployed")
-            raise typer.Exit(1)
-        
-        cluster_name = get_output_value(outputs, "cluster_name", f"modelops-{env}")
-        
-        if merge:
-            # Merge with existing kubeconfig
-            import subprocess
-            import tempfile
-            import os
-            
-            # Create temp file with new kubeconfig
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-                f.write(kubeconfig_yaml)
-                temp_path = f.name
-            
-            try:
-                # Backup existing config
-                kube_dir = Path.home() / ".kube"
-                kube_dir.mkdir(exist_ok=True)
-                config_path = kube_dir / "config"
-                
-                if config_path.exists():
-                    backup_path = kube_dir / "config.backup"
-                    import shutil
-                    shutil.copy(config_path, backup_path)
-                    info(f"Backed up existing config to {backup_path}")
-                
-                # Use kubectl to merge configs
-                env_vars = os.environ.copy()
-                if config_path.exists():
-                    env_vars["KUBECONFIG"] = f"{config_path}:{temp_path}"
+            warning("No outputs found")
+            raise typer.Exit(0)
+
+        if component:
+            section(f"Outputs for {component}")
+            for key, value in outputs.items():
+                if isinstance(value, str) and len(value) > 100:
+                    info(f"{key}: <truncated>")
                 else:
-                    env_vars["KUBECONFIG"] = temp_path
-                
-                result = subprocess.run(
-                    ["kubectl", "config", "view", "--flatten"],
-                    env=env_vars,
-                    capture_output=True,
-                    text=True
-                )
-                
-                if result.returncode != 0:
-                    error(f"Failed to merge kubeconfig: {result.stderr}")
-                    raise typer.Exit(1)
-                
-                # Write merged config
-                config_path.write_text(result.stdout)
-                success(f"✓ Merged kubeconfig for cluster '{cluster_name}' into ~/.kube/config")
-                
-                # Set current context
-                subprocess.run(
-                    ["kubectl", "config", "use-context", cluster_name],
-                    capture_output=True
-                )
-                info(f"Current context set to: {cluster_name}")
-                
-            finally:
-                # Clean up temp file
-                os.unlink(temp_path)
-        
-        elif output:
-            # Write to specified file
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(kubeconfig_yaml)
-            success(f"✓ Kubeconfig saved to {output}")
-            info(f"\nTo use: export KUBECONFIG={output.absolute()}")
-        
+                    info(f"{key}: {value}")
         else:
-            # Output to stdout
-            console.print(kubeconfig_yaml)
-    
-    except Exception as e:
-        error(f"Error getting kubeconfig: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/infra", stack_name)
-        raise typer.Exit(1)
+            section("Infrastructure Outputs")
+            for comp, comp_outputs in outputs.items():
+                if comp_outputs:
+                    info(f"\n{comp}:")
+                    for key, value in comp_outputs.items():
+                        if isinstance(value, str) and len(value) > 100:
+                            info(f"  {key}: <truncated>")
+                        else:
+                            info(f"  {key}: {value}")

@@ -19,6 +19,7 @@ from .azure import (
 
 from .workspace import (
     WorkspaceConfig,
+    AutoscalingConfig,
 )
 
 from .adaptive import (
@@ -27,6 +28,10 @@ from .adaptive import (
     WorkersConfig,
     PersistenceConfig,
     WorkerResourceConfig,
+)
+
+from .infra import (
+    UnifiedInfraSpec,
 )
 
 __all__ = [
@@ -47,11 +52,15 @@ __all__ = [
     
     # Workspace models
     "WorkspaceConfig",
-    
+    "AutoscalingConfig",
+
     # Adaptive models
     "AdaptiveConfig",
     "CentralStoreConfig",
     "WorkersConfig",
     "PersistenceConfig",
     "WorkerResourceConfig",
+
+    # Unified infrastructure
+    "UnifiedInfraSpec",
 ]

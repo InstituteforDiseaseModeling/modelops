@@ -28,12 +28,12 @@ class TestProvenanceSchemaCore:
         )
 
         path = schema.sim_path(
-            bundle_ref="sha256:abc123",
+            bundle_ref="sha256:" + "a" * 64,
             param_id=make_test_digest("params1"),
             seed=42
         )
 
-        assert "bundle/sha256:abc123" in path
+        assert "bundle/sha256:" + "a" * 64 in path
         assert "param_" in path
         assert "seed_42" in path
 
@@ -156,10 +156,10 @@ class TestInvalidationSchemas:
         # Should have seed
         assert "seed_42" in path
 
-    def test_default_schema_is_bundle(self):
-        """Verify DEFAULT_SCHEMA uses bundle invalidation."""
-        assert DEFAULT_SCHEMA is BUNDLE_INVALIDATION_SCHEMA
-        assert DEFAULT_SCHEMA.name == "bundle"
+    def test_default_schema_is_token(self):
+        """Verify DEFAULT_SCHEMA uses token invalidation."""
+        assert DEFAULT_SCHEMA is TOKEN_INVALIDATION_SCHEMA
+        assert DEFAULT_SCHEMA.name == "token"
 
     def test_schemas_produce_different_paths(self):
         """Verify different schemas produce different paths for same inputs."""

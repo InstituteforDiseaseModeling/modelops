@@ -60,7 +60,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         ssh_pubkey = self._get_ssh_key(ssh_config)
         
         # Create AKS cluster with node pools
-        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env)
+        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env, username)
         
         # Get kubeconfig using the *actual* cluster name emitted by the resource
         # This handles auto-naming correctly
@@ -179,21 +179,22 @@ class ModelOpsCluster(pulumi.ComponentResource):
             return rg
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
-                           location: str, aks_config: Dict[str, Any], 
-                           ssh_pubkey: pulumi.Output[str], env: str) -> azure.containerservice.ManagedCluster:
+                           location: str, aks_config: Dict[str, Any],
+                           ssh_pubkey: pulumi.Output[str], env: str, username: str) -> azure.containerservice.ManagedCluster:
         """Create AKS cluster with configured node pools."""
-        # Use centralized naming for AKS cluster
-        cluster_name = StackNaming.get_aks_cluster_name(env)
+        # Use centralized naming for AKS cluster with username-based hash
+        cluster_name = StackNaming.get_aks_cluster_name(env, username)
         # Make K8s version optional - Azure will use latest stable if not specified
         k8s_version = aks_config.get("kubernetes_version")
         
         # Build node pool profiles
         node_pools = self._build_node_pools(aks_config.get("node_pools", []))
         
-        # Create the AKS cluster
-        # First positional arg IS resource_name in Pulumi Azure Native
+        # Create the AKS cluster with explicit naming (like storage and registry)
+        # First arg is Pulumi logical name, resource_name_ controls Azure name
         aks_resource = azure.containerservice.ManagedCluster(
-            cluster_name,  # This becomes the Azure resource name
+            f"{name}-aks",  # Pulumi logical name
+            resource_name_=cluster_name,  # Explicit Azure resource name (note the underscore)
             resource_group_name=rg.name,
             location=location,
             dns_prefix=f"{cluster_name}-dns",
@@ -224,7 +225,10 @@ class ModelOpsCluster(pulumi.ComponentResource):
                 "project": "modelops",
                 "component": name
             },
-            opts=pulumi.ResourceOptions(parent=self)
+            opts=pulumi.ResourceOptions(
+                parent=self,
+                delete_before_replace=True  # Prevent naming collisions on replacement
+            )
         )
         
         return aks_resource

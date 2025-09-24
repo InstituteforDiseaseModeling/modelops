@@ -1,5 +1,10 @@
 """ModelOps CLI entry point."""
 
+# Set environment variables before any other imports to suppress gRPC warnings
+import os
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
 import typer
 from pathlib import Path
 from .display import console, success, warning, error, info, section, info_dict
@@ -14,67 +19,91 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs
+from . import infra, cluster, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs
 
 # Register sub-commands
+# Primary commands for researchers
 app.add_typer(
     infra.app,
     name="infra",
-    help="Manage infrastructure (Azure, AWS, GCP, local)"
-)
-
-app.add_typer(
-    registry.app,
-    name="registry",
-    help="Manage container registries"
-)
-
-app.add_typer(
-    storage.app,
-    name="storage",
-    help="Manage blob storage for bundles and results"
-)
-
-app.add_typer(
-    workspace.app,
-    name="workspace",
-    help="Manage Dask workspaces"
+    help="🚀 Infrastructure management - setup, status, teardown (RECOMMENDED)"
 )
 
 app.add_typer(
     adaptive.app,
-    name="adaptive",
-    help="Manage adaptive optimization runs"
-)
-
-app.add_typer(
-    config_cli.app,
-    name="config",
-    help="Manage ModelOps configuration"
-)
-
-app.add_typer(
-    cleanup.app,
-    name="cleanup",
-    help="Clean up Pulumi state and resources"
-)
-
-app.add_typer(
-    status.app,
-    name="status",
-    help="Show comprehensive infrastructure status"
+    name="run",
+    help="🔬 Run experiments and simulations"
 )
 
 app.add_typer(
     results.app,
     name="results",
-    help="View and manage simulation results"
+    help="📊 View and manage experiment results"
+)
+
+# Advanced component-specific commands (for power users)
+app.add_typer(
+    cluster.app,
+    name="cluster",
+    help="[dim]Manage Kubernetes clusters (advanced)[/dim]",
+    hidden=False  # Still visible but marked as advanced
+)
+
+app.add_typer(
+    registry.app,
+    name="registry",
+    help="[dim]Manage container registries (advanced)[/dim]",
+    hidden=False
+)
+
+app.add_typer(
+    storage.app,
+    name="storage",
+    help="[dim]Manage blob storage (advanced)[/dim]",
+    hidden=False
+)
+
+app.add_typer(
+    workspace.app,
+    name="workspace",
+    help="[dim]Manage Dask workspaces (advanced)[/dim]",
+    hidden=False
+)
+
+# Keep adaptive available under its original name for backwards compatibility
+app.add_typer(
+    adaptive.app,
+    name="adaptive",
+    help="[dim]Manage adaptive optimization runs (alias: run)[/dim]",
+    hidden=False
+)
+
+# Utility commands
+app.add_typer(
+    config_cli.app,
+    name="config",
+    help="⚙️ Configure ModelOps settings"
+)
+
+app.add_typer(
+    cleanup.app,
+    name="cleanup",
+    help="[dim]Clean up Pulumi state and resources (advanced)[/dim]",
+    hidden=False
+)
+
+app.add_typer(
+    status.app,
+    name="status",
+    help="[dim]Show infrastructure status (use 'mops infra status' instead)[/dim]",
+    hidden=False
 )
 
 app.add_typer(
     jobs.app,
     name="jobs",
-    help="Submit and manage simulation jobs"
+    help="[dim]Submit and manage simulation jobs (advanced)[/dim]",
+    hidden=False
 )
 
 

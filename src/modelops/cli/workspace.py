@@ -3,9 +3,11 @@
 import typer
 from pathlib import Path
 from typing import Optional, Dict, Any
+from ..client import WorkspaceService
 from ..core import StackNaming, automation
+from ..core.automation import get_output_value
 from ..components import WorkspaceConfig
-from .utils import handle_pulumi_error, resolve_env
+from .utils import resolve_env, handle_pulumi_error
 from .display import (
     console, success, warning, error, info, section, info_dict,
     workspace_info, workspace_commands, dim
@@ -137,20 +139,20 @@ def up(
     env: Optional[str] = env_option()
 ):
     """Deploy Dask workspace on existing infrastructure.
-    
+
     This creates Stack 2 which references Stack 1 (infrastructure) to get
     the kubeconfig and deploy Dask scheduler and workers.
-    
+
     Example:
         mops workspace up --env dev
         mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
     env = resolve_env(env)
-    
+
     # Load and validate configuration if provided
     validated_config = WorkspaceConfig.from_yaml_optional(config)
     workspace_config = validated_config.to_pulumi_config() if validated_config else {}
-    
+
     # Use provided infra stack or default to standard naming
     if infra_stack == StackNaming.get_project_name("infra"):
         # Default value - append environment
@@ -158,48 +160,23 @@ def up(
     else:
         # Custom stack name provided
         infra_ref = StackNaming.ref_from_stack(infra_stack)
-    
-    def pulumi_program():
-        """Create DaskWorkspace in Stack 2 context."""
-        from ..infra.components.workspace import DaskWorkspace
-        import pulumi
-        
-        # Pass environment to workspace config
-        workspace_config["environment"] = env
-        
-        # Check if storage stack exists and reference it
-        storage_ref = None
-        try:
-            # Try to reference storage stack if it exists
-            storage_ref = StackNaming.ref("storage", env)
-        except:
-            # Storage stack doesn't exist, workspace will run without storage integration
-            pass
-        
-        # Create the workspace component
-        workspace = DaskWorkspace("dask", infra_ref, workspace_config, storage_stack_ref=storage_ref)
-        
-        # Export outputs at stack level for visibility
-        pulumi.export("scheduler_address", workspace.scheduler_address)
-        pulumi.export("dashboard_url", workspace.dashboard_url)
-        pulumi.export("namespace", workspace.namespace)
-        pulumi.export("worker_count", workspace.worker_count)
-        
-        return workspace
-    
+
+    # Use WorkspaceService
+    service = WorkspaceService(env)
+
     try:
         info(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
         # Display the actual resolved stack reference, not the raw input
         display_name = infra_ref.split('/')[-1] if '/' in infra_ref else infra_stack
         info(f"Infrastructure stack: {display_name}")
         info(f"Workspace stack: {StackNaming.get_stack_name('workspace', env)}\n")
-        
+
         info("[yellow]Creating Dask resources...[/yellow]")
-        outputs = automation.up("workspace", env, None, pulumi_program, on_output=dim)
-        
+        outputs = service.provision(workspace_config, infra_ref, verbose=False)
+
         success("\nWorkspace deployed successfully!")
         workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))
-        
+
     except Exception as e:
         error(f"\nError deploying workspace: {e}")
         handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
@@ -212,27 +189,30 @@ def down(
     yes: bool = yes_option()
 ):
     """Destroy Dask workspace.
-    
+
     This removes all Dask resources but leaves the underlying
     Kubernetes cluster intact.
     """
     env = resolve_env(env)
-    
+
     if not yes:
         warning("\nWarning")
         info(f"This will destroy the Dask workspace in environment: {env}")
         info("All running Dask jobs will be terminated.")
-        
+
         confirm = typer.confirm("\nAre you sure you want to destroy the workspace?")
         if not confirm:
             success("Destruction cancelled")
             raise typer.Exit(0)
-    
+
+    # Use WorkspaceService
+    service = WorkspaceService(env)
+
     try:
         info(f"\n[yellow]Destroying workspace: {StackNaming.get_stack_name('workspace', env)}...[/yellow]")
-        automation.destroy("workspace", env, on_output=dim)
+        service.destroy(verbose=False)
         success("\nWorkspace destroyed successfully")
-        
+
     except Exception as e:
         error(f"\nError destroying workspace: {e}")
         handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
@@ -250,32 +230,42 @@ def status(
 ):
     """Show workspace status and connection details."""
     env = resolve_env(env)
-    
+
+    # Use WorkspaceService
+    service = WorkspaceService(env)
+
     try:
-        outputs = automation.outputs("workspace", env)
-        
+        status = service.status()
+
+        if not status.deployed:
+            warning("Workspace not deployed")
+            info("Run 'mops workspace up' to deploy a workspace")
+            raise typer.Exit(0)
+
+        outputs = service.get_outputs()
+
         if not outputs:
             warning("Workspace stack exists but has no outputs")
             info("The workspace may not be fully deployed.")
             raise typer.Exit(0)
-        
+
         section("Workspace Status")
         workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))
-        
-        namespace = automation.get_output_value(outputs, 'namespace', StackNaming.get_namespace("dask", env))
-        
+
+        namespace = get_output_value(outputs, 'namespace', StackNaming.get_namespace("dask", env))
+
         # Show smoke test status if available
         if outputs.get('smoke_test_job'):
-            job_name = automation.get_output_value(outputs, 'smoke_test_job', '')
+            job_name = get_output_value(outputs, 'smoke_test_job', '')
             info(f"\nSmoke test: Job '{job_name}' deployed")
-        
+
         # Run smoke tests if requested
         if smoke_test:
             section("\nRunning Smoke Tests")
             run_workspace_smoke_tests(namespace, outputs, env)
-        
+
         workspace_commands(namespace)
-        
+
     except Exception as e:
         error(f"Error querying workspace status: {e}")
         handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))

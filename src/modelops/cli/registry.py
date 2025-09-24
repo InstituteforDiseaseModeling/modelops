@@ -4,9 +4,10 @@ import typer
 import yaml
 from pathlib import Path
 from typing import Optional
-from ..core import StackNaming, automation
-from .utils import handle_pulumi_error, resolve_env, resolve_provider
-from .display import console, success, warning, error, info, section, dim, commands, info_dict
+from ..client import RegistryService
+from ..core import StackNaming
+from .utils import resolve_env, resolve_provider
+from .display import console, success, warning, error, info, section, commands, info_dict
 from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage container registries")
@@ -67,35 +68,9 @@ def create(
         registry_config["subscription_id"] = subscription_id
         registry_config["location"] = registry_config.get("location", "eastus2")
     
-    def pulumi_program():
-        """Create ContainerRegistry in registry stack context."""
-        import pulumi
-        from ..infra.components.registry import ContainerRegistry
-        
-        # Create the registry component
-        registry = ContainerRegistry(name, registry_config)
-        
-        # Security: Grant AKS cluster ACR pull permissions to access private images
-        # Without this, pods fail with ImagePullBackOff for private registry images
-        if provider == "azure" and registry_config.get("grant_cluster_pull", True):
-            # Try to wire permissions if infrastructure stack exists
-            try:
-                infra_ref = StackNaming.ref("infra", env)
-                role_assignment = registry.setup_cluster_pull_permissions(infra_ref)
-                if role_assignment:
-                    pulumi.export("cluster_pull_configured", pulumi.Output.from_input(True))
-            except Exception:
-                # Infrastructure stack doesn't exist yet, that's OK
-                pulumi.export("cluster_pull_configured", pulumi.Output.from_input(False))
-        
-        # Export outputs at stack level for StackReference access
-        pulumi.export("login_server", registry.login_server)
-        pulumi.export("registry_name", registry.registry_name)
-        pulumi.export("provider", pulumi.Output.from_input(provider))
-        pulumi.export("requires_auth", registry.requires_auth)
-        
-        return registry
-    
+    # Use RegistryService
+    service = RegistryService(env)
+
     try:
         section(f"Creating container registry: {name}")
         info_dict({
@@ -103,13 +78,13 @@ def create(
             "Environment": env,
             "Stack": StackNaming.get_stack_name('registry', env)
         })
-        
+
         warning("\nCreating registry resources...")
-        outputs = automation.up("registry", env, None, pulumi_program, on_output=dim)
-        
+        outputs = service.create(name, registry_config, verbose=False)
+
         success("\n✓ Registry created successfully!")
-        info(f"  Login server: {automation.get_output_value(outputs, 'login_server', 'unknown')}")
-        info(f"  Registry name: {automation.get_output_value(outputs, 'registry_name', 'unknown')}")
+        info(f"  Login server: {outputs.get('login_server', 'unknown')}")
+        info(f"  Registry name: {outputs.get('registry_name', 'unknown')}")
         
         if provider == "azure":
             registry_name = automation.get_output_value(outputs, 'registry_name', 'unknown')
@@ -125,7 +100,6 @@ def create(
         
     except Exception as e:
         error(f"\nError creating registry: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 
@@ -150,9 +124,12 @@ def destroy(
             success("Destruction cancelled")
             raise typer.Exit(0)
     
+    # Use RegistryService
+    service = RegistryService(env)
+
     try:
         warning(f"\nDestroying registry: {StackNaming.get_stack_name('registry', env)}...")
-        automation.destroy("registry", env, on_output=dim)
+        service.destroy(verbose=False)
         success("\n✓ Registry destroyed successfully")
         
     except Exception as e:
@@ -168,27 +145,30 @@ def status(
     """Show registry status and connection details."""
     env = resolve_env(env)
     
+    # Use RegistryService
+    service = RegistryService(env)
+
     try:
-        outputs = automation.outputs("registry", env)
-        
-        if not outputs:
-            warning("Registry stack exists but has no outputs")
-            info("The registry may not be fully deployed.")
+        status = service.status()
+
+        if not status.deployed:
+            warning("Registry not deployed")
+            info("Run 'mops registry create' to create a registry")
             raise typer.Exit(0)
-        
+
         section("Registry Status")
         info_dict({
             "Environment": env,
             "Stack": StackNaming.get_stack_name('registry', env),
-            "Login server": automation.get_output_value(outputs, 'login_server', 'unknown'),
-            "Registry name": automation.get_output_value(outputs, 'registry_name', 'unknown'),
-            "Provider": automation.get_output_value(outputs, 'provider', 'unknown'),
-            "Requires auth": automation.get_output_value(outputs, 'requires_auth', 'unknown')
+            "Login server": status.details.get('login_server', 'unknown'),
+            "Registry name": status.details.get('registry_name', 'unknown'),
+            "Provider": status.details.get('provider', 'unknown'),
+            "Requires auth": status.details.get('requires_auth', 'unknown')
         })
-        
-        provider = automation.get_output_value(outputs, 'provider')
+
+        provider = status.details.get('provider')
         if provider == "azure":
-            registry_name = automation.get_output_value(outputs, 'registry_name', 'unknown')
+            registry_name = status.details.get('registry_name', 'unknown')
             section("\nUsage commands:")
             commands([
                 ("Login", f"az acr login --name {registry_name}"),
@@ -198,7 +178,6 @@ def status(
         
     except Exception as e:
         error(f"Error querying registry status: {e}")
-        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 
@@ -220,32 +199,18 @@ def wire_permissions(
     """
     env = resolve_env(env)
     
+    # Use RegistryService
+    service = RegistryService(env)
+
     # Use centralized naming
     registry_stack = StackNaming.get_stack_name("registry", env)
     infra_stack = infra_stack or StackNaming.get_stack_name("infra", env)
-    
-    section("Wiring registry permissions")
-    info(f"  Registry stack: {registry_stack}")
-    info(f"  Infrastructure stack: {infra_stack}")
-    
-    # Security: This grants the AKS cluster's kubelet identity ACR pull permissions
-    # Without this, private container images cannot be pulled by the cluster
-    warning("\nNote: This grants the AKS cluster pull access to ACR")
-    info("This is required for pulling private container images.")
-    
-    # TODO: Implement the actual permission wiring using Pulumi automation API
-    # This would update the registry stack to add the role assignment
-    warning("\nManual steps for now:")
-    info("1. Get the AKS cluster's kubelet identity:")
-    commands([
-        ("", "az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId")
-    ])
-    info("2. Grant ACR pull permissions:")
-    commands([
-        ("", "az role assignment create --assignee <identity> --role acrpull --scope <acr-id>")
-    ])
-    
-    info("\nAutomated wiring will be implemented in a future update")
+
+    success_result = service.wire_permissions(infra_stack)
+
+    if not success_result:
+        # Manual steps will be shown by the service
+        info("\nAutomated wiring will be implemented in a future update")
 
 
 @app.command()
@@ -271,46 +236,12 @@ def env(
     """
     env = resolve_env(env)
     
+    # Use RegistryService
+    service = RegistryService(env)
+
     try:
-        outputs = automation.outputs("registry", env, refresh=True)
-        
-        if not outputs:
-            if format == "json":
-                print("{}")
-            raise typer.Exit(0)
-        
-        # Extract values
-        login_server = automation.get_output_value(outputs, 'login_server')
-        registry_name = automation.get_output_value(outputs, 'registry_name')
-        provider = automation.get_output_value(outputs, 'provider')
-        
-        if format == "bash":
-            # Output as shell export statements
-            if login_server:
-                print(f"export MODELOPS_REGISTRY_SERVER={login_server}")
-            if registry_name:
-                print(f"export MODELOPS_REGISTRY_NAME={registry_name}")
-            if provider:
-                print(f"export MODELOPS_REGISTRY_PROVIDER={provider}")
-        elif format == "make":
-            # Output as Makefile variables
-            if login_server:
-                print(f"MODELOPS_REGISTRY_SERVER={login_server}")
-            if registry_name:
-                print(f"MODELOPS_REGISTRY_NAME={registry_name}")
-            if provider:
-                print(f"MODELOPS_REGISTRY_PROVIDER={provider}")
-        elif format == "json":
-            # Output as JSON
-            import json
-            data = {}
-            if login_server:
-                data["MODELOPS_REGISTRY_SERVER"] = login_server
-            if registry_name:
-                data["MODELOPS_REGISTRY_NAME"] = registry_name
-            if provider:
-                data["MODELOPS_REGISTRY_PROVIDER"] = provider
-            print(json.dumps(data, indent=2))
+        env_vars = service.get_env_vars(format)
+        print(env_vars)
         
     except Exception as e:
         if format != "json":
@@ -325,37 +256,15 @@ def login(
     """Login to container registry."""
     env = resolve_env(env)
     
-    import subprocess
-    
+    # Use RegistryService
+    service = RegistryService(env)
+
     try:
-        outputs = automation.outputs("registry", env)
-        
-        if not outputs:
-            error("Registry has no outputs")
-            raise typer.Exit(1)
-        
-        provider = automation.get_output_value(outputs, 'provider')
-        
-        if provider == "azure":
-            registry_name = automation.get_output_value(outputs, 'registry_name')
-            warning(f"Logging in to Azure Container Registry: {registry_name}")
-            
-            # Run az acr login
-            result = subprocess.run(
-                ["az", "acr", "login", "--name", registry_name],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                success("✓ Successfully logged in to registry")
-            else:
-                error(f"Login failed: {result.stderr}")
-                raise typer.Exit(1)
+        if service.login():
+            success("✓ Successfully logged in to registry")
         else:
-            warning(f"Manual login required for {provider} registry")
-            login_server = automation.get_output_value(outputs, 'login_server')
-            info(f"Use: docker login {login_server}")
+            error("Login failed")
+            raise typer.Exit(1)
         
     except Exception as e:
         error(f"Error logging in: {e}")

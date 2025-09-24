@@ -18,6 +18,11 @@ from modelops.services.provenance_schema import (
     TOKEN_INVALIDATION_SCHEMA
 )
 
+# Valid test bundle references (SHA256 with 64 hex chars)
+TEST_BUNDLE_REF = "sha256:" + "a" * 64
+TEST_BUNDLE_REF_V1 = "sha256:" + "1" * 64
+TEST_BUNDLE_REF_V2 = "sha256:" + "2" * 64
+
 
 def make_valid_checksum(data: bytes) -> str:
     """Create a valid BLAKE2b-256 checksum for data."""
@@ -45,7 +50,7 @@ class TestProvenanceStoreBasics:
     def test_store_and_retrieve_sim(self, store):
         """Test storing and retrieving a SimReturn."""
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
             seed=42
@@ -75,7 +80,7 @@ class TestProvenanceStoreBasics:
     def test_cache_miss(self, store):
         """Test cache miss returns None."""
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -87,7 +92,7 @@ class TestProvenanceStoreBasics:
     def test_store_with_error(self, store):
         """Test storing SimReturn with error information."""
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -119,7 +124,7 @@ class TestProvenanceStoreBasics:
     def test_overwrite_existing(self, store):
         """Test that putting same task twice overwrites."""
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -173,7 +178,7 @@ class TestProvenanceStoreAggregation:
         ]
 
         agg_task = AggregationTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             target_entrypoint="targets.test/compute",
             sim_returns=sim_returns
         )
@@ -207,7 +212,7 @@ class TestProvenanceStoreAggregation:
         ]
 
         agg_task = AggregationTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             target_entrypoint="targets.test/compute",
             sim_returns=sim_returns
         )
@@ -237,7 +242,7 @@ class TestInvalidationStrategies:
 
         # Task with bundle v1
         task_v1 = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=params,
             seed=42
@@ -245,7 +250,7 @@ class TestInvalidationStrategies:
 
         # Task with bundle v2 (same params/seed)
         task_v2 = SimTask(
-            bundle_ref="sha256:def456",  # Different bundle
+            bundle_ref=TEST_BUNDLE_REF_V2,  # Different bundle
             entrypoint="module.func/test",
             params=params,
             seed=42
@@ -279,14 +284,14 @@ class TestInvalidationStrategies:
 
         # Task v1 and v2 with same everything
         task_v1 = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=params,
             seed=42
         )
 
         task_v2 = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=params,
             seed=42
@@ -316,7 +321,7 @@ class TestInvalidationStrategies:
 
         # Task with params v1
         task_v1 = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -324,7 +329,7 @@ class TestInvalidationStrategies:
 
         # Task with params v2
         task_v2 = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 2}),  # Different params
             seed=42
@@ -363,7 +368,7 @@ class TestFileStructure:
         )
 
         task = SimTask(
-            bundle_ref="sha256:abc123",
+            bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
             seed=42
@@ -391,7 +396,7 @@ class TestFileStructure:
         # Verify metadata content
         with open(metadata_files[0]) as f:
             metadata = json.load(f)
-            assert metadata["bundle_ref"] == "sha256:abc123"
+            assert metadata["bundle_ref"] == TEST_BUNDLE_REF_V1
             assert metadata["seed"] == 42
 
     def test_artifacts_stored_separately(self, temp_dir):
@@ -402,7 +407,7 @@ class TestFileStructure:
         )
 
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -450,7 +455,7 @@ class TestConcurrency:
     def test_multiple_reads(self, store):
         """Test multiple reads don't corrupt data."""
         task = SimTask(
-            bundle_ref="test://bundle",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -477,7 +482,7 @@ class TestConcurrency:
 
         for i in range(5):
             task = SimTask(
-                bundle_ref="test://bundle",
+                bundle_ref=TEST_BUNDLE_REF,
                 entrypoint="module.func/test",
                 params=UniqueParameterSet.from_dict({"x": i}),
                 seed=42

@@ -19,6 +19,7 @@ BACKEND_DIR = PULUMI_HOME / "backend"
 # Clean component structure
 WORK_DIRS = {
     "infra": PULUMI_HOME / "infra",
+    "cluster": PULUMI_HOME / "infra",  # Alias for infra (cluster = infra)
     "workspace": PULUMI_HOME / "workspace",
     "adaptive": PULUMI_HOME / "adaptive",
     "registry": PULUMI_HOME / "registry",

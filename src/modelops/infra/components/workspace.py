@@ -276,6 +276,22 @@ class DaskWorkspace(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
+        # Extract autoscaling config if using structured config
+        autoscaling_config = None
+        if "spec" in config and "autoscaling" in config["spec"]:
+            autoscaling_config = config["spec"]["autoscaling"]
+        elif "autoscaling" in config:
+            autoscaling_config = config["autoscaling"]
+
+        # Default autoscaling settings
+        if autoscaling_config is None:
+            autoscaling_config = {
+                "enabled": True,
+                "min_workers": 2,
+                "max_workers": 20,
+                "target_cpu": 70
+            }
+
         # Create Dask workers deployment
         workers = k8s.apps.v1.Deployment(
             f"{name}-workers",
@@ -288,7 +304,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                 }
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
-                replicas=worker_count,
+                replicas=worker_count if not autoscaling_config.get("enabled", True) else autoscaling_config.get("min_workers", 2),
                 selector=k8s.meta.v1.LabelSelectorArgs(
                     match_labels={"app": "dask-worker"}
                 ),
@@ -360,7 +376,60 @@ class DaskWorkspace(pulumi.ComponentResource):
                 depends_on=[scheduler]  # Workers depend on scheduler
             )
         )
-        
+
+        # Create HorizontalPodAutoscaler if autoscaling is enabled
+        hpa = None
+        if autoscaling_config.get("enabled", True):
+            hpa = k8s.autoscaling.v2.HorizontalPodAutoscaler(
+                f"{name}-workers-hpa",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    namespace=namespace,
+                    name="dask-workers-hpa",
+                    labels={
+                        "modelops.io/component": "workers",
+                        "app": "dask-worker"
+                    }
+                ),
+                spec=k8s.autoscaling.v2.HorizontalPodAutoscalerSpecArgs(
+                    scale_target_ref=k8s.autoscaling.v2.CrossVersionObjectReferenceArgs(
+                        api_version="apps/v1",
+                        kind="Deployment",
+                        name="dask-workers"
+                    ),
+                    min_replicas=autoscaling_config.get("min_workers", 2),
+                    max_replicas=autoscaling_config.get("max_workers", 20),
+                    metrics=[
+                        k8s.autoscaling.v2.MetricSpecArgs(
+                            type="Resource",
+                            resource=k8s.autoscaling.v2.ResourceMetricSourceArgs(
+                                name="cpu",
+                                target=k8s.autoscaling.v2.MetricTargetArgs(
+                                    type="Utilization",
+                                    average_utilization=autoscaling_config.get("target_cpu", 70)
+                                )
+                            )
+                        )
+                    ],
+                    behavior=k8s.autoscaling.v2.HorizontalPodAutoscalerBehaviorArgs(
+                        scale_down=k8s.autoscaling.v2.HPAScalingRulesArgs(
+                            stabilization_window_seconds=autoscaling_config.get("scale_down_delay", 300),
+                            policies=[
+                                k8s.autoscaling.v2.HPAScalingPolicyArgs(
+                                    type="Percent",
+                                    value=50,  # Scale down by 50% at most
+                                    period_seconds=60
+                                )
+                            ]
+                        )
+                    )
+                ),
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[workers]
+                )
+            )
+
         # Build connection strings
         scheduler_address = pulumi.Output.concat(
             "tcp://dask-scheduler.", namespace, ":8786"
@@ -419,9 +488,12 @@ class DaskWorkspace(pulumi.ComponentResource):
         self.scheduler_address = scheduler_address
         self.dashboard_url = dashboard_url
         self.namespace = pulumi.Output.from_input(namespace)
-        self.worker_count = pulumi.Output.from_input(worker_count)
+        self.worker_count = pulumi.Output.from_input(worker_count if not autoscaling_config.get("enabled", True) else f"{autoscaling_config.get('min_workers', 2)}-{autoscaling_config.get('max_workers', 20)}")
         self.worker_processes = pulumi.Output.from_input(worker_processes)
         self.worker_threads = pulumi.Output.from_input(worker_threads)
+        self.autoscaling_enabled = pulumi.Output.from_input(autoscaling_config.get("enabled", True))
+        self.autoscaling_min = pulumi.Output.from_input(autoscaling_config.get("min_workers", 2))
+        self.autoscaling_max = pulumi.Output.from_input(autoscaling_config.get("max_workers", 20))
         
         # Register outputs for Stack 3 to use via StackReference
         outputs_dict = {
@@ -436,7 +508,11 @@ class DaskWorkspace(pulumi.ComponentResource):
             # Explicit service details for port-forwarding
             "scheduler_service_name": "dask-scheduler",
             "scheduler_port": 8786,
-            "dashboard_port": 8787
+            "dashboard_port": 8787,
+            # Autoscaling info
+            "autoscaling_enabled": self.autoscaling_enabled,
+            "autoscaling_min": self.autoscaling_min,
+            "autoscaling_max": self.autoscaling_max
         }
         
         # Add smoke test outputs if created

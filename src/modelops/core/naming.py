@@ -80,18 +80,34 @@ class StackNaming:
         return base
     
     @staticmethod
-    def get_aks_cluster_name(env: str) -> str:
-        """Generate AKS cluster name.
-        
-        Pattern: {PROJECT_PREFIX}-{env}-aks
-        
+    def get_aks_cluster_name(env: str, username: Optional[str] = None) -> str:
+        """Generate AKS cluster name with deterministic suffix for dev environments.
+
+        Pattern: {PROJECT_PREFIX}-{env}-aks[-{hash}]
+
+        For dev/staging environments with username, adds a stable 4-char hash
+        to ensure each developer gets their own persistent cluster.
+
         Args:
             env: Environment name (dev, staging, prod)
-            
+            username: Optional username for generating stable suffix in dev
+
         Returns:
-            AKS cluster name like 'modelops-dev-aks'
+            AKS cluster name like 'modelops-dev-aks-a1f2' (dev) or 'modelops-prod-aks' (prod)
         """
-        return f"{StackNaming.PROJECT_PREFIX}-{env}-aks"
+        base_name = f"{StackNaming.PROJECT_PREFIX}-{env}-aks"
+
+        # For dev/staging environments with username, add stable hash suffix
+        if username and env in ["dev", "staging"]:
+            import hashlib
+            # Create deterministic hash from env + username (same pattern as storage)
+            hash_input = f"{env}-{username}"
+            hash_value = hashlib.md5(hash_input.encode()).hexdigest()
+            # Take first 4 chars of hash as suffix
+            suffix = hash_value[:4]
+            return f"{base_name}-{suffix}"
+
+        return base_name
     
     @staticmethod
     def get_acr_name(env: str, suffix: Optional[str] = None) -> str:

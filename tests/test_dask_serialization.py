@@ -11,6 +11,9 @@ import pytest
 from modelops_contracts import SimTask, SimReturn, UniqueParameterSet, TableArtifact
 from modelops_contracts.simulation import AggregationTask
 
+# Valid test bundle reference (SHA256 with 64 hex chars)
+TEST_BUNDLE_REF = "sha256:" + "a" * 64
+
 
 def test_direct_pickle_simtask():
     """Test direct pickling of SimTask - expected to fail due to MappingProxyType.
@@ -19,7 +22,7 @@ def test_direct_pickle_simtask():
     for immutability. This is fine because Dask uses cloudpickle, not standard pickle.
     """
     task = SimTask(
-        bundle_ref="test://bundle",
+        bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
         seed=42
@@ -36,7 +39,7 @@ def test_direct_pickle_simtask():
 def test_cloudpickle_simtask():
     """Test cloudpickle of SimTask - what Dask actually uses."""
     task = SimTask(
-        bundle_ref="test://bundle",
+        bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
         seed=42
@@ -121,7 +124,7 @@ def test_dask_submission():
     from dask.distributed import Client
 
     task = SimTask(
-        bundle_ref="test://bundle",
+        bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
         seed=42
@@ -163,7 +166,7 @@ def test_through_dask_worker_with_validation():
     tasks = []
     for i in range(3):
         task = SimTask(
-            bundle_ref=f"test://bundle{i}",
+            bundle_ref=f"sha256:{'b' * 63}{i}",
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": i, "y": i * 2}),
             seed=42 + i

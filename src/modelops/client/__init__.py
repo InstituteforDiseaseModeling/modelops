@@ -5,5 +5,21 @@ and interact with the ModelOps infrastructure in the cluster.
 """
 
 from .job_submission import JobSubmissionClient
+from .infra_service import InfrastructureService
+from .cluster_service import ClusterService
+from .workspace_service import WorkspaceService
+from .storage_service import StorageService
+from .registry_service import RegistryService
+from .base import ComponentState, ComponentStatus, InfraResult
 
-__all__ = ["JobSubmissionClient"]
+__all__ = [
+    "JobSubmissionClient",
+    "InfrastructureService",
+    "ClusterService",
+    "WorkspaceService",
+    "StorageService",
+    "RegistryService",
+    "ComponentState",
+    "ComponentStatus",
+    "InfraResult",
+]

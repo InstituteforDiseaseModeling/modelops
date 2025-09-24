@@ -5,6 +5,34 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ..config_base import ConfigModel
 
 
+class AutoscalingConfig(BaseModel):
+    """Configuration for Dask worker autoscaling."""
+    enabled: bool = Field(True, description="Enable autoscaling")
+    type: Literal["hpa", "dask-adaptive"] = Field(
+        "hpa",
+        description="Autoscaling type (HPA for now, dask-adaptive later)"
+    )
+    min_workers: int = Field(2, ge=0, description="Minimum number of workers")
+    max_workers: int = Field(20, ge=1, description="Maximum number of workers")
+    target_cpu: int = Field(
+        70, ge=10, le=100,
+        description="Target CPU utilization percentage for HPA"
+    )
+    scale_down_delay: int = Field(
+        300, ge=0,
+        description="Delay in seconds before scaling down"
+    )
+
+    @field_validator("max_workers")
+    @classmethod
+    def validate_max_workers(cls, v, values):
+        """Ensure max >= min workers."""
+        min_workers = values.data.get("min_workers", 2)
+        if v < min_workers:
+            raise ValueError(f"max_workers ({v}) must be >= min_workers ({min_workers})")
+        return v
+
+
 class WorkspaceConfig(ConfigModel):
     """
     Dask workspace configuration.
@@ -69,3 +97,10 @@ class WorkspaceConfig(ConfigModel):
     def get_tolerations(self) -> List[Dict[str, Any]]:
         """Extract tolerations from spec."""
         return self.spec.get("tolerations", [])
+
+    def get_autoscaling_config(self) -> AutoscalingConfig:
+        """Extract autoscaling configuration from spec."""
+        autoscaling_dict = self.spec.get("autoscaling", {})
+        if isinstance(autoscaling_dict, dict):
+            return AutoscalingConfig(**autoscaling_dict)
+        return AutoscalingConfig()  # Return defaults

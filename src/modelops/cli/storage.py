@@ -5,10 +5,10 @@ import typer
 import yaml
 from pathlib import Path
 from typing import Optional
-from ..core import StackNaming, automation
-from ..core.paths import ensure_work_dir
-from .utils import handle_pulumi_error, resolve_env
-from .display import console, success, warning, error, info, section, dim, commands
+from ..client import StorageService
+from ..core import StackNaming
+from .utils import resolve_env
+from .display import console, success, warning, error, info, section, commands
 from .common_options import env_option, yes_option
 
 app = typer.Typer(help="Manage blob storage for bundles and results")
@@ -46,35 +46,11 @@ def up(
     with open(config) as f:
         storage_config = yaml.safe_load(f)
     
-    def pulumi_program():
-        """Create BlobStorage in standalone or integrated mode."""
-        from ..infra.components.storage import BlobStorage
-        import pulumi
-        
-        # Add environment to config
-        storage_config["environment"] = env
-        
-        if standalone:
-            # Standalone deployment
-            storage = BlobStorage("storage", storage_config)
-        else:
-            # Integrated with infrastructure - reference infra stack
-            infra_ref = StackNaming.ref("infra", env)
-            storage = BlobStorage("storage", storage_config, infra_stack_ref=infra_ref)
-        
-        # Export outputs at stack level for visibility
-        pulumi.export("account_name", storage.account_name)
-        pulumi.export("resource_group", storage.resource_group)
-        pulumi.export("connection_string", storage.connection_string)
-        pulumi.export("primary_endpoint", storage.primary_endpoint)
-        pulumi.export("containers", storage_config.get("containers", []))
-        pulumi.export("location", storage_config.get("location", "eastus2"))
-        pulumi.export("environment", env)
-        
-        return storage
-    
-    # Ensure work directory exists
-    work_dir = ensure_work_dir("storage")
+    # Add environment to config
+    storage_config["environment"] = env
+
+    # Use StorageService
+    service = StorageService(env)
     
     try:
         section(f"Provisioning blob storage")
@@ -93,15 +69,15 @@ def up(
             info("  Containers: (none specified)\n")
         
         warning("\nCreating storage resources...")
-        
-        outputs = automation.up("storage", env, None, pulumi_program, on_output=dim, work_dir=str(work_dir))
-        
+
+        outputs = service.provision(storage_config, standalone, verbose=False)
+
         success("\n✓ Storage provisioned successfully!")
-        info(f"  Account: {automation.get_output_value(outputs, 'account_name', 'unknown')}")
-        info(f"  Resource Group: {automation.get_output_value(outputs, 'resource_group', 'unknown')}")
+        info(f"  Account: {outputs.get('account_name', 'unknown')}")
+        info(f"  Resource Group: {outputs.get('resource_group', 'unknown')}")
         
         # Extract container names from list of dicts
-        containers = automation.get_output_value(outputs, 'containers', [])
+        containers = outputs.get('containers', [])
         if containers:
             container_names = [c.get('name', 'unnamed') if isinstance(c, dict) else str(c) for c in containers]
             info(f"  Containers: {', '.join(container_names)}")
@@ -114,7 +90,6 @@ def up(
         
     except Exception as e:
         error(f"\nError provisioning storage: {e}")
-        handle_pulumi_error(e, str(work_dir), StackNaming.get_stack_name('storage', env))
         raise typer.Exit(1)
 
 
@@ -138,18 +113,12 @@ def connection_string(
     """
     env = resolve_env(env)
     
+    # Use StorageService
+    service = StorageService(env)
+
     try:
-        # Get outputs from storage stack
-        outputs = automation.outputs("storage", env, refresh=False)
-        
-        if not outputs:
-            warning("Storage not found or not deployed")
-            info("Run 'mops storage up' to provision storage first")
-            raise typer.Exit(1)
-        
-        # Get connection string and account name
-        conn_str = automation.get_output_value(outputs, 'connection_string', '')
-        account_name = automation.get_output_value(outputs, 'account_name', '')
+        conn_str = service.get_connection_string(show_secrets=True)
+        account_name = service.get_account_name()
         
         if not conn_str:
             error("Connection string not found in stack outputs")
@@ -191,28 +160,32 @@ def storage_info(
     """
     env = resolve_env(env)
     
+    # Use StorageService
+    service = StorageService(env)
+
     try:
-        # Get outputs from storage stack
-        work_dir = ensure_work_dir("storage")
-        outputs = automation.outputs("storage", env, refresh=False, work_dir=str(work_dir))
-        
-        if not outputs:
+        status = service.status()
+
+        if not status.deployed:
             warning("Storage not found")
             info("Run 'mops storage up' to provision storage")
             raise typer.Exit(0)
-        
+
         section("Storage Account Information")
         info(f"  Environment: {env}")
-        info(f"  Account Name: {automation.get_output_value(outputs, 'account_name', 'unknown')}")
-        info(f"  Resource Group: {automation.get_output_value(outputs, 'resource_group', 'unknown')}")
-        info(f"  Location: {automation.get_output_value(outputs, 'location', 'unknown')}")
-        info(f"  Endpoint: {automation.get_output_value(outputs, 'primary_endpoint', 'unknown')}")
-        
-        containers = automation.get_output_value(outputs, 'containers', [])
+        info(f"  Account Name: {status.details.get('account_name', 'unknown')}")
+        info(f"  Resource Group: {status.details.get('resource_group', 'unknown')}")
+        info(f"  Location: {status.details.get('location', 'unknown')}")
+        info(f"  Endpoint: {status.details.get('primary_endpoint', 'unknown')}")
+
+        containers = status.details.get('containers', [])
         if containers:
-            info(f"  Containers: {', '.join(containers)}")
-        
-        account_name = automation.get_output_value(outputs, 'account_name', '')
+            if isinstance(containers, int):
+                info(f"  Containers: {containers} active")
+            else:
+                info(f"  Containers: {', '.join(str(c) for c in containers)}")
+
+        account_name = status.details.get('account_name', '')
         
         section("\nAccess Methods:")
         
@@ -265,19 +238,19 @@ def down(
             success("Destruction cancelled")
             raise typer.Exit(0)
     
-    work_dir = ensure_work_dir("storage")
-    
+    # Use StorageService
+    service = StorageService(env)
+
     try:
         warning(f"\nDestroying storage account...")
-        
-        automation.destroy("storage", env, None, on_output=dim, work_dir=str(work_dir))
-        
+
+        service.destroy(verbose=False)
+
         success(f"\n✓ Storage destroyed successfully")
         info("All data has been permanently deleted")
         
     except Exception as e:
         error(f"\nError destroying storage: {e}")
-        handle_pulumi_error(e, str(work_dir), StackNaming.get_stack_name('storage', env))
         raise typer.Exit(1)
 
 
@@ -288,25 +261,31 @@ def status(
     """Show storage stack status."""
     env = resolve_env(env)
     
+    # Use StorageService
+    service = StorageService(env)
+
     try:
-        work_dir = ensure_work_dir("storage")
-        outputs = automation.outputs("storage", env, refresh=True, work_dir=str(work_dir))
-        
-        if not outputs:
+        status = service.status()
+
+        if not status.deployed:
             warning("Storage not deployed")
             info("Run 'mops storage up' to provision storage")
             raise typer.Exit(0)
         
         section("Storage Status")
         info(f"  Stack: {StackNaming.get_stack_name('storage', env)}")
-        info(f"  Account: {automation.get_output_value(outputs, 'account_name', 'unknown')}")
-        
-        containers = automation.get_output_value(outputs, 'containers', [])
-        success(f"  ✓ {len(containers)} containers active")
-        
+        info(f"  Account: {status.details.get('account_name', 'unknown')}")
+
+        containers = status.details.get('containers', [])
+        if isinstance(containers, int):
+            success(f"  ✓ {containers} containers active")
+        else:
+            success(f"  ✓ {len(containers)} containers active")
+
         section("\nContainers:")
-        for container in containers:
-            info(f"  • {container}")
+        if isinstance(containers, list):
+            for container in containers:
+                info(f"  • {container}")
         
     except Exception as e:
         error(f"Error querying status: {e}")

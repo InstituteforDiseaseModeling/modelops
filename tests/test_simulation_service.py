@@ -10,6 +10,10 @@ from modelops_contracts import SimTask, UniqueParameterSet, SimReturn, TableArti
 from modelops.services.simulation import LocalSimulationService
 from modelops.services.dask_simulation import DaskSimulationService
 
+# Valid test bundle references (SHA256 with 64 hex chars)
+TEST_BUNDLE_REF = "sha256:" + "a" * 64
+TEST_BUNDLE_REF_2 = "sha256:" + "b" * 64
+
 
 def simple_test_sim(params: dict, seed: int) -> dict:
     """Simple test simulation."""
@@ -74,7 +78,7 @@ class TestLocalSimulationService:
         
         # Test execution
         task = SimTask(
-            bundle_ref="local://dev",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
             seed=42
@@ -158,7 +162,7 @@ class TestDaskSimulationService:
         
         # Submit a simulation task
         task = SimTask(
-            bundle_ref="sha256:bundle123456",
+            bundle_ref=TEST_BUNDLE_REF_2,
             entrypoint="example.func/test",
             params=UniqueParameterSet.from_dict({"x": 10}),
             seed=42
@@ -283,7 +287,7 @@ class TestSimulationIntegration:
         
         # Submit task
         task = SimTask(
-            bundle_ref="local://dev",
+            bundle_ref=TEST_BUNDLE_REF,
             entrypoint="examples.simulations.monte_carlo_pi/test",
             params=UniqueParameterSet.from_dict({"n_samples": 1000}),
             seed=42
