@@ -10,6 +10,7 @@ from .utils import stack_exists, get_safe_outputs
 from ..components import WorkspaceConfig
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
+from ..core.state_manager import PulumiStateManager
 
 
 class WorkspaceService(BaseService):
@@ -77,13 +78,21 @@ class WorkspaceService(BaseService):
 
             return workspace
 
+        # Use PulumiStateManager for automatic lock recovery and state management
+        state_manager = PulumiStateManager("workspace", self.env)
         capture = OutputCapture(verbose)
 
-        def provision_with_retry():
-            return automation.up("workspace", self.env, None, pulumi_program, on_output=capture)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - State reconciliation with Kubernetes
+        # - No environment YAML updates (workspace doesn't save to YAML)
+        result = state_manager.execute_with_recovery(
+            "up",
+            program=pulumi_program,
+            on_output=capture
+        )
 
-        outputs = self.with_retry(provision_with_retry)
-        return outputs
+        return result.outputs if result else {}
 
     def destroy(self, verbose: bool = False) -> None:
         """
@@ -99,12 +108,17 @@ class WorkspaceService(BaseService):
         # Allow deletion of K8s resources even if cluster is unreachable
         os.environ["PULUMI_K8S_DELETE_UNREACHABLE"] = "true"
 
+        # Use PulumiStateManager for automatic lock recovery and cleanup
+        state_manager = PulumiStateManager("workspace", self.env)
         capture = OutputCapture(verbose)
 
-        def destroy_with_retry():
-            automation.destroy("workspace", self.env, on_output=capture)
-
-        self.with_retry(destroy_with_retry)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - No environment YAML cleanup (workspace doesn't save to YAML)
+        state_manager.execute_with_recovery(
+            "destroy",
+            on_output=capture
+        )
 
     def status(self) -> ComponentStatus:
         """

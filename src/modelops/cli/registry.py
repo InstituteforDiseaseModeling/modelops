@@ -5,8 +5,8 @@ import yaml
 from pathlib import Path
 from typing import Optional
 from ..client import RegistryService
-from ..core import StackNaming
-from .utils import resolve_env, resolve_provider
+from ..core import StackNaming, automation
+from .utils import resolve_env, resolve_provider, handle_pulumi_error
 from .display import console, success, warning, error, info, section, commands, info_dict
 from .common_options import env_option, yes_option
 
@@ -100,6 +100,7 @@ def create(
         
     except Exception as e:
         error(f"\nError creating registry: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/registry", StackNaming.get_stack_name('registry', env))
         raise typer.Exit(1)
 
 

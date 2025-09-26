@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 from ..client import StorageService
 from ..core import StackNaming
-from .utils import resolve_env
+from .utils import resolve_env, handle_pulumi_error
 from .display import console, success, warning, error, info, section, commands
 from .common_options import env_option, yes_option
 
@@ -44,21 +44,25 @@ def up(
     
     # Load configuration
     with open(config) as f:
-        storage_config = yaml.safe_load(f)
-    
+        config_dict = yaml.safe_load(f)
+
     # Add environment to config
-    storage_config["environment"] = env
+    config_dict["environment"] = env
+
+    # Create StorageConfig from dict
+    from ..components.specs.storage import StorageConfig
+    storage_config = StorageConfig(**config_dict)
 
     # Use StorageService
     service = StorageService(env)
-    
+
     try:
         section(f"Provisioning blob storage")
         info(f"  Environment: {env}")
         info(f"  Mode: {'Standalone' if standalone else 'Integrated with infrastructure'}")
-        
+
         # Extract container names properly
-        containers = storage_config.get('containers', [])
+        containers = config_dict.get('containers', [])
         if isinstance(containers, list) and containers:
             if isinstance(containers[0], dict):
                 container_names = [c.get('name', 'unnamed') for c in containers[:5]]
@@ -67,7 +71,7 @@ def up(
             info(f"  Containers: {', '.join(container_names)}\n")
         else:
             info("  Containers: (none specified)\n")
-        
+
         warning("\nCreating storage resources...")
 
         outputs = service.provision(storage_config, standalone, verbose=False)
@@ -90,6 +94,7 @@ def up(
         
     except Exception as e:
         error(f"\nError provisioning storage: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/storage", StackNaming.get_stack_name('storage', env))
         raise typer.Exit(1)
 
 
@@ -251,6 +256,7 @@ def down(
         
     except Exception as e:
         error(f"\nError destroying storage: {e}")
+        handle_pulumi_error(e, "~/.modelops/pulumi/storage", StackNaming.get_stack_name('storage', env))
         raise typer.Exit(1)
 
 

@@ -7,6 +7,7 @@ from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
 from .utils import stack_exists
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
+from ..core.state_manager import PulumiStateManager
 
 
 class RegistryService(BaseService):
@@ -90,13 +91,21 @@ class RegistryService(BaseService):
 
             return registry
 
+        # Use PulumiStateManager for automatic lock recovery and state management
+        state_manager = PulumiStateManager("registry", self.env)
         capture = OutputCapture(verbose)
 
-        def create_with_retry():
-            return automation.up("registry", self.env, None, pulumi_program, on_output=capture)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - State reconciliation with Azure
+        # - Environment YAML updates
+        result = state_manager.execute_with_recovery(
+            "up",
+            program=pulumi_program,
+            on_output=capture
+        )
 
-        outputs = self.with_retry(create_with_retry)
-        return outputs
+        return result.outputs if result else {}
 
     def destroy(self, verbose: bool = False) -> None:
         """
@@ -108,12 +117,17 @@ class RegistryService(BaseService):
         Raises:
             Exception: If destruction fails
         """
+        # Use PulumiStateManager for automatic lock recovery and cleanup
+        state_manager = PulumiStateManager("registry", self.env)
         capture = OutputCapture(verbose)
 
-        def destroy_with_retry():
-            automation.destroy("registry", self.env, on_output=capture)
-
-        self.with_retry(destroy_with_retry)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - Environment YAML cleanup
+        state_manager.execute_with_recovery(
+            "destroy",
+            on_output=capture
+        )
 
     def status(self) -> ComponentStatus:
         """
@@ -149,6 +163,69 @@ class RegistryService(BaseService):
                 phase=ComponentState.UNKNOWN,
                 details={"error": str(e)}
             )
+
+    def _save_to_environment_config(self, outputs: Dict[str, Any]):
+        """Save registry outputs to environment config."""
+        from ..core.env_config import load_environment_config, save_environment_config
+        from ..core.automation import get_output_value
+
+        # Extract registry configuration
+        registry_config = {
+            "provider": get_output_value(outputs, "provider", "azure"),
+            "login_server": get_output_value(outputs, "login_server"),
+            "registry_name": get_output_value(outputs, "registry_name"),
+            "requires_auth": get_output_value(outputs, "requires_auth", False),
+            "cluster_pull_configured": get_output_value(outputs, "cluster_pull_configured", False)
+        }
+
+        # Load existing config and merge
+        existing_storage = None
+        try:
+            existing_config = load_environment_config(self.env)
+            if existing_config and existing_config.storage:
+                existing_storage = existing_config.storage.model_dump()
+        except FileNotFoundError:
+            pass
+
+        # Save merged config
+        config_path = save_environment_config(
+            self.env,
+            registry_outputs=registry_config,
+            storage_outputs=existing_storage
+        )
+        print(f"  ✓ Environment config updated at {config_path}")
+
+    def _remove_from_environment_config(self):
+        """Remove registry from environment config."""
+        from ..core.env_config import load_environment_config, save_environment_config
+        from pathlib import Path
+
+        try:
+            existing_config = load_environment_config(self.env)
+        except FileNotFoundError:
+            return
+
+        # Check if config exists
+        if not existing_config:
+            return
+
+        # Keep storage if it exists
+        existing_storage = existing_config.storage.model_dump() if existing_config.storage else None
+
+        if existing_storage:
+            # Update with storage only
+            config_path = save_environment_config(
+                self.env,
+                registry_outputs=None,
+                storage_outputs=existing_storage
+            )
+            print(f"  ✓ Removed registry from environment config")
+        else:
+            # Remove entire config if nothing left
+            config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
+            if config_path.exists():
+                config_path.unlink()
+                print(f"  ✓ Removed environment config for {self.env}")
 
     def login(self) -> bool:
         """

@@ -170,14 +170,55 @@ class InfrastructureService:
 
             except Exception as e:
                 result.components[component] = ComponentState.FAILED
-                result.errors[component] = str(e)
+                error_msg = str(e)
+                result.errors[component] = error_msg
                 result.success = False
-                print(f"  ✗ {component} failed: {e}")
+
+                # Check for Pulumi lock error and provide helpful hint
+                if "lock" in error_msg.lower() and "pulumi cancel" in error_msg.lower():
+                    print(f"  ✗ {component} failed: Stack is locked by another process")
+                    print(f"\n  Hint: Clear the lock with:")
+
+                    # Extract stack name from error if possible
+                    if "modelops-" in error_msg:
+                        # Try to extract the stack name
+                        import re
+                        stack_match = re.search(r'(modelops-[a-z]+-[a-z]+)', error_msg)
+                        if stack_match:
+                            stack_name = stack_match.group(1)
+                            print(f"    cd ~/.modelops/pulumi/{component} && pulumi cancel")
+                            print(f"    # or: pulumi cancel -s organization/{stack_name}")
+                    else:
+                        print(f"    cd ~/.modelops/pulumi/{component} && pulumi cancel")
+
+                    print(f"\n  Then retry the operation.")
+                else:
+                    # Show the full error for other cases
+                    print(f"  ✗ {component} failed: {error_msg}")
 
                 if not spec.continue_on_error:
                     break
 
         self._write_logs(result)
+
+        # Save environment config if provisioning was successful
+        if result.success and result.outputs:
+            # Get resolved outputs (plain values) instead of Pulumi Output objects
+            resolved_outputs = {}
+            for component in result.outputs:
+                try:
+                    from ..core import automation
+                    # Get the actual resolved values from the stack
+                    component_outputs = automation.outputs(component, self.env, refresh=False)
+                    if component_outputs:
+                        resolved_outputs[component] = component_outputs
+                except Exception:
+                    # If we can't get resolved outputs, skip this component
+                    pass
+
+            if resolved_outputs:
+                self._save_environment_config(resolved_outputs)
+
         return result
 
     def destroy(
@@ -186,23 +227,40 @@ class InfrastructureService:
         verbose: bool = False,
         force: bool = False,
         with_deps: bool = False,
-        dry_run: bool = False
+        dry_run: bool = False,
+        destroy_storage: bool = False,
+        destroy_registry: bool = False,
+        destroy_all: bool = False
     ) -> InfraResult:
         """
         Destroy infrastructure components.
 
         Args:
-            components: Specific components to destroy (None = all)
+            components: Specific components to destroy (None = compute only by default)
             verbose: Show detailed output
             force: Skip dependency checks
             with_deps: Also destroy dependent components
             dry_run: Show what would be done without doing it
+            destroy_storage: Include storage in destruction
+            destroy_registry: Include registry in destruction
+            destroy_all: Destroy all components including data
 
         Returns:
             InfraResult with status
         """
-        # Default to all components
-        components = components or ["workspace", "storage", "cluster", "registry"]
+        # Build component list based on flags
+        if components is None:
+            # Default to compute resources only (safe by default)
+            components = ["workspace", "cluster"]
+
+            # Add data resources if explicitly requested
+            if destroy_all:
+                components.extend(["storage", "registry"])
+            else:
+                if destroy_storage:
+                    components.append("storage")
+                if destroy_registry:
+                    components.append("registry")
 
         # If with_deps, add all dependents
         if with_deps and not force:
@@ -229,6 +287,12 @@ class InfrastructureService:
                             comp: f"Has dependent components: {', '.join(existing_dependents)}"
                         }
                     )
+
+        # Add warnings for destructive data operations
+        if "storage" in components:
+            print("\n⚠️  WARNING: Destroying storage will permanently delete all stored results and artifacts!")
+        if "registry" in components:
+            print("⚠️  WARNING: Destroying registry will permanently delete all container images!")
 
         # Get destroy order (reverse of provision order)
         destroy_order = self.dep_graph.get_destroy_order(components)
@@ -267,6 +331,11 @@ class InfrastructureService:
                 print(f"  ✗ Failed to destroy {component}: {e}")
 
         self._write_logs(result)
+
+        # Update environment config after successful destruction
+        if result.success:
+            self._update_environment_config_after_destroy(destroy_order)
+
         return result
 
     def get_status(self) -> Dict[str, ComponentStatus]:
@@ -386,3 +455,127 @@ class InfrastructureService:
                 }, indent=2))
             except:
                 pass  # Don't fail on log writing errors
+
+    def _save_environment_config(self, outputs: Dict[str, Any]):
+        """Save environment configuration for modelops-bundle discovery.
+
+        Args:
+            outputs: Component outputs from provisioning
+        """
+        try:
+            from ..core.env_config import save_environment_config
+
+            # Helper to extract plain value from Pulumi Output or dict
+            def extract_value(obj):
+                """Extract plain value from various output formats."""
+                if obj is None:
+                    return None
+                # Handle Pulumi Output objects
+                if hasattr(obj, 'value'):
+                    return obj.value
+                # Handle dict with 'value' key (from automation.outputs)
+                if isinstance(obj, dict) and 'value' in obj:
+                    return obj['value']
+                # Already a plain value
+                return obj
+
+            # Helper to extract all values from a dict
+            def extract_all_values(output_dict):
+                """Recursively extract plain values from output dict."""
+                if not output_dict:
+                    return None
+                result = {}
+                for key, value in output_dict.items():
+                    extracted = extract_value(value)
+                    # Handle nested structures like containers list
+                    if extracted is not None and isinstance(extracted, list) and extracted and isinstance(extracted[0], dict):
+                        # Keep the list structure for containers
+                        result[key] = extracted
+                    else:
+                        result[key] = extracted
+                return result
+
+            # Extract registry outputs if present
+            registry_plain = None
+            if "registry" in outputs and outputs["registry"]:
+                registry_plain = extract_all_values(outputs["registry"])
+
+            # Extract storage outputs if present
+            storage_plain = None
+            if "storage" in outputs and outputs["storage"]:
+                storage_plain = extract_all_values(outputs["storage"])
+
+            # Save if we have either registry or storage
+            if registry_plain or storage_plain:
+                config_path = save_environment_config(
+                    self.env,
+                    registry_outputs=registry_plain,
+                    storage_outputs=storage_plain
+                )
+                print(f"  ✓ Environment config saved to {config_path}")
+        except Exception as e:
+            # Don't fail provisioning if config save fails
+            print(f"  ⚠ Could not save environment config: {e}")
+
+    def _update_environment_config_after_destroy(self, destroyed_components: List[str]):
+        """Update environment configuration after component destruction.
+
+        Args:
+            destroyed_components: List of components that were destroyed
+        """
+        try:
+            from ..core.env_config import load_environment_config, save_environment_config
+
+            # Try to load existing config
+            try:
+                existing_config = load_environment_config(self.env)
+            except FileNotFoundError:
+                # No config to update
+                return
+
+            # Check if config exists
+            if not existing_config:
+                return
+
+            # Check what was destroyed
+            destroyed_storage = "storage" in destroyed_components
+            destroyed_registry = "registry" in destroyed_components
+
+            # If both data components were destroyed, remove the entire config
+            if destroyed_storage and destroyed_registry:
+                config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
+                if config_path.exists():
+                    config_path.unlink()
+                    print(f"  ✓ Removed environment config for {self.env}")
+                return
+
+            # Otherwise, update the config to remove destroyed components
+            registry_outputs = None
+            storage_outputs = None
+
+            # Keep registry if it wasn't destroyed
+            if not destroyed_registry and existing_config and existing_config.registry:
+                registry_outputs = existing_config.registry.model_dump()
+
+            # Keep storage if it wasn't destroyed
+            if not destroyed_storage and existing_config and existing_config.storage:
+                storage_outputs = existing_config.storage.model_dump()
+
+            # Save updated config if there's anything left
+            if registry_outputs or storage_outputs:
+                config_path = save_environment_config(
+                    self.env,
+                    registry_outputs=registry_outputs,
+                    storage_outputs=storage_outputs
+                )
+                print(f"  ✓ Updated environment config at {config_path}")
+            else:
+                # Nothing left, remove the config
+                config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
+                if config_path.exists():
+                    config_path.unlink()
+                    print(f"  ✓ Removed environment config for {self.env}")
+
+        except Exception as e:
+            # Don't fail destruction if config update fails
+            print(f"  ⚠ Could not update environment config: {e}")

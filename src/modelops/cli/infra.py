@@ -134,6 +134,9 @@ def down(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip dependency checks"),
     with_deps: bool = typer.Option(False, "--with-deps", help="Also destroy dependent components"),
+    destroy_storage: bool = typer.Option(False, "--destroy-storage", help="Include storage (contains results/artifacts)"),
+    destroy_registry: bool = typer.Option(False, "--destroy-registry", help="Include registry (contains images)"),
+    destroy_all: bool = typer.Option(False, "--destroy-all", help="Destroy all components including data"),
     plan: bool = typer.Option(False, "--plan", help="Show what would be done"),
     yes: bool = yes_option(),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
@@ -141,12 +144,14 @@ def down(
     """
     Destroy infrastructure components.
 
-    Destroys components in reverse dependency order.
+    By default, only destroys compute resources (cluster, workspace).
+    Use flags to include data resources (storage, registry).
 
     Example:
-        mops infra down
-        mops infra down --components workspace
-        mops infra down --with-deps --components cluster
+        mops infra down                           # Destroy compute only
+        mops infra down --destroy-storage         # Include storage
+        mops infra down --destroy-all             # Destroy everything
+        mops infra down --components workspace    # Specific components
     """
     from .utils import resolve_env
 
@@ -156,21 +161,44 @@ def down(
 
     if plan:
         # Just show what would be done
-        components_to_destroy = components or ["workspace", "storage", "cluster", "registry"]
-        info(f"Would destroy: {', '.join(components_to_destroy)}")
+        result = service.destroy(
+            components, verbose, force, with_deps,
+            dry_run=True,
+            destroy_storage=destroy_storage,
+            destroy_registry=destroy_registry,
+            destroy_all=destroy_all
+        )
         raise typer.Exit(0)
 
+    # Build warning message based on what will be destroyed
     if not yes:
+        warning_msg = []
         if components:
-            warning(f"This will destroy: {', '.join(components)}")
+            warning_msg.append(f"Components: {', '.join(components)}")
         else:
-            warning("This will destroy ALL infrastructure")
+            # Show what default behavior will destroy
+            if destroy_all:
+                warning_msg.append("ALL infrastructure including data resources")
+            else:
+                default_components = ["cluster", "workspace"]
+                if destroy_storage:
+                    default_components.append("storage")
+                if destroy_registry:
+                    default_components.append("registry")
+                warning_msg.append(f"Components: {', '.join(default_components)}")
+
+        warning(f"This will destroy: {' and '.join(warning_msg)}")
 
         if not typer.confirm("Continue?"):
             success("Cancelled")
             raise typer.Exit(0)
 
-    result = service.destroy(components, verbose, force, with_deps)
+    result = service.destroy(
+        components, verbose, force, with_deps,
+        destroy_storage=destroy_storage,
+        destroy_registry=destroy_registry,
+        destroy_all=destroy_all
+    )
 
     if json_output:
         console.print(result.to_json())

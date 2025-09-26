@@ -190,11 +190,11 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # Build node pool profiles
         node_pools = self._build_node_pools(aks_config.get("node_pools", []))
         
-        # Create the AKS cluster with explicit naming (like storage and registry)
-        # First arg is Pulumi logical name, resource_name_ controls Azure name
+        # Create the AKS cluster with explicit naming
+        # Note: resource_name_ with underscore is required by Pulumi Azure Native
         aks_resource = azure.containerservice.ManagedCluster(
-            f"{name}-aks",  # Pulumi logical name
-            resource_name_=cluster_name,  # Explicit Azure resource name (note the underscore)
+            "aks-cluster",  # Pulumi logical name
+            resource_name_=cluster_name,  # Azure resource name (underscore required!)
             resource_group_name=rg.name,
             location=location,
             dns_prefix=f"{cluster_name}-dns",

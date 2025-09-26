@@ -10,6 +10,7 @@ from .utils import stack_exists, get_safe_outputs
 from ..components import AzureProviderConfig
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
+from ..core.state_manager import PulumiStateManager
 
 
 class ClusterService(BaseService):
@@ -55,13 +56,21 @@ class ClusterService(BaseService):
             else:
                 raise ValueError(f"Provider '{config.provider}' not yet implemented")
 
-        # Use retry wrapper for transient failures
+        # Use PulumiStateManager for automatic lock recovery and state management
+        state_manager = PulumiStateManager("infra", self.env)
         capture = OutputCapture(verbose)
 
-        def provision_with_retry():
-            return automation.up("infra", self.env, None, pulumi_program, on_output=capture)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - State reconciliation with Azure
+        # - Environment YAML updates (cluster doesn't save to YAML)
+        result = state_manager.execute_with_recovery(
+            "up",
+            program=pulumi_program,
+            on_output=capture
+        )
 
-        outputs = self.with_retry(provision_with_retry)
+        outputs = result.outputs if result else {}
 
         # Verify kubeconfig exists
         if not get_output_value(outputs, "kubeconfig"):
@@ -95,12 +104,17 @@ class ClusterService(BaseService):
                     "Destroy them first or use force=True"
                 )
 
+        # Use PulumiStateManager for automatic lock recovery and cleanup
+        state_manager = PulumiStateManager("infra", self.env)
         capture = OutputCapture(verbose)
 
-        def destroy_with_retry():
-            automation.destroy("infra", self.env, on_output=capture)
-
-        self.with_retry(destroy_with_retry)
+        # State manager handles:
+        # - Stale lock detection and clearing
+        # - No environment YAML cleanup (cluster doesn't save to YAML)
+        state_manager.execute_with_recovery(
+            "destroy",
+            on_output=capture
+        )
 
         if delete_rg:
             # Get username from config or environment
