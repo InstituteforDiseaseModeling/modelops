@@ -102,7 +102,7 @@ class BlobStorage(pulumi.ComponentResource):
         """Create storage account with unique name."""
         # Use provided name or generate unique one
         account_name = StackNaming.get_storage_account_name(env, username)
-        
+
         return azure.storage.StorageAccount(
             f"{self._static_name}-account",
             resource_group_name=rg_name,

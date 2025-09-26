@@ -118,6 +118,13 @@ class InfrastructureService:
             return result
 
         # Provision in dependency order
+        if verbose:
+            print(f"[DEBUG] provision_order: {provision_order}")
+            print(f"[DEBUG] spec.registry: {spec.registry}")
+            print(f"[DEBUG] spec.storage: {spec.storage}")
+            print(f"[DEBUG] spec.cluster: {spec.cluster}")
+            print(f"[DEBUG] spec.workspace: {spec.workspace}")
+
         for component in provision_order:
             print(f"\n→ Provisioning {component}...")
 
@@ -125,6 +132,8 @@ class InfrastructureService:
                 outputs = None
 
                 if component == "registry" and spec.registry:
+                    if verbose:
+                        print(f"[DEBUG] Provisioning registry component...")
                     # Registry needs Azure settings - inherit from cluster if available
                     registry_config = spec.registry.copy()
                     if spec.cluster:
@@ -141,6 +150,10 @@ class InfrastructureService:
                         verbose=verbose
                     )
 
+                    if verbose:
+                        import json
+                        print(f"[DEBUG] Registry outputs from create(): {json.dumps(outputs, indent=2, default=str)}")
+
                 elif component == "cluster" and spec.cluster:
                     outputs = self.cluster_service.provision(
                         config=spec.cluster,
@@ -148,6 +161,8 @@ class InfrastructureService:
                     )
 
                 elif component == "storage" and spec.storage:
+                    if verbose:
+                        print(f"[DEBUG] Provisioning storage component...")
                     # Storage should be standalone if cluster isn't being provisioned
                     standalone_storage = "cluster" not in components or not spec.cluster
                     outputs = self.storage_service.provision(
@@ -166,6 +181,11 @@ class InfrastructureService:
 
                 result.components[component] = ComponentState.READY
                 result.outputs[component] = outputs or {}
+
+                if verbose:
+                    import json
+                    print(f"[DEBUG] Storing outputs for {component}: {json.dumps(outputs or {}, indent=2, default=str)}")
+
                 print(f"  ✓ {component} provisioned successfully")
 
             except Exception as e:
@@ -464,6 +484,7 @@ class InfrastructureService:
         """
         try:
             from ..core.env_config import save_environment_config
+            from modelops_contracts.bundle_environment import ENVIRONMENTS_DIR
 
             # Helper to extract plain value from Pulumi Output or dict
             def extract_value(obj):
@@ -525,6 +546,7 @@ class InfrastructureService:
         """
         try:
             from ..core.env_config import load_environment_config, save_environment_config
+            from modelops_contracts.bundle_environment import ENVIRONMENTS_DIR
 
             # Try to load existing config
             try:
@@ -543,7 +565,7 @@ class InfrastructureService:
 
             # If both data components were destroyed, remove the entire config
             if destroyed_storage and destroyed_registry:
-                config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
+                config_path = ENVIRONMENTS_DIR / f"{self.env}.yaml"
                 if config_path.exists():
                     config_path.unlink()
                     print(f"  ✓ Removed environment config for {self.env}")
@@ -571,7 +593,7 @@ class InfrastructureService:
                 print(f"  ✓ Updated environment config at {config_path}")
             else:
                 # Nothing left, remove the config
-                config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
+                config_path = ENVIRONMENTS_DIR / f"{self.env}.yaml"
                 if config_path.exists():
                     config_path.unlink()
                     print(f"  ✓ Removed environment config for {self.env}")

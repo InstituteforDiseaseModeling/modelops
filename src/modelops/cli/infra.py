@@ -6,6 +6,7 @@ Orchestrates all infrastructure components with a single command.
 import typer
 from pathlib import Path
 from typing import Optional, List
+from datetime import datetime
 
 from ..client import InfrastructureService
 from ..components.specs.infra import UnifiedInfraSpec
@@ -84,6 +85,10 @@ def up(
 
         raise typer.Exit(0)
 
+    # Handle comma-separated components
+    if components and len(components) == 1 and "," in components[0]:
+        components = [c.strip() for c in components[0].split(",")]
+
     section(f"Provisioning infrastructure for environment: {env}")
     info(f"Components: {', '.join(components or spec.get_components())}")
 
@@ -116,6 +121,13 @@ def up(
 
             if result.logs_path:
                 info(f"\nLogs: {result.logs_path}")
+
+            # Write BundleEnvironment configuration if we have registry and storage
+            if verbose:
+                import json
+                info(f"[DEBUG] result.outputs keys: {list(result.outputs.keys())}")
+                info(f"[DEBUG] result.outputs: {json.dumps(result.outputs, indent=2, default=str)}")
+            _write_bundle_environment(env, result.outputs, verbose)
         else:
             error("\n✗ Some components failed to provision")
             for comp, err in result.errors.items():
@@ -156,6 +168,10 @@ def down(
     from .utils import resolve_env
 
     env = resolve_env(env)
+
+    # Handle comma-separated components
+    if components and len(components) == 1 and "," in components[0]:
+        components = [c.strip() for c in components[0].split(",")]
 
     service = InfrastructureService(env)
 
@@ -412,3 +428,90 @@ def outputs(
                             info(f"  {key}: <truncated>")
                         else:
                             info(f"  {key}: {value}")
+
+
+def _write_bundle_environment(env: str, outputs: dict, verbose: bool = False) -> None:
+    """Write BundleEnvironment configuration after successful provisioning.
+
+    Args:
+        env: Environment name (dev, local, etc.)
+        outputs: Component outputs from provisioning
+        verbose: Enable debug output
+    """
+    from modelops_contracts import (
+        BundleEnvironment,
+        RegistryConfig,
+        StorageConfig,
+    )
+    from modelops.core.automation import get_output_value
+
+    # Check if we have both registry and storage outputs
+    registry_outputs = outputs.get("registry", {})
+    storage_outputs = outputs.get("storage", {})
+
+    if not registry_outputs or not storage_outputs:
+        # Can't create bundle environment without both
+        return
+
+    # Extract registry info using get_output_value which handles nested dicts
+    if verbose:
+        import json
+        info(f"[DEBUG] Registry outputs type: {type(registry_outputs)}")
+        info(f"[DEBUG] Registry outputs: {json.dumps(registry_outputs, indent=2, default=str)}")
+
+    login_server = get_output_value(registry_outputs, "login_server")
+    if verbose:
+        info(f"[DEBUG] login_server value: {repr(login_server)} (type: {type(login_server)})")
+
+    if not login_server or login_server == "unknown":
+        warning("Registry login_server not found in outputs, skipping BundleEnvironment")
+        return
+
+    # Extract storage info using get_output_value
+    connection_string = get_output_value(storage_outputs, "connection_string")
+    container_name = get_output_value(storage_outputs, "container_name", "modelops-bundles")
+    account_name = get_output_value(storage_outputs, "account_name")
+
+    if not connection_string and not account_name:
+        warning("Storage connection info not found in outputs, skipping BundleEnvironment")
+        return
+
+    # Clean up values if they have extra quotes
+    if isinstance(login_server, str):
+        # Remove extra quotes if present
+        if login_server.startswith("'") and login_server.endswith("'"):
+            login_server = login_server[1:-1]
+            if verbose:
+                info(f"[DEBUG] Stripped quotes from login_server: {repr(login_server)}")
+
+    registry_name = get_output_value(registry_outputs, "registry_name")
+    if isinstance(registry_name, str) and registry_name.startswith("'") and registry_name.endswith("'"):
+        registry_name = registry_name[1:-1]
+        if verbose:
+            info(f"[DEBUG] Stripped quotes from registry_name: {repr(registry_name)}")
+
+    try:
+        # Create BundleEnvironment
+        bundle_env = BundleEnvironment(
+            environment=env,
+            registry=RegistryConfig(
+                provider="acr",  # Azure Container Registry
+                login_server=login_server,
+                requires_auth=True
+            ),
+            storage=StorageConfig(
+                provider="azure",
+                container=container_name,
+                connection_string=connection_string,
+                endpoint=get_output_value(storage_outputs, "primary_endpoint")
+            ),
+            timestamp=datetime.utcnow().isoformat()
+        )
+
+        # Save to standard location
+        env_path = bundle_env.save(env_name=env)
+        info(f"\n✓ Bundle environment config written to {env_path}")
+        info("  Use with: mops-bundle init <project> --env " + env)
+
+    except Exception as e:
+        warning(f"Failed to write bundle environment: {e}")

@@ -1,7 +1,7 @@
 """Environment-specific configuration management.
 
 This module provides caching of infrastructure outputs (registry, storage)
-in ~/.modelops/environments/ for fast access by modelops-bundle and other tools.
+in ~/.modelops/bundle-env/ for fast access by modelops-bundle and other tools.
 Unlike the main config.yaml which stores user preferences, these environment
 configs cache deployed infrastructure details.
 """
@@ -9,114 +9,25 @@ configs cache deployed infrastructure details.
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from datetime import datetime
-from pydantic import BaseModel, Field
 import yaml
 import os
 
-
-class RegistryConfig(BaseModel):
-    """Registry configuration for an environment."""
-
-    provider: str = "docker"
-    """Registry provider (azure, docker, ghcr)."""
-
-    login_server: str
-    """Registry login server/URL."""
-
-    registry_name: Optional[str] = None
-    """Registry name (for Azure ACR)."""
-
-    requires_auth: bool = True
-    """Whether authentication is required."""
-
-
-class StorageConfig(BaseModel):
-    """Storage configuration for an environment."""
-
-    provider: str = "azure"
-    """Storage provider (azure, azurite, s3, gcs, fs)."""
-
-    account_name: Optional[str] = None
-    """Storage account name (Azure)."""
-
-    connection_string: Optional[str] = None
-    """Connection string (sensitive, may be encrypted)."""
-
-    containers: List[str] = Field(default_factory=list)
-    """List of container/bucket names."""
-
-    endpoint: Optional[str] = None
-    """Storage endpoint URL."""
-
-
-class EnvironmentConfig(BaseModel):
-    """Configuration for a specific environment.
-
-    This represents the deployed infrastructure outputs for an environment,
-    cached locally for fast access without Pulumi API calls.
-    """
-
-    environment: str
-    """Environment name (dev, staging, prod, local)."""
-
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    """When this config was saved."""
-
-    registry: Optional[RegistryConfig] = None
-    """Registry configuration."""
-
-    storage: Optional[StorageConfig] = None
-    """Storage configuration."""
-
-    # Future extensions can add:
-    # cluster: Optional[ClusterConfig] = None
-    # database: Optional[DatabaseConfig] = None
-
-    def to_yaml(self, path: Path) -> None:
-        """Save config to YAML file.
-
-        Args:
-            path: File path to write to
-        """
-        # Convert to dict with ISO timestamp
-        data = self.model_dump(exclude_none=True)
-        if "timestamp" in data:
-            data["timestamp"] = data["timestamp"].isoformat()
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
-
-        # Restrict permissions for security (connection strings)
-        os.chmod(path, 0o600)
-
-    @classmethod
-    def from_yaml(cls, path: Path) -> "EnvironmentConfig":
-        """Load config from YAML file.
-
-        Args:
-            path: File path to read from
-
-        Returns:
-            EnvironmentConfig instance
-        """
-        with open(path) as f:
-            data = yaml.safe_load(f)
-
-        # Parse ISO timestamp
-        if "timestamp" in data and isinstance(data["timestamp"], str):
-            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
-
-        return cls(**data)
+# Import from modelops-contracts
+from modelops_contracts.bundle_environment import (
+    BundleEnvironment,
+    RegistryConfig,
+    StorageConfig,
+    ENVIRONMENTS_DIR
+)
 
 
 def get_environments_dir() -> Path:
     """Get the environments directory path.
 
     Returns:
-        Path to ~/.modelops/environments/
+        Path to ~/.modelops/bundle-env/
     """
-    return Path.home() / ".modelops" / "environments"
+    return ENVIRONMENTS_DIR
 
 
 def save_environment_config(
@@ -124,7 +35,7 @@ def save_environment_config(
     registry_outputs: Optional[Dict[str, Any]] = None,
     storage_outputs: Optional[Dict[str, Any]] = None
 ) -> Path:
-    """Save environment configuration to ~/.modelops/environments/<env>.yaml.
+    """Save environment configuration to ~/.modelops/bundle-env/<env>.yaml.
 
     Args:
         env: Environment name
@@ -134,18 +45,23 @@ def save_environment_config(
     Returns:
         Path to saved config file
     """
-    config = EnvironmentConfig(environment=env)
-
-    # Process registry outputs
+    # Build the config using the contract models
+    registry = None
     if registry_outputs:
-        config.registry = RegistryConfig(
-            provider=registry_outputs.get("provider", "azure"),
+        # Map azure provider to acr for the contract
+        provider = registry_outputs.get("provider", "azure")
+        if provider == "azure":
+            provider = "acr"
+
+        registry = RegistryConfig(
+            provider=provider,
             login_server=registry_outputs.get("login_server", ""),
-            registry_name=registry_outputs.get("registry_name"),
+            username=None,  # Will be fetched from Azure CLI when needed
+            password=None,  # Will be fetched from Azure CLI when needed
             requires_auth=registry_outputs.get("requires_auth", True)
         )
 
-    # Process storage outputs
+    storage = None
     if storage_outputs:
         containers = storage_outputs.get("containers", [])
         # Extract container names if they're dicts
@@ -154,36 +70,61 @@ def save_environment_config(
         else:
             container_names = containers
 
-        config.storage = StorageConfig(
+        # Use the primary container (bundles) for the singular container field
+        primary_container = "bundles" if "bundles" in container_names else (container_names[0] if container_names else "bundles")
+
+        storage = StorageConfig(
             provider="azure",  # Default for now
-            account_name=storage_outputs.get("account_name"),
+            container=primary_container,
             connection_string=storage_outputs.get("connection_string"),
-            containers=container_names,
             endpoint=storage_outputs.get("primary_endpoint")
         )
 
-    # Save to file
+    # BundleEnvironment requires both registry and storage
+    # Only create if we have both
+    if not registry or not storage:
+        # Don't save partial configs
+        return get_environments_dir() / f"{env}.yaml"
+
+    # Create the BundleEnvironment
+    config = BundleEnvironment(
+        environment=env,
+        registry=registry,
+        storage=storage,
+        timestamp=datetime.utcnow().isoformat()
+    )
+
+    # Save using Pydantic's serialization
     config_path = get_environments_dir() / f"{env}.yaml"
-    config.to_yaml(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Use Pydantic's model_dump for clean serialization
+    with open(config_path, "w") as f:
+        yaml.safe_dump(config.model_dump(exclude_none=True), f, default_flow_style=False, sort_keys=False)
+
+    # Restrict permissions for security (connection strings)
+    os.chmod(config_path, 0o600)
 
     return config_path
 
 
-def load_environment_config(env: str) -> Optional[EnvironmentConfig]:
-    """Load environment configuration from ~/.modelops/environments/<env>.yaml.
+def load_environment_config(env: str) -> Optional[BundleEnvironment]:
+    """Load environment configuration from ~/.modelops/bundle-env/<env>.yaml.
 
     Args:
         env: Environment name
 
     Returns:
-        EnvironmentConfig if found, None otherwise
+        BundleEnvironment if found, None otherwise
     """
     config_path = get_environments_dir() / f"{env}.yaml"
     if not config_path.exists():
         return None
 
     try:
-        return EnvironmentConfig.from_yaml(config_path)
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        return BundleEnvironment(**data)
     except Exception:
         return None
 
@@ -214,28 +155,39 @@ def create_local_dev_config() -> Path:
     Returns:
         Path to created config file
     """
-    config = EnvironmentConfig(
-        environment="local",
-        registry=RegistryConfig(
-            provider="docker",
-            login_server="localhost:5555",
-            requires_auth=False
+    # Create local dev config using contract models
+    registry = RegistryConfig(
+        provider="docker",
+        login_server="localhost:5555",
+        requires_auth=False
+    )
+
+    storage = StorageConfig(
+        provider="azure",  # Azurite is Azure-compatible
+        container="bundles",
+        connection_string=(
+            "DefaultEndpointsProtocol=http;"
+            "AccountName=devstoreaccount1;"
+            "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
+            "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1"
         ),
-        storage=StorageConfig(
-            provider="azurite",
-            connection_string=(
-                "DefaultEndpointsProtocol=http;"
-                "AccountName=devstoreaccount1;"
-                "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-                "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1"
-            ),
-            containers=["bundles", "results"],
-            endpoint="http://127.0.0.1:10000/devstoreaccount1"
-        )
+        endpoint="http://127.0.0.1:10000/devstoreaccount1"
+    )
+
+    config = BundleEnvironment(
+        environment="local",
+        registry=registry,
+        storage=storage,
+        timestamp=datetime.utcnow().isoformat()
     )
 
     config_path = get_environments_dir() / "local.yaml"
-    config.to_yaml(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(config_path, "w") as f:
+        yaml.safe_dump(config.model_dump(exclude_none=True), f, default_flow_style=False, sort_keys=False)
+
+    os.chmod(config_path, 0o600)
 
     return config_path
 

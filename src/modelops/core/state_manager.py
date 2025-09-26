@@ -23,6 +23,18 @@ class PulumiStateManager:
     - State reconciliation with cloud reality
     - Environment YAML updates (single writer per component)
     - Robust error handling and recovery
+
+    ## Developer Notes
+
+    This emerged out of repeated Pulumi lock contention issues and BundleEnvironment
+    type confusion bugs. The core problems were:
+
+    1. Stale locks from interrupted operations blocking subsequent runs
+    2. BundleEnvironment Pydantic models being treated as dicts (.get() calls)
+    3. Registry/storage configs overwriting each other instead of merging
+
+    This manager ensures each component can independently provision while preserving
+    the shared environment YAML, and automatically recovers from common failure modes.
     """
 
     def __init__(self, component: str, env: str):
@@ -280,7 +292,7 @@ class PulumiStateManager:
             else:
                 plain_outputs[key] = value
 
-        # Load existing config (returns EnvironmentConfig object or raises FileNotFoundError)
+        # Load existing config (returns BundleEnvironment object or raises FileNotFoundError)
         try:
             existing_config = load_environment_config(self.env)
         except FileNotFoundError:
@@ -289,7 +301,7 @@ class PulumiStateManager:
         # Update with new outputs for this component
         if self.component == "registry" and plain_outputs:
             # For registry, save the entire output dict
-            # existing_config is an EnvironmentConfig object, not a dict
+            # existing_config is a BundleEnvironment object, not a dict
             existing_storage = existing_config.storage.model_dump() if existing_config and existing_config.storage else None
             save_environment_config(
                 self.env,
@@ -298,7 +310,7 @@ class PulumiStateManager:
             )
         elif self.component == "storage" and plain_outputs:
             # For storage, save the entire output dict
-            # existing_config is an EnvironmentConfig object, not a dict
+            # existing_config is a BundleEnvironment object, not a dict
             existing_registry = existing_config.registry.model_dump() if existing_config and existing_config.registry else None
             save_environment_config(
                 self.env,
@@ -321,7 +333,7 @@ class PulumiStateManager:
                 return
 
             # Remove this component's data
-            # config is an EnvironmentConfig object, not a dict
+            # config is a BundleEnvironment object, not a dict
             updated = False
             remaining_registry = None
             remaining_storage = None
