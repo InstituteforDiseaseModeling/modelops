@@ -25,13 +25,15 @@ RUN pip install --no-cache-dir \
 COPY modelops-contracts /tmp/modelops-contracts
 COPY calabaria /tmp/calabaria
 COPY modelops /tmp/modelops
+COPY modelops-bundle /tmp/modelops-bundle
 
 # Install modelops dependencies
 RUN pip install --no-cache-dir \
     /tmp/modelops-contracts \
     /tmp/calabaria \
     /tmp/modelops \
-    && rm -rf /tmp/modelops-contracts /tmp/calabaria /tmp/modelops
+    /tmp/modelops-bundle \
+    && rm -rf /tmp/modelops-contracts /tmp/calabaria /tmp/modelops /tmp/modelops-bundle
 
 # Switch to non-root user
 USER 1000
