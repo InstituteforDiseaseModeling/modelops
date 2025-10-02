@@ -72,9 +72,18 @@ class WorkspaceConfig(ConfigModel):
         """Basic validation of spec structure."""
         if not isinstance(v, dict):
             raise ValueError("spec must be a dictionary")
-        
-        # We could validate that scheduler/workers exist, but keeping it flexible
-        # to allow for different workspace types in the future
+
+        # Require image specifications - no defaults allowed
+        if "scheduler" not in v or not isinstance(v["scheduler"], dict):
+            raise ValueError("spec.scheduler is required")
+        if "image" not in v["scheduler"]:
+            raise ValueError("spec.scheduler.image is required - no default images allowed")
+
+        if "workers" not in v or not isinstance(v["workers"], dict):
+            raise ValueError("spec.workers is required")
+        if "image" not in v["workers"]:
+            raise ValueError("spec.workers.image is required - no default images allowed")
+
         return v
     
     def get_namespace(self, env: str) -> str:

@@ -1,0 +1,12 @@
+cache_dir: null
+cache_link_mode: auto
+default_tag: latest
+registry_ref: modelopsdevacrvsb.azurecr.io/smoke_bundle
+storage:
+  container: modelops-bundles
+  force_blob_patterns: []
+  force_oci_patterns: []
+  mode: auto
+  prefix: ''
+  provider: azure
+  threshold_bytes: 52428800

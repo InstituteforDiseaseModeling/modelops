@@ -628,6 +628,7 @@ name = "modelops-bundle"
 version = "0.1.0"
 source = { directory = "../modelops-bundle" }
 dependencies = [
+    { name = "azure-storage-blob" },
     { name = "modelops-contracts" },
     { name = "oras" },
     { name = "pathspec" },
@@ -641,8 +642,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "modelops-contracts", directory = "../modelops-contracts" },
-    { name = "oras", specifier = ">=0.2.37" },
+    { name = "azure-storage-blob", specifier = ">=12.14.0" },
+    { name = "modelops-contracts", editable = "../modelops-contracts" },
+    { name = "oras", git = "https://github.com/vsbuffalo/oras-py.git" },
     { name = "pathspec", specifier = ">=0.12.1" },
     { name = "portalocker", specifier = ">=3.2.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
@@ -654,8 +656,11 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "black", specifier = ">=25.9.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "ruff", specifier = ">=0.13.2" },
 ]
 
 [[package]]
@@ -762,14 +767,10 @@ wheels = [
 [[package]]
 name = "oras"
 version = "0.2.38"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/vsbuffalo/oras-py.git#3c639859298a7c56e037f6c3c022584072f93f6a" }
 dependencies = [
     { name = "jsonschema" },
     { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/78/16f3847ef31a3b1410c401712336a9c5d90fa97c3cc1f4bacd9dcfced9b7/oras-0.2.38.tar.gz", hash = "sha256:58482f78275cb5cc9fdf135248ca878a19204428a51bd3a1ca24c32714d35341", size = 44755, upload-time = "2025-09-08T13:45:29.372Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/a4/f98db9c8498b11d8e82fccb343f189880a8fc33d496e7f8f9c0bbcbfbf64/oras-0.2.38-py3-none-any.whl", hash = "sha256:a97658086cea1e1ebb412a5b504005480c70de5d2e81a160d33e60fc187d42f4", size = 50249, upload-time = "2025-09-08T13:45:27.785Z" },
 ]
 
 [[package]]

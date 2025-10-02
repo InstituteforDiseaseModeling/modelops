@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from kubernetes import client as k8s_client
-from modelops_bundle.bundle_service import BundleService
+# TODO: Integrate modelops-bundle service when available
+# from modelops_bundle.bundle_service import BundleService
+# from modelops_bundle.auth import get_auth_provider
 from modelops_contracts import (
     Job,
     SimJob,
@@ -45,13 +47,55 @@ class JobSubmissionClient:
         """
         self.env = env
         self.namespace = namespace
-        self._bundle_service = None  # Lazy initialization
+        # self._bundle_service = None  # TODO: Lazy initialization when BundleService available
+
+        # TODO: Create auth provider for Azure (ModelOps owns this!)
+        # self.auth_provider = get_auth_provider("azure")
 
         # Get storage connection from Pulumi or environment
         connection_string = self._get_storage_connection()
         self.storage = AzureBlobBackend(
             container="tasks",
             connection_string=connection_string
+        )
+
+    def _get_registry_url(self) -> str:
+        """Get container registry URL from Pulumi stack or environment.
+
+        Returns:
+            Registry URL for pushing bundles
+
+        Raises:
+            ValueError: If registry URL not found
+        """
+        # Try environment first (set by workspace deployment)
+        registry = os.environ.get("MODELOPS_BUNDLE_REGISTRY")
+        if registry:
+            return registry
+
+        # Try to get from BundleEnvironment file
+        bundle_env_path = Path.home() / ".modelops" / "bundle-env" / f"{self.env}.yaml"
+        if bundle_env_path.exists():
+            import yaml
+            with open(bundle_env_path) as f:
+                bundle_env = yaml.safe_load(f)
+                registry = bundle_env.get("registry", {}).get("login_server")
+                if registry:
+                    return registry
+
+        # Try to get from Pulumi infrastructure stack
+        try:
+            outputs = automation.outputs("infra", self.env, refresh=False)
+            if outputs and "acr_login_server" in outputs:
+                registry = automation.get_output_value(outputs, "acr_login_server")
+                if registry:
+                    return registry
+        except Exception:
+            pass
+
+        raise ValueError(
+            "No registry URL found. Please ensure infrastructure is deployed "
+            "or set MODELOPS_BUNDLE_REGISTRY environment variable."
         )
 
     def _get_storage_connection(self) -> str:
@@ -233,12 +277,14 @@ class JobSubmissionClient:
         else:
             raise ValueError(f"Unknown bundle strategy: {strategy}")
 
-    @property
-    def bundle_service(self) -> BundleService:
-        """Lazy initialization of BundleService."""
-        if self._bundle_service is None:
-            self._bundle_service = BundleService()
-        return self._bundle_service
+    # TODO: Implement when BundleService is available
+    # @property
+    # def bundle_service(self) -> BundleService:
+    #     """Lazy initialization of BundleService with injected auth."""
+    #     if self._bundle_service is None:
+    #         # Pass auth provider to the new constructor signature
+    #         self._bundle_service = BundleService(auth_provider=self.auth_provider)
+    #     return self._bundle_service
 
     def _get_latest_bundle(self, model: str) -> str:
         """Get latest bundle for a model from registry.
@@ -252,17 +298,18 @@ class JobSubmissionClient:
         Raises:
             ValueError: If no bundles found for model
         """
-        # Use modelops-bundle service to query registry
-        bundles = self.bundle_service.list_bundles(
-            filter_prefix=model.replace(".", "/")
-        )
-
-        if not bundles:
-            raise ValueError(f"No bundles found for model: {model}")
-
-        # Get most recent by timestamp
-        latest = sorted(bundles, key=lambda b: b.created_at)[-1]
-        return f"sha256:{latest.digest}"
+        # TODO: Implement when BundleService is available
+        # bundles = self.bundle_service.list_bundles(
+        #     filter_prefix=model.replace(".", "/")
+        # )
+        #
+        # if not bundles:
+        #     raise ValueError(f"No bundles found for model: {model}")
+        #
+        # # Get most recent by timestamp
+        # latest = sorted(bundles, key=lambda b: b.created_at)[-1]
+        # return f"sha256:{latest.digest}"
+        raise NotImplementedError("BundleService integration not yet available")
 
     def _build_and_push(self, path: Path) -> str:
         """Build and push bundle from local path.
@@ -273,12 +320,16 @@ class JobSubmissionClient:
         Returns:
             Bundle reference of pushed bundle
         """
-        # Use modelops-bundle service to build and push
-        bundle_ref = self.bundle_service.build_and_push(
-            source_path=path,
-            registry="ghcr.io/institutefordiseasemodeling",
-        )
-        return bundle_ref
+        # Get registry URL dynamically
+        registry = self._get_registry_url()
+
+        # TODO: Use modelops-bundle service to build and push when available
+        # bundle_ref = self.bundle_service.build_and_push(
+        #     source_path=path,
+        #     registry=registry,
+        # )
+        # return bundle_ref
+        raise NotImplementedError("BundleService integration not yet available. Use modelops-bundle CLI directly.")
 
     def _upload_job(self, job: Job) -> str:
         """Upload job specification to blob storage.

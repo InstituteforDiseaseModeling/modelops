@@ -1,0 +1,7 @@
+{
+    "name": "smoke-test-bundle",
+    "version": "1.0.0",
+    "description": "Minimal bundle for testing OCI integration",
+    "entrypoint": "simulate:simulate",
+    "author": "ModelOps Test Suite"
+}

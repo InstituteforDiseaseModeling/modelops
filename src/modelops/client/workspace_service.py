@@ -46,7 +46,12 @@ class WorkspaceService(BaseService):
             import pulumi
 
             # Convert config to dict if provided
-            workspace_config = config.to_pulumi_config() if config else {}
+            if hasattr(config, 'to_pulumi_config'):
+                workspace_config = config.to_pulumi_config()
+            elif isinstance(config, dict):
+                workspace_config = config
+            else:
+                workspace_config = {}
             workspace_config["environment"] = self.env
 
             # Reference infrastructure stack

@@ -9,7 +9,8 @@ import typer
 from pathlib import Path
 from typing import Optional
 
-from modelops_contracts import SimulationStudy, ParameterSet, CalibrationSpec
+from modelops_contracts import SimulationStudy, CalibrationSpec
+from modelops_contracts.types import UniqueParameterSet
 
 from ..client import JobSubmissionClient
 from .display import console, success, error, info, warning, section
@@ -64,7 +65,7 @@ def submit(
 
         # Reconstruct SimulationStudy
         parameter_sets = [
-            ParameterSet(params=ps["params"])
+            UniqueParameterSet(params=ps["params"])
             for ps in study_data.get("parameter_sets", [])
         ]
 

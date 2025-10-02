@@ -19,7 +19,7 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, cluster, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs
+from . import infra, cluster, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs, dev
 
 # Register sub-commands
 # Primary commands for researchers
@@ -83,6 +83,13 @@ app.add_typer(
     config_cli.app,
     name="config",
     help="⚙️ Configure ModelOps settings"
+)
+
+# Developer tools
+app.add_typer(
+    dev.app,
+    name="dev",
+    help="🧪 Developer tools and testing utilities"
 )
 
 app.add_typer(

@@ -1,0 +1,71 @@
+# Example unified infrastructure configuration
+# Deploy all components with one command: mops infra up examples/unified-infra.yaml
+
+schemaVersion: 1
+
+# Registry configuration (optional)
+registry:
+  provider: azure
+  name: modelopsdevacr
+
+# Cluster configuration
+cluster:
+  provider: azure
+  subscription_id: "024ed93f-313a-458a-840b-2022dd854d40"
+  resource_group: modelops
+  location: eastus2
+  username: vsb
+  aks:
+    name: modelops-aks
+    kubernetes_version: "1.30"
+    node_pools:
+      - name: system
+        vm_size: Standard_B2s
+        mode: System
+        min: 1
+        max: 3
+      - name: workers
+        vm_size: Standard_B4ms
+        mode: User
+        min: 2
+        max: 10
+
+# Storage configuration
+storage:
+  provider: azure
+  account_name: modelopsdev
+  resource_group: modelops
+  location: eastus2
+  containers:
+    - name: bundles
+    - name: results
+    - name: artifacts
+
+# Workspace configuration
+workspace:
+  apiVersion: modelops/v1
+  kind: Workspace
+  metadata:
+    name: main-workspace
+  spec:
+    scheduler:
+      image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
+      replicas: 1
+      resources:
+        cpu: "2"
+        memory: "8Gi"
+    workers:
+      image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+      min_replicas: 2
+      max_replicas: 20
+      resources:
+        cpu: "4"
+        memory: "16Gi"
+      processes: 2
+      threads: 1
+    autoscaling:
+      enabled: true
+      type: hpa
+      min_workers: 2
+      max_workers: 20
+      target_cpu: 70

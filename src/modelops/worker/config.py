@@ -19,6 +19,7 @@ class RuntimeConfig:
     bundle_registry: Optional[str] = None  # e.g., "ghcr.io/org/models"
     bundles_cache_dir: str = "/tmp/modelops/bundles"
     bundles_dir: Optional[str] = None  # For file source
+    bundle_insecure: bool = False  # Use HTTP instead of HTTPS (for local dev)
     
     # CAS configuration  
     cas_backend: str = "memory"  # "memory", "azure"
@@ -58,6 +59,7 @@ class RuntimeConfig:
         config.bundle_registry = os.environ.get("MODELOPS_BUNDLE_REGISTRY", config.bundle_registry)
         config.bundles_cache_dir = os.environ.get("MODELOPS_BUNDLES_CACHE_DIR", config.bundles_cache_dir)
         config.bundles_dir = os.environ.get("MODELOPS_BUNDLES_DIR", config.bundles_dir)
+        config.bundle_insecure = os.environ.get("MODELOPS_BUNDLE_INSECURE", "false").lower() == "true"
         
         # CAS configuration
         config.cas_backend = os.environ.get("MODELOPS_CAS_BACKEND", config.cas_backend)

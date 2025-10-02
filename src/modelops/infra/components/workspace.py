@@ -39,7 +39,7 @@ class DaskWorkspace(pulumi.ComponentResource):
         # Read outputs from Stack 1 (infrastructure)
         infra = pulumi.StackReference(infra_stack_ref)
         kubeconfig = infra.require_output("kubeconfig")
-        
+
         # Create K8s provider using kubeconfig from Stack 1
         k8s_provider = k8s.Provider(
             f"{name}-k8s",
@@ -68,10 +68,13 @@ class DaskWorkspace(pulumi.ComponentResource):
             scheduler_config = config
             workers_config = config
         
-        # Extract configuration values
-        # Use centralized version to prevent drift between specs and runtime
-        scheduler_image = scheduler_config.get("image", DASK_IMAGE)
-        worker_image = workers_config.get("image", scheduler_image)
+        # Extract configuration values - images are REQUIRED, no defaults
+        scheduler_image = scheduler_config.get("image")
+        if not scheduler_image:
+            raise ValueError("scheduler.image is required in workspace configuration")
+        worker_image = workers_config.get("image")
+        if not worker_image:
+            raise ValueError("workers.image is required in workspace configuration")
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
         worker_processes = workers_config.get("processes", 1)  # Default to 1 process
         worker_threads = workers_config.get("threads", 2)  # Default to 2 threads
@@ -352,7 +355,9 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "2"
                                     })
                                 ),
-                                env=[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])],
+                                env=[
+                                    *[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
+                                ],
                                 # Mount storage secret if available
                                 env_from=[
                                     k8s.core.v1.EnvFromSourceArgs(

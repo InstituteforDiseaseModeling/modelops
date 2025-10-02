@@ -1,0 +1,43 @@
+# Dask Workspace Configuration for ModelOps - Simple version without node selectors
+# Usage: mops workspace up --config examples/workspace-simple.yaml --env dev
+
+apiVersion: modelops/v1
+kind: Workspace
+metadata:
+  name: dev-workspace
+
+spec:
+  # Dask Scheduler Configuration
+  scheduler:
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1"
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    env:
+      - name: DASK_SCHEDULER__DASHBOARD__ENABLED
+        value: "true"
+
+  # Dask Workers Configuration
+  workers:
+    replicas: 2
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1"
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    processes: 2
+    threads: 1
+    env:
+      - name: DASK_WORKER__MEMORY__TARGET
+        value: "0.90"
+      - name: DASK_WORKER__MEMORY__SPILL
+        value: "0.95"
+      - name: DASK_WORKER__MEMORY__PAUSE
+        value: "0.98"

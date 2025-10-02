@@ -104,27 +104,28 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
             if not config.bundle_registry:
                 raise ValueError("bundle_registry must be specified for OCI source")
             
-            # Discover OCI bundle repository via entry points
+            # Discover ModelOps bundle repository via entry points
             eps = entry_points(group="modelops.bundle_repos")
-            oci_plugin = None
+            bundle_plugin = None
             for ep in eps:
-                if ep.name == "oci":
-                    oci_plugin = ep
+                if ep.name == "modelops_bundle":
+                    bundle_plugin = ep
                     break
-            
-            if not oci_plugin:
+
+            if not bundle_plugin:
                 raise ValueError(
-                    "No OCI bundle repository plugin found. "
-                    "Ensure modelops-bundle is installed with the 'oci' entry point."
+                    "No ModelOps bundle repository plugin found. "
+                    "Ensure modelops-bundle is installed with the 'modelops_bundle' entry point."
                 )
-            
-            # Load and instantiate the OCI repository
-            repo_class = oci_plugin.load()
+
+            # Load and instantiate the ModelOps bundle repository
+            repo_class = bundle_plugin.load()
             return repo_class(
                 registry_ref=config.bundle_registry,  # e.g., "ghcr.io/org/models"
                 cache_dir=str(Path(config.bundles_cache_dir)),  # Convert Path to str for compatibility
                 cache_structure="digest_short",  # Use short digest for cache dirs
-                default_tag="latest"  # Default tag if not specified in ref
+                default_tag="latest",  # Default tag if not specified in ref
+                insecure=config.bundle_insecure if hasattr(config, 'bundle_insecure') else False
             )
         elif config.bundle_source == 'file':
             # Simple filesystem for local development
