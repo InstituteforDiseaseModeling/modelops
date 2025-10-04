@@ -12,3 +12,4 @@ wheels/
 
 # Virtual environments
 .venv
+tests/fixtures/smoke_bundle/.modelops-bundle/state.json

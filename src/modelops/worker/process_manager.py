@@ -4,6 +4,7 @@ import base64
 import hashlib
 import logging
 import os
+import select
 import subprocess
 import sys
 import fcntl
@@ -237,7 +238,7 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,  # Prevent deadlock with large messages
+            stderr=subprocess.PIPE,  # TEMPORARY: Capture for debugging
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
@@ -373,6 +374,7 @@ class WarmProcessManager:
         # 2. Discover wire function via entry points
         # 3. Start JSON-RPC server and wait for tasks
         # CRITICAL: Use DEVNULL for stderr to prevent deadlock with large messages
+        # TEMPORARY: Capture stderr for debugging subprocess failures
         process = subprocess.Popen(
             [
                 str(venv_python),  # Use venv's Python for clean isolation
@@ -383,7 +385,7 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,  # Prevent deadlock with large messages
+            stderr=subprocess.PIPE,  # TEMPORARY: Capture for debugging
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
@@ -417,9 +419,31 @@ class WarmProcessManager:
             if not result.get("ready"):
                 raise RuntimeError(f"Process not ready: {result}")
         except Exception as e:
+            # Try to capture any available stderr
+            stderr_output = None
+            stderr_text = ""
+            if process.stderr:
+                try:
+                    # Try to read any available stderr without blocking
+                    # Make stderr non-blocking
+                    flags = fcntl.fcntl(process.stderr.fileno(), fcntl.F_GETFL)
+                    fcntl.fcntl(process.stderr.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                    # Read any available stderr
+                    stderr_output = process.stderr.read()
+                    if stderr_output:
+                        stderr_text = stderr_output.decode('utf-8', errors='replace')
+                        logger.error(f"Subprocess stderr: {stderr_text}")
+                except Exception as read_err:
+                    logger.debug(f"Could not read stderr: {read_err}")
+
             process.terminate()
             process.wait()
-            raise RuntimeError(f"Failed to initialize process: {e}")
+
+            error_msg = f"Failed to initialize process: {e}"
+            if stderr_text:
+                error_msg += f"\nStderr: {stderr_text}"
+            raise RuntimeError(error_msg)
         
         return WarmProcess(
             process=process,

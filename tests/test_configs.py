@@ -224,7 +224,7 @@ class TestWorkspaceConfig:
             },
             "spec": {
                 "scheduler": {"image": "dask:latest"},
-                "workers": {"replicas": 4}
+                "workers": {"image": "dask:latest", "replicas": 4}
             }
         }
         
@@ -259,7 +259,10 @@ class TestWorkspaceConfig:
         """Test namespace generation with environment."""
         config = WorkspaceConfig(
             metadata={"name": "test"},
-            spec={}
+            spec={
+                "scheduler": {"image": "dask:latest"},
+                "workers": {"image": "dask:latest", "replicas": 2}
+            }
         )
         
         # Should use centralized naming
@@ -272,7 +275,10 @@ class TestWorkspaceConfig:
             "apiVersion": "modelops/v1",
             "kind": "Workspace",
             "metadata": {"name": "test"},
-            "spec": {},
+            "spec": {
+                "scheduler": {"image": "dask:latest"},
+                "workers": {"image": "dask:latest", "replicas": 1}
+            },
             "future_field": "some_value"  # Extra field
         }
         

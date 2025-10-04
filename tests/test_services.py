@@ -229,7 +229,10 @@ class TestUnifiedInfraSpec:
             apiVersion="modelops/v1",
             kind="Workspace",
             metadata={"name": "test"},
-            spec={}
+            spec={
+                "scheduler": {"image": "dask:latest"},
+                "workers": {"image": "dask:latest", "replicas": 2}
+            }
         )
 
         # Workspace without cluster should fail

@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir \
     "dask[distributed]==2024.8.0" \
     msgpack \
     lz4 \
-    "bokeh!=3.0.*,>=2.4.2"
+    "bokeh!=3.0.*,>=2.4.2" \
+    uv
 
 # Copy local repositories (these must exist at build time)
 # Build context should be the parent directory containing all repos

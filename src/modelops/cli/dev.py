@@ -403,8 +403,17 @@ def smoke_test(
             result_dict = result
         console.print(json.dumps(result_dict, indent=2, default=str))
 
-        # Verify result structure
-        if isinstance(result, dict) and result.get("status") == "completed":
+        # Verify result structure - check for SimReturn with outputs
+        if hasattr(result, 'outputs') and result.outputs:
+            # SimReturn format - check if we have the expected outputs
+            if 'result' in result.outputs and 'metadata' in result.outputs:
+                success("✅ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
+            else:
+                warning(f"Missing expected outputs in SimReturn: {list(result.outputs.keys())}")
+                error("❌ Smoke test FAILED! Result doesn't contain expected outputs.")
+                raise typer.Exit(1)
+        elif isinstance(result, dict) and result.get("status") == "completed":
+            # Legacy dict format
             success("✅ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
         else:
             warning(f"Unexpected result format: {result}")
