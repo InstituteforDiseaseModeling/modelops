@@ -23,7 +23,9 @@ class WorkspaceService(BaseService):
     def provision(
         self,
         config: Optional[WorkspaceConfig] = None,
-        infra_stack: Optional[str] = None,
+        infra_stack_ref: Optional[str] = None,
+        registry_stack_ref: Optional[str] = None,
+        storage_stack_ref: Optional[str] = None,
         verbose: bool = False
     ) -> Dict[str, Any]:
         """
@@ -31,7 +33,9 @@ class WorkspaceService(BaseService):
 
         Args:
             config: Workspace configuration
-            infra_stack: Infrastructure stack reference
+            infra_stack_ref: Infrastructure stack reference (auto-resolved if None)
+            registry_stack_ref: Registry stack reference (auto-resolved if None)
+            storage_stack_ref: Storage stack reference (auto-resolved if None)
             verbose: Show detailed output
 
         Returns:
@@ -54,20 +58,46 @@ class WorkspaceService(BaseService):
                 workspace_config = {}
             workspace_config["environment"] = self.env
 
-            # Reference infrastructure stack
-            infra_ref = infra_stack or StackNaming.ref("infra", self.env)
+            # Centralized ref resolution - all paths use the same logic
+            # Resolve infrastructure stack if not provided
+            if infra_stack_ref is None:
+                infra_ref = StackNaming.ref("infra", self.env)
+            else:
+                infra_ref = infra_stack_ref
 
-            # Check if storage stack exists and reference it
-            storage_ref = None
-            if stack_exists("storage", self.env):
-                storage_ref = StackNaming.ref("storage", self.env)
+            # Resolve registry stack if not provided
+            # TODO: Fix stack_exists() returning False for existing stacks
+            # For now, always try to reference if in dev/staging
+            if registry_stack_ref is None:
+                if self.env in ["dev", "staging"]:
+                    registry_ref = StackNaming.ref("registry", self.env)
+                elif stack_exists("registry", self.env):
+                    registry_ref = StackNaming.ref("registry", self.env)
+                else:
+                    registry_ref = None
+            else:
+                registry_ref = registry_stack_ref
+
+            # Resolve storage stack if not provided
+            # TODO: Fix stack_exists() returning False for existing stacks
+            # For now, always try to reference if in dev/staging
+            if storage_stack_ref is None:
+                if self.env in ["dev", "staging"]:
+                    storage_ref = StackNaming.ref("storage", self.env)
+                elif stack_exists("storage", self.env):
+                    storage_ref = StackNaming.ref("storage", self.env)
+                else:
+                    storage_ref = None
+            else:
+                storage_ref = storage_stack_ref
 
             # Create the workspace component
             workspace = DaskWorkspace(
                 "dask",
                 infra_ref,
                 workspace_config,
-                storage_stack_ref=storage_ref
+                storage_stack_ref=storage_ref,
+                registry_stack_ref=registry_ref
             )
 
             # Export outputs at stack level for visibility

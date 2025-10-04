@@ -20,13 +20,15 @@ class ModelOpsCluster(pulumi.ComponentResource):
     Exports typed outputs for downstream consumption via StackReference.
     """
     
-    def __init__(self, name: str, config: Dict[str, Any], 
+    def __init__(self, name: str, config: Dict[str, Any],
+                 registry_id: Optional[pulumi.Output[str]] = None,
                  opts: Optional[pulumi.ResourceOptions] = None):
         """Initialize Azure infrastructure component.
-        
+
         Args:
             name: Component name (e.g., "modelops")
             config: Provider configuration dictionary from YAML
+            registry_id: Optional registry resource ID for granting ACR permissions
             opts: Optional Pulumi resource options
         """
         super().__init__("modelops:infra:cluster", name, None, opts)
@@ -60,7 +62,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         ssh_pubkey = self._get_ssh_key(ssh_config)
         
         # Create AKS cluster with node pools
-        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env, username)
+        aks = self._create_aks_cluster(name, rg, location, aks_config, ssh_pubkey, env, username, subscription_id, rg_name)
         
         # Get kubeconfig using the *actual* cluster name emitted by the resource
         # This handles auto-naming correctly
@@ -78,12 +80,18 @@ class ModelOpsCluster(pulumi.ComponentResource):
             else None
         )
         
+        # Grant ACR pull permissions to the cluster's managed identity
+        # This allows worker pods to pull images from our ACR
+        # Only grant permissions if registry_id is provided (registry exists)
+        if registry_id:
+            self._grant_acr_permissions(aks, registry_id)
+
         # Set component outputs
         self.kubeconfig = kubeconfig
         self.cluster_name = aks.name  # Use the actual resource name
         self.resource_group = rg.name
         self.location = pulumi.Output.from_input(location)
-        
+
         # Register outputs for StackReference access
         self.register_outputs({
             "kubeconfig": pulumi.Output.secret(self.kubeconfig),
@@ -180,7 +188,8 @@ class ModelOpsCluster(pulumi.ComponentResource):
     
     def _create_aks_cluster(self, name: str, rg: azure.resources.ResourceGroup,
                            location: str, aks_config: Dict[str, Any],
-                           ssh_pubkey: pulumi.Output[str], env: str, username: str) -> azure.containerservice.ManagedCluster:
+                           ssh_pubkey: pulumi.Output[str], env: str, username: str,
+                           subscription_id: str, rg_name: str) -> azure.containerservice.ManagedCluster:
         """Create AKS cluster with configured node pools."""
         # Use centralized naming for AKS cluster with username-based hash
         cluster_name = StackNaming.get_aks_cluster_name(env, username)
@@ -190,6 +199,39 @@ class ModelOpsCluster(pulumi.ComponentResource):
         # Build node pool profiles
         node_pools = self._build_node_pools(aks_config.get("node_pools", []))
         
+        # Try to get existing AKS cluster first to handle already-created resources
+        # This handles the case where Azure has the resource but Pulumi state is broken
+        # Build the AKS resource ID properly using subscription_id (which is a plain string)
+        aks_id = f"/subscriptions/{subscription_id}/resourceGroups/{rg_name}/providers/Microsoft.ContainerService/managedClusters/{cluster_name}"
+
+        try:
+            # Check if cluster already exists in Azure
+            # Use the actual rg_name string, not the Output
+            existing_cluster = azure.containerservice.get_managed_cluster(
+                resource_group_name=rg_name,
+                resource_name=cluster_name,
+                opts=pulumi.InvokeOptions(parent=self)
+            )
+
+            if existing_cluster:
+                # Cluster exists, import it into our state
+                pulumi.log.info(f"AKS cluster '{cluster_name}' already exists, importing into state")
+
+                aks_resource = azure.containerservice.ManagedCluster.get(
+                    "aks-cluster",
+                    id=aks_id,
+                    opts=pulumi.ResourceOptions(
+                        parent=self,
+                        retain_on_delete=True  # Don't delete on replacement
+                    )
+                )
+
+                return aks_resource
+
+        except Exception:
+            # Cluster doesn't exist, create it
+            pass
+
         # Create the AKS cluster with explicit naming
         # Note: resource_name_ with underscore is required by Pulumi Azure Native
         aks_resource = azure.containerservice.ManagedCluster(
@@ -341,3 +383,68 @@ class ModelOpsCluster(pulumi.ComponentResource):
         
         # Azure RG names have max length, truncate if needed
         return username[:20]
+
+    def _grant_acr_permissions(self, aks: azure.containerservice.ManagedCluster,
+                              registry_id: pulumi.Output[str]):
+        """Grant ACR pull permissions to the AKS cluster's managed identity.
+
+        This method uses the actual registry resource ID passed from the registry
+        component, ensuring the ACR exists before attempting to grant permissions.
+        This prevents race conditions and "ResourceNotFound" errors.
+
+        Args:
+            aks: The AKS cluster resource
+            registry_id: The Azure resource ID of the ACR (from registry component)
+        """
+        import uuid
+
+        # Get kubelet identity from the cluster
+        kubelet_principal_id = aks.identity_profile.apply(
+            lambda ip: ip["kubeletidentity"]["object_id"] if ip and "kubeletidentity" in ip else None
+        )
+
+        # Create role assignment using both registry_id and principal_id
+        def create_role_assignment(args):
+            principal_id, acr_id = args
+            if not principal_id:
+                pulumi.log.warn("No kubelet identity found, skipping ACR permissions")
+                return None
+            if not acr_id:
+                pulumi.log.warn("No registry ID provided, skipping ACR permissions")
+                return None
+
+            # Extract subscription ID from the ACR resource ID
+            # Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/.../registries/{name}
+            import re
+            match = re.match(r'/subscriptions/([^/]+)/', acr_id)
+            subscription_id = match.group(1) if match else None
+            if not subscription_id:
+                pulumi.log.error(f"Could not extract subscription ID from ACR ID: {acr_id}")
+                return None
+
+            # AcrPull role definition ID (built-in role)
+            acr_pull_role = f"/subscriptions/{subscription_id}/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+
+            # Generate deterministic GUID for the role assignment
+            # Use ACR ID in UUID to ensure uniqueness per registry
+            role_assignment_guid = str(uuid.uuid5(
+                uuid.NAMESPACE_DNS,
+                f"{acr_id}-{principal_id}-acrpull"
+            ))
+
+            return azure.authorization.RoleAssignment(
+                f"aks-acr-pull",
+                role_assignment_name=role_assignment_guid,
+                principal_id=principal_id,
+                principal_type="ServicePrincipal",
+                role_definition_id=acr_pull_role,
+                scope=acr_id,
+                opts=pulumi.ResourceOptions(
+                    parent=self,
+                    ignore_changes=["role_assignment_name"],  # Don't update if GUID changes
+                    depends_on=[aks]
+                )
+            )
+
+        # Create the role assignment using both outputs
+        pulumi.Output.all(kubelet_principal_id, registry_id).apply(create_role_assignment)

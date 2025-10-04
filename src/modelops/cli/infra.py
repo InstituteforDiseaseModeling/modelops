@@ -122,12 +122,7 @@ def up(
             if result.logs_path:
                 info(f"\nLogs: {result.logs_path}")
 
-            # Write BundleEnvironment configuration if we have registry and storage
-            if verbose:
-                import json
-                info(f"[DEBUG] result.outputs keys: {list(result.outputs.keys())}")
-                info(f"[DEBUG] result.outputs: {json.dumps(result.outputs, indent=2, default=str)}")
-            _write_bundle_environment(env, result.outputs, verbose)
+            # Note: BundleEnvironment reconciliation happens in InfrastructureService
         else:
             error("\n✗ Some components failed to provision")
             for comp, err in result.errors.items():
@@ -149,6 +144,7 @@ def down(
     destroy_storage: bool = typer.Option(False, "--destroy-storage", help="Include storage (contains results/artifacts)"),
     destroy_registry: bool = typer.Option(False, "--destroy-registry", help="Include registry (contains images)"),
     destroy_all: bool = typer.Option(False, "--destroy-all", help="Destroy all components including data"),
+    delete_rg: bool = typer.Option(False, "--delete-rg", help="Also delete the resource group (dangerous!)"),
     plan: bool = typer.Option(False, "--plan", help="Show what would be done"),
     yes: bool = yes_option(),
     json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
@@ -203,7 +199,15 @@ def down(
                     default_components.append("registry")
                 warning_msg.append(f"Components: {', '.join(default_components)}")
 
+        if delete_rg:
+            warning_msg.append("RESOURCE GROUP (complete deletion)")
+
         warning(f"This will destroy: {' and '.join(warning_msg)}")
+
+        if delete_rg:
+            error("\n⚠️  WARNING: Resource Group Deletion")
+            info("This will delete the ENTIRE resource group and ALL resources within it.")
+            info("This action cannot be undone!")
 
         if not typer.confirm("Continue?"):
             success("Cancelled")
@@ -213,7 +217,9 @@ def down(
         components, verbose, force, with_deps,
         destroy_storage=destroy_storage,
         destroy_registry=destroy_registry,
-        destroy_all=destroy_all
+        destroy_all=destroy_all,
+        delete_rg=delete_rg,
+        yes_confirmed=yes
     )
 
     if json_output:
@@ -263,36 +269,72 @@ def status(
 
         for component, component_status in status.items():
             state = component_status.phase.value
-            symbol = "✓" if component_status.deployed else "✗"
 
-            console.print(f"  {symbol} {component}: {state}")
+            # Choose color and symbol based on status
+            if component_status.deployed:
+                if component_status.phase.value == "ready":
+                    # Green for ready
+                    console.print(f"  [green]✓[/green] {component}: [green]{state}[/green]")
+                elif component_status.phase.value == "provisioning":
+                    # Yellow for provisioning
+                    console.print(f"  [yellow]⟳[/yellow] {component}: [yellow]{state}[/yellow]")
+                else:
+                    # Default deployed but unknown state
+                    console.print(f"  [yellow]✓[/yellow] {component}: [yellow]{state}[/yellow]")
+            else:
+                if component_status.phase.value == "failed":
+                    # Red for failed
+                    console.print(f"  [red]✗[/red] {component}: [red]{state}[/red]")
+                else:
+                    # Gray for not deployed
+                    console.print(f"  [dim]✗[/dim] {component}: [dim]{state}[/dim]")
 
             if component_status.deployed and component_status.details:
                 # Show key details
                 details = component_status.details
 
-                if component == "cluster":
+                if component == "resource_group":
+                    if "resource_group_name" in details:
+                        console.print(f"      [dim]name:[/dim] {details['resource_group_name']}")
+                    if "location" in details:
+                        console.print(f"      [dim]location:[/dim] {details['location']}")
+
+                elif component == "cluster":
                     if "cluster_name" in details:
-                        console.print(f"      cluster: {details['cluster_name']}")
+                        console.print(f"      [dim]cluster:[/dim] {details['cluster_name']}")
+                    if "resource_group" in details:
+                        console.print(f"      [dim]resource group:[/dim] {details['resource_group']}")
                     if "connectivity" in details:
-                        conn_status = "connected" if details["connectivity"] else "unreachable"
-                        console.print(f"      status: {conn_status}")
+                        if details["connectivity"]:
+                            console.print(f"      [dim]status:[/dim] [green]connected[/green]")
+                        else:
+                            console.print(f"      [dim]status:[/dim] [red]unreachable[/red]")
 
                 elif component == "storage":
                     if "account_name" in details:
-                        console.print(f"      account: {details['account_name']}")
+                        console.print(f"      [dim]account:[/dim] {details['account_name']}")
                     if "container_count" in details:
-                        console.print(f"      containers: {details['container_count']}")
+                        console.print(f"      [dim]containers:[/dim] {details['container_count']}")
 
                 elif component == "workspace":
                     if "workers" in details:
-                        console.print(f"      workers: {details['workers']}")
+                        worker_count = details['workers']
+                        # Convert to int if it's a string
+                        if isinstance(worker_count, str):
+                            try:
+                                worker_count = int(worker_count)
+                            except (ValueError, TypeError):
+                                worker_count = 0
+                        if worker_count > 0:
+                            console.print(f"      [dim]workers:[/dim] [green]{worker_count}[/green]")
+                        else:
+                            console.print(f"      [dim]workers:[/dim] [yellow]{worker_count}[/yellow]")
                     if "autoscaling" in details and details["autoscaling"]:
-                        console.print(f"      autoscaling: enabled")
+                        console.print(f"      [dim]autoscaling:[/dim] [green]enabled[/green]")
 
                 elif component == "registry":
                     if "registry_name" in details:
-                        console.print(f"      name: {details['registry_name']}")
+                        console.print(f"      [dim]name:[/dim] {details['registry_name']}")
 
         # Show detailed operational information
         if detailed:
@@ -430,88 +472,3 @@ def outputs(
                             info(f"  {key}: {value}")
 
 
-def _write_bundle_environment(env: str, outputs: dict, verbose: bool = False) -> None:
-    """Write BundleEnvironment configuration after successful provisioning.
-
-    Args:
-        env: Environment name (dev, local, etc.)
-        outputs: Component outputs from provisioning
-        verbose: Enable debug output
-    """
-    from modelops_contracts import (
-        BundleEnvironment,
-        RegistryConfig,
-        StorageConfig,
-    )
-    from modelops.core.automation import get_output_value
-
-    # Check if we have both registry and storage outputs
-    registry_outputs = outputs.get("registry", {})
-    storage_outputs = outputs.get("storage", {})
-
-    if not registry_outputs or not storage_outputs:
-        # Can't create bundle environment without both
-        return
-
-    # Extract registry info using get_output_value which handles nested dicts
-    if verbose:
-        import json
-        info(f"[DEBUG] Registry outputs type: {type(registry_outputs)}")
-        info(f"[DEBUG] Registry outputs: {json.dumps(registry_outputs, indent=2, default=str)}")
-
-    login_server = get_output_value(registry_outputs, "login_server")
-    if verbose:
-        info(f"[DEBUG] login_server value: {repr(login_server)} (type: {type(login_server)})")
-
-    if not login_server or login_server == "unknown":
-        warning("Registry login_server not found in outputs, skipping BundleEnvironment")
-        return
-
-    # Extract storage info using get_output_value
-    connection_string = get_output_value(storage_outputs, "connection_string")
-    container_name = get_output_value(storage_outputs, "container_name", "modelops-bundles")
-    account_name = get_output_value(storage_outputs, "account_name")
-
-    if not connection_string and not account_name:
-        warning("Storage connection info not found in outputs, skipping BundleEnvironment")
-        return
-
-    # Clean up values if they have extra quotes
-    if isinstance(login_server, str):
-        # Remove extra quotes if present
-        if login_server.startswith("'") and login_server.endswith("'"):
-            login_server = login_server[1:-1]
-            if verbose:
-                info(f"[DEBUG] Stripped quotes from login_server: {repr(login_server)}")
-
-    registry_name = get_output_value(registry_outputs, "registry_name")
-    if isinstance(registry_name, str) and registry_name.startswith("'") and registry_name.endswith("'"):
-        registry_name = registry_name[1:-1]
-        if verbose:
-            info(f"[DEBUG] Stripped quotes from registry_name: {repr(registry_name)}")
-
-    try:
-        # Create BundleEnvironment
-        bundle_env = BundleEnvironment(
-            environment=env,
-            registry=RegistryConfig(
-                provider="acr",  # Azure Container Registry
-                login_server=login_server,
-                requires_auth=True
-            ),
-            storage=StorageConfig(
-                provider="azure",
-                container=container_name,
-                connection_string=connection_string,
-                endpoint=get_output_value(storage_outputs, "primary_endpoint")
-            ),
-            timestamp=datetime.utcnow().isoformat()
-        )
-
-        # Save to standard location
-        env_path = bundle_env.save(env_name=env)
-        info(f"\n✓ Bundle environment config written to {env_path}")
-        info("  Use with: mops-bundle init <project> --env " + env)
-
-    except Exception as e:
-        warning(f"Failed to write bundle environment: {e}")

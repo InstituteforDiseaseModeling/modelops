@@ -37,13 +37,34 @@ class ClusterService(BaseService):
         def pulumi_program():
             """Pulumi program that creates infrastructure using ComponentResource."""
             import pulumi
+            from ..core.naming import StackNaming
+            from ..core import automation
 
             if config.provider == "azure":
                 from ..infra.components.azure import ModelOpsCluster
-                # Pass validated config dict to component with environment
+
+                # Get registry_id from registry stack if it exists
+                # This ensures ACR exists before cluster tries to grant permissions
+                registry_id = None
+                try:
+                    registry_outputs = automation.outputs("registry", self.env, refresh=False)
+                    if registry_outputs and "registry_id" in registry_outputs:
+                        # Extract the value if it's wrapped
+                        registry_id_val = registry_outputs["registry_id"]
+                        if hasattr(registry_id_val, 'value'):
+                            registry_id = pulumi.Output.from_input(registry_id_val.value)
+                        elif isinstance(registry_id_val, dict) and 'value' in registry_id_val:
+                            registry_id = pulumi.Output.from_input(registry_id_val['value'])
+                        else:
+                            registry_id = pulumi.Output.from_input(registry_id_val)
+                except:
+                    # Registry doesn't exist yet or has no outputs
+                    pulumi.log.warn("Registry stack not found or has no outputs, ACR permissions will be skipped")
+
+                # Pass validated config dict to component with environment and registry_id
                 config_dict = config.to_pulumi_config()
                 config_dict["environment"] = self.env
-                cluster = ModelOpsCluster("modelops", config_dict)
+                cluster = ModelOpsCluster("modelops", config_dict, registry_id=registry_id)
 
                 # Export outputs at the stack level for access via StackReference
                 pulumi.export("kubeconfig", cluster.kubeconfig)
@@ -75,6 +96,21 @@ class ClusterService(BaseService):
         # Verify kubeconfig exists
         if not get_output_value(outputs, "kubeconfig"):
             raise Exception("No kubeconfig returned from infrastructure creation")
+
+        # Automatically update local kubeconfig with the new cluster credentials
+        # This ensures kubectl always points to the newly created cluster
+        try:
+            cluster_name = get_output_value(outputs, "cluster_name")
+            resource_group = get_output_value(outputs, "resource_group")
+
+            if cluster_name and resource_group:
+                print(f"  Updating kubeconfig for cluster {cluster_name}...")
+                self._update_kubeconfig(resource_group, cluster_name)
+                print(f"  ✓ Kubeconfig updated and context set to {cluster_name}")
+        except Exception as e:
+            # Don't fail provisioning if kubeconfig update fails
+            print(f"  ⚠ Could not update kubeconfig automatically: {e}")
+            print(f"  Run: az aks get-credentials -g {resource_group} -n {cluster_name} --overwrite-existing")
 
         return outputs
 
@@ -108,6 +144,15 @@ class ClusterService(BaseService):
         state_manager = PulumiStateManager("infra", self.env)
         capture = OutputCapture(verbose)
 
+        # Get cluster name before destroying for cleanup
+        cluster_name = None
+        try:
+            outputs = automation.outputs("infra", self.env, refresh=False)
+            if outputs:
+                cluster_name = get_output_value(outputs, "cluster_name")
+        except:
+            pass  # Ignore errors getting outputs
+
         # State manager handles:
         # - Stale lock detection and clearing
         # - No environment YAML cleanup (cluster doesn't save to YAML)
@@ -116,23 +161,18 @@ class ClusterService(BaseService):
             on_output=capture
         )
 
-        if delete_rg:
-            # Get username from config or environment
-            username = os.environ.get("MODELOPS_USERNAME", os.environ.get("USER", ""))
-            rg_name = StackNaming.get_resource_group_name(self.env, username)
+        # Clean up kubeconfig entries for this cluster
+        if cluster_name:
+            try:
+                self._prune_kubeconfig(cluster_name)
+                print(f"  ✓ Removed kubeconfig entries for {cluster_name}")
+            except Exception as e:
+                # Best effort - don't fail destroy if cleanup fails
+                print(f"  ⚠ Could not clean up kubeconfig: {e}")
 
-            # Safety check for resource group deletion
-            if not os.environ.get("MOPS_PURGE_RG") == "1":
-                raise ValueError(
-                    "Resource group deletion requires MOPS_PURGE_RG=1 environment variable. "
-                    f"This will delete resource group '{rg_name}' and ALL resources within it."
-                )
-
-            # Use Azure CLI to delete the resource group
-            subprocess.run(
-                ["az", "group", "delete", "-n", rg_name, "--yes", "--no-wait"],
-                check=False
-            )
+        # Note: Resource group deletion is handled by InfrastructureService
+        # which properly destroys it through resource_group_service.destroy()
+        # This ensures Pulumi state management is maintained
 
     def status(self) -> ComponentStatus:
         """
@@ -268,6 +308,53 @@ class ClusterService(BaseService):
                 os.unlink(temp_path)
         except:
             return False
+
+    def _update_kubeconfig(self, resource_group: str, cluster_name: str):
+        """Update kubeconfig using Azure CLI with overwrite.
+
+        This uses az aks get-credentials with --overwrite-existing to ensure
+        we always get the latest cluster credentials, fixing stale DNS issues.
+
+        Args:
+            resource_group: Azure resource group name
+            cluster_name: AKS cluster name
+        """
+        import subprocess
+
+        # Use --overwrite-existing to handle stale DNS from old clusters
+        cmd = ["az", "aks", "get-credentials",
+               "-g", resource_group,
+               "-n", cluster_name,
+               "--overwrite-existing"]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(f"Failed to update kubeconfig: {result.stderr}")
+
+        # Set the context to the new cluster
+        subprocess.run(["kubectl", "config", "use-context", cluster_name],
+                      capture_output=True, check=False)
+
+    def _prune_kubeconfig(self, cluster_name: str):
+        """Remove kubeconfig entries for a cluster.
+
+        Cleans up context, cluster, and user entries to avoid accumulation
+        of stale entries in kubeconfig.
+
+        Args:
+            cluster_name: Name of the cluster to remove
+        """
+        import subprocess
+
+        # These commands may fail if entries don't exist, that's ok
+        commands = [
+            ["kubectl", "config", "delete-context", cluster_name],
+            ["kubectl", "config", "delete-cluster", cluster_name],
+            ["kubectl", "config", "delete-user", f"clusterUser_modelops-{self.env}-rg-{os.environ.get('USER', 'user')}_{cluster_name}"]
+        ]
+
+        for cmd in commands:
+            subprocess.run(cmd, capture_output=True, stderr=subprocess.DEVNULL, check=False)
 
     def _merge_kubeconfig(self, kubeconfig_yaml: str):
         """Merge kubeconfig with existing ~/.kube/config."""

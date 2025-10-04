@@ -27,9 +27,7 @@ spec:
       limits:
         memory: "2Gi"
         cpu: "1"
-    # Schedule on CPU nodes only
-    nodeSelector:
-      modelops.io/role: cpu
+    # No node selector - schedule on any available worker nodes
     # Environment variables for scheduler
     env:
       - name: DASK_SCHEDULER__DASHBOARD__ENABLED
@@ -48,9 +46,7 @@ spec:
       limits:
         memory: "4Gi"
         cpu: "2"
-    # Schedule on CPU nodes only
-    nodeSelector:
-      modelops.io/role: cpu
+    # No node selector - schedule on any available worker nodes
     # Process and thread configuration
     # For simulation workloads (pure Python), use more processes and fewer threads
     # to bypass GIL limitations. For NumPy/Pandas workloads, use more threads.

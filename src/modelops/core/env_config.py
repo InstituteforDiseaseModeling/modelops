@@ -76,15 +76,26 @@ def save_environment_config(
         storage = StorageConfig(
             provider="azure",  # Default for now
             container=primary_container,
-            connection_string=storage_outputs.get("connection_string"),
+            connection_string=storage_outputs.get("sas_connection_string"),  # Use read-only SAS
             endpoint=storage_outputs.get("primary_endpoint")
         )
 
-    # BundleEnvironment requires both registry and storage
-    # Only create if we have both
+    # BundleEnvironment requires both registry and storage for bundle operations
+    # Without both, we cannot push or pull bundles to/from the cloud
+    # FAIL LOUDLY - this is an invalid state that must be fixed
     if not registry or not storage:
-        # Don't save partial configs
-        return get_environments_dir() / f"{env}.yaml"
+        missing_components = []
+        if not registry:
+            missing_components.append("registry")
+        if not storage:
+            missing_components.append("storage")
+
+        raise RuntimeError(
+            f"Cannot create bundle environment for '{env}': "
+            f"Missing {' and '.join(missing_components)} outputs. "
+            f"Both registry AND storage are required for bundle operations.\n"
+            f"Fix by running: mops infra up --component {','.join(missing_components)}"
+        )
 
     # Create the BundleEnvironment
     config = BundleEnvironment(

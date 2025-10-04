@@ -151,28 +151,27 @@ def up(
 
     # Load and validate configuration if provided
     validated_config = WorkspaceConfig.from_yaml_optional(config)
-    workspace_config = validated_config.to_pulumi_config() if validated_config else {}
 
-    # Use provided infra stack or default to standard naming
-    if infra_stack == StackNaming.get_project_name("infra"):
-        # Default value - append environment
-        infra_ref = StackNaming.ref("infra", env)
-    else:
-        # Custom stack name provided
-        infra_ref = StackNaming.ref_from_stack(infra_stack)
-
-    # Use WorkspaceService
+    # Use WorkspaceService - it handles all ref resolution internally
     service = WorkspaceService(env)
+
+    # Only pass infra_stack_ref if it's not the default
+    infra_stack_ref = None
+    if infra_stack != StackNaming.get_project_name("infra"):
+        # Custom stack name provided
+        infra_stack_ref = StackNaming.ref_from_stack(infra_stack)
 
     try:
         info(f"\n[bold]Deploying Dask workspace to environment: {env}[/bold]")
-        # Display the actual resolved stack reference, not the raw input
-        display_name = infra_ref.split('/')[-1] if '/' in infra_ref else infra_stack
-        info(f"Infrastructure stack: {display_name}")
         info(f"Workspace stack: {StackNaming.get_stack_name('workspace', env)}\n")
 
         info("[yellow]Creating Dask resources...[/yellow]")
-        outputs = service.provision(workspace_config, infra_ref, verbose=False)
+        # Let the service handle all ref resolution - consistent with infra up
+        outputs = service.provision(
+            config=validated_config,
+            infra_stack_ref=infra_stack_ref,
+            verbose=False
+        )
 
         success("\nWorkspace deployed successfully!")
         workspace_info(outputs, env, StackNaming.get_stack_name('workspace', env))

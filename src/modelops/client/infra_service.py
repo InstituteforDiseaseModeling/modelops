@@ -15,6 +15,7 @@ from .cluster_service import ClusterService
 from .workspace_service import WorkspaceService
 from .storage_service import StorageService
 from .registry_service import RegistryService
+from .resource_group_service import ResourceGroupService
 from ..components.specs.infra import UnifiedInfraSpec
 
 
@@ -36,6 +37,7 @@ class InfrastructureService:
         self.env = env or self._resolve_env()
 
         # Initialize individual services
+        self.resource_group_service = ResourceGroupService(self.env)
         self.cluster_service = ClusterService(self.env)
         self.registry_service = RegistryService(self.env)
         self.storage_service = StorageService(self.env)
@@ -131,7 +133,31 @@ class InfrastructureService:
             try:
                 outputs = None
 
-                if component == "registry" and spec.registry:
+                if component == "resource_group":
+                    # Resource group is always needed for Azure components
+                    # Extract config from cluster or use defaults
+                    rg_config = {}
+                    if spec.cluster:
+                        cluster_dict = spec.cluster if isinstance(spec.cluster, dict) else spec.cluster.model_dump()
+                        rg_config = {
+                            "location": cluster_dict.get("location", "eastus2"),
+                            "subscription_id": cluster_dict.get("subscription_id"),
+                            "username": cluster_dict.get("username")
+                        }
+                    else:
+                        # Use defaults if no cluster config
+                        rg_config = {
+                            "location": "eastus2",
+                            "subscription_id": os.environ.get("AZURE_SUBSCRIPTION_ID"),
+                            "username": os.environ.get("USER")
+                        }
+
+                    outputs = self.resource_group_service.provision(
+                        config=rg_config,
+                        verbose=verbose
+                    )
+
+                elif component == "registry" and spec.registry:
                     if verbose:
                         print(f"[DEBUG] Provisioning registry component...")
                     # Registry needs Azure settings - inherit from cluster if available
@@ -186,6 +212,21 @@ class InfrastructureService:
                     import json
                     print(f"[DEBUG] Storing outputs for {component}: {json.dumps(outputs or {}, indent=2, default=str)}")
 
+                # VALIDATION: Ensure critical components have outputs
+                # Without outputs, dependent components and bundle operations will fail
+                if component == "registry" and not outputs:
+                    raise RuntimeError(
+                        f"Registry provisioned but has no outputs! "
+                        f"This prevents bundle push/pull operations. "
+                        f"Check if registry was actually created in Azure."
+                    )
+                if component == "storage" and not outputs:
+                    raise RuntimeError(
+                        f"Storage provisioned but has no outputs! "
+                        f"This prevents bundle storage operations. "
+                        f"Check if storage account was actually created in Azure."
+                    )
+
                 print(f"  ✓ {component} provisioned successfully")
 
             except Exception as e:
@@ -221,23 +262,14 @@ class InfrastructureService:
 
         self._write_logs(result)
 
-        # Save environment config if provisioning was successful
-        if result.success and result.outputs:
-            # Get resolved outputs (plain values) instead of Pulumi Output objects
-            resolved_outputs = {}
-            for component in result.outputs:
-                try:
-                    from ..core import automation
-                    # Get the actual resolved values from the stack
-                    component_outputs = automation.outputs(component, self.env, refresh=False)
-                    if component_outputs:
-                        resolved_outputs[component] = component_outputs
-                except Exception:
-                    # If we can't get resolved outputs, skip this component
-                    pass
-
-            if resolved_outputs:
-                self._save_environment_config(resolved_outputs)
+        # Reconcile bundle environment file with Pulumi stack truth
+        # This is the ONLY place that triggers bundle env writes/deletes
+        from ..core.env_reconcile import reconcile_bundle_env
+        path = reconcile_bundle_env(self.env, dry_run=dry_run)
+        if path:
+            print(f"  ✓ Bundle environment ready: {path}")
+        elif not dry_run:
+            print("  ℹ Bundle env needs both registry & storage")
 
         return result
 
@@ -250,7 +282,9 @@ class InfrastructureService:
         dry_run: bool = False,
         destroy_storage: bool = False,
         destroy_registry: bool = False,
-        destroy_all: bool = False
+        destroy_all: bool = False,
+        delete_rg: bool = False,
+        yes_confirmed: bool = False
     ) -> InfraResult:
         """
         Destroy infrastructure components.
@@ -264,6 +298,8 @@ class InfrastructureService:
             destroy_storage: Include storage in destruction
             destroy_registry: Include registry in destruction
             destroy_all: Destroy all components including data
+            delete_rg: Also delete the resource group (dangerous!)
+            yes_confirmed: User has confirmed via --yes flag
 
         Returns:
             InfraResult with status
@@ -281,6 +317,11 @@ class InfrastructureService:
                     components.append("storage")
                 if destroy_registry:
                     components.append("registry")
+
+            # Add resource group if explicitly requested
+            # This will be destroyed LAST (after all other resources)
+            if delete_rg:
+                components.append("resource_group")
 
         # If with_deps, add all dependents
         if with_deps and not force:
@@ -338,9 +379,15 @@ class InfrastructureService:
                 elif component == "storage":
                     self.storage_service.destroy(verbose=verbose)
                 elif component == "cluster":
-                    self.cluster_service.destroy(verbose=verbose)
+                    self.cluster_service.destroy(
+                        force=force,
+                        verbose=verbose
+                    )
                 elif component == "registry":
                     self.registry_service.destroy(verbose=verbose)
+                elif component == "resource_group":
+                    # Resource group must be destroyed last after all resources
+                    self.resource_group_service.destroy(verbose=verbose)
 
                 result.components[component] = ComponentState.NOT_DEPLOYED
                 print(f"  ✓ {component} destroyed")
@@ -352,9 +399,10 @@ class InfrastructureService:
 
         self._write_logs(result)
 
-        # Update environment config after successful destruction
+        # Reconcile bundle environment after destroy to remove stale file
         if result.success:
-            self._update_environment_config_after_destroy(destroy_order)
+            from ..core.env_reconcile import reconcile_bundle_env
+            reconcile_bundle_env(self.env, dry_run=dry_run)
 
         return result
 
@@ -366,6 +414,7 @@ class InfrastructureService:
             Dictionary mapping component to ComponentStatus
         """
         return {
+            "resource_group": self.resource_group_service.status(),
             "cluster": self.cluster_service.status(),
             "registry": self.registry_service.status(),
             "storage": self.storage_service.status(),
@@ -476,128 +525,3 @@ class InfrastructureService:
             except:
                 pass  # Don't fail on log writing errors
 
-    def _save_environment_config(self, outputs: Dict[str, Any]):
-        """Save environment configuration for modelops-bundle discovery.
-
-        Args:
-            outputs: Component outputs from provisioning
-        """
-        try:
-            from ..core.env_config import save_environment_config
-            from modelops_contracts.bundle_environment import ENVIRONMENTS_DIR
-
-            # Helper to extract plain value from Pulumi Output or dict
-            def extract_value(obj):
-                """Extract plain value from various output formats."""
-                if obj is None:
-                    return None
-                # Handle Pulumi Output objects
-                if hasattr(obj, 'value'):
-                    return obj.value
-                # Handle dict with 'value' key (from automation.outputs)
-                if isinstance(obj, dict) and 'value' in obj:
-                    return obj['value']
-                # Already a plain value
-                return obj
-
-            # Helper to extract all values from a dict
-            def extract_all_values(output_dict):
-                """Recursively extract plain values from output dict."""
-                if not output_dict:
-                    return None
-                result = {}
-                for key, value in output_dict.items():
-                    extracted = extract_value(value)
-                    # Handle nested structures like containers list
-                    if extracted is not None and isinstance(extracted, list) and extracted and isinstance(extracted[0], dict):
-                        # Keep the list structure for containers
-                        result[key] = extracted
-                    else:
-                        result[key] = extracted
-                return result
-
-            # Extract registry outputs if present
-            registry_plain = None
-            if "registry" in outputs and outputs["registry"]:
-                registry_plain = extract_all_values(outputs["registry"])
-
-            # Extract storage outputs if present
-            storage_plain = None
-            if "storage" in outputs and outputs["storage"]:
-                storage_plain = extract_all_values(outputs["storage"])
-
-            # Save if we have either registry or storage
-            if registry_plain or storage_plain:
-                config_path = save_environment_config(
-                    self.env,
-                    registry_outputs=registry_plain,
-                    storage_outputs=storage_plain
-                )
-                print(f"  ✓ Environment config saved to {config_path}")
-        except Exception as e:
-            # Don't fail provisioning if config save fails
-            print(f"  ⚠ Could not save environment config: {e}")
-
-    def _update_environment_config_after_destroy(self, destroyed_components: List[str]):
-        """Update environment configuration after component destruction.
-
-        Args:
-            destroyed_components: List of components that were destroyed
-        """
-        try:
-            from ..core.env_config import load_environment_config, save_environment_config
-            from modelops_contracts.bundle_environment import ENVIRONMENTS_DIR
-
-            # Try to load existing config
-            try:
-                existing_config = load_environment_config(self.env)
-            except FileNotFoundError:
-                # No config to update
-                return
-
-            # Check if config exists
-            if not existing_config:
-                return
-
-            # Check what was destroyed
-            destroyed_storage = "storage" in destroyed_components
-            destroyed_registry = "registry" in destroyed_components
-
-            # If both data components were destroyed, remove the entire config
-            if destroyed_storage and destroyed_registry:
-                config_path = ENVIRONMENTS_DIR / f"{self.env}.yaml"
-                if config_path.exists():
-                    config_path.unlink()
-                    print(f"  ✓ Removed environment config for {self.env}")
-                return
-
-            # Otherwise, update the config to remove destroyed components
-            registry_outputs = None
-            storage_outputs = None
-
-            # Keep registry if it wasn't destroyed
-            if not destroyed_registry and existing_config and existing_config.registry:
-                registry_outputs = existing_config.registry.model_dump()
-
-            # Keep storage if it wasn't destroyed
-            if not destroyed_storage and existing_config and existing_config.storage:
-                storage_outputs = existing_config.storage.model_dump()
-
-            # Save updated config if there's anything left
-            if registry_outputs or storage_outputs:
-                config_path = save_environment_config(
-                    self.env,
-                    registry_outputs=registry_outputs,
-                    storage_outputs=storage_outputs
-                )
-                print(f"  ✓ Updated environment config at {config_path}")
-            else:
-                # Nothing left, remove the config
-                config_path = ENVIRONMENTS_DIR / f"{self.env}.yaml"
-                if config_path.exists():
-                    config_path.unlink()
-                    print(f"  ✓ Removed environment config for {self.env}")
-
-        except Exception as e:
-            # Don't fail destruction if config update fails
-            print(f"  ⚠ Could not update environment config: {e}")

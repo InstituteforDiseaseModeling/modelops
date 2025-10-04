@@ -1,7 +1,7 @@
 cache_dir: null
 cache_link_mode: auto
 default_tag: latest
-registry_ref: modelopsdevacrvsb.azurecr.io/smoke_bundle
+registry_ref: modelopsdevacrvsb.azurecr.io/modelops-bundles
 storage:
   container: modelops-bundles
   force_blob_patterns: []

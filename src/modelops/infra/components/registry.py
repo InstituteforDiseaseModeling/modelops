@@ -52,12 +52,24 @@ class ContainerRegistry(pulumi.ComponentResource):
             raise ValueError(f"Unsupported registry provider: {provider}")
         
         # Register outputs for StackReference access
-        self.register_outputs({
+        # CRITICAL: registry_id is used by cluster component to grant ACR permissions
+        # Without this, cluster cannot wire the actual resource ID for role assignments
+        outputs = {
             "login_server": self.login_server,
             "registry_name": self.registry_name,
             "provider": pulumi.Output.from_input(provider),
-            "requires_auth": self.requires_auth
-        })
+            "requires_auth": self.requires_auth,
+            # Export registry_id for cluster to use when granting permissions
+            "registry_id": self.registry_id if hasattr(self, 'registry_id') else None
+        }
+
+        # Add bundle credentials if Azure registry with token
+        if provider == "azure" and hasattr(self, 'bundles_pull_username'):
+            outputs["bundles_pull_username"] = self.bundles_pull_username
+            outputs["bundles_pull_password"] = self.bundles_pull_password
+            outputs["bundle_repo"] = self.bundle_repo
+
+        self.register_outputs(outputs)
     
     def _create_azure_registry(self, name: str, config: Dict[str, Any]):
         """Create Azure Container Registry."""
@@ -68,6 +80,7 @@ class ContainerRegistry(pulumi.ComponentResource):
         
         # Get username for per-user resources
         username = self._get_username(config)
+        # Always use naming convention for resource groups
         rg_name = StackNaming.get_resource_group_name(env, username)
         
         # Generate unique ACR name using centralized naming
@@ -115,7 +128,7 @@ class ContainerRegistry(pulumi.ComponentResource):
             sku=azure.containerregistry.SkuArgs(
                 name=config.get("sku", "Standard")
             ),
-            admin_user_enabled=False,  # Use managed identity
+            admin_user_enabled=True,  # Enable for dev bundle access (TODO: use workload identity in prod)
             opts=pulumi.ResourceOptions(parent=self)
         )
         
@@ -124,11 +137,36 @@ class ContainerRegistry(pulumi.ComponentResource):
         self.registry_name = acr.name
         self.requires_auth = pulumi.Output.from_input(True)
         self.registry_id = acr.id
-        
+
         # Store for role assignment
         self.acr = acr
         self.subscription_id = subscription_id
+
+        # Get admin credentials for bundle access (simpler than tokens for dev)
+        # TODO: Switch to workload identity for production
+        self._get_admin_credentials(acr, rg_name)
+
+        # Store bundle repo name
+        self.bundle_repo = pulumi.Output.from_input(config.get("bundle_repo", "modelops-bundles"))
     
+    def _get_admin_credentials(self, acr: azure.containerregistry.Registry, rg_name: str):
+        """Get admin credentials for bundle access.
+
+        TODO: Future enhancement - switch to workload identity or repo-scoped tokens
+        for production. Admin user is simpler for dev/MVP.
+        """
+        # Get admin credentials from the registry
+        creds = azure.containerregistry.list_registry_credentials_output(
+            registry_name=acr.name,
+            resource_group_name=rg_name
+        )
+
+        # Store credentials as outputs
+        self.bundles_pull_username = creds.username
+        self.bundles_pull_password = pulumi.Output.secret(
+            creds.passwords.apply(lambda p: p[0].value if p else None)
+        )
+
     def _setup_external_registry(self, name: str, config: Dict[str, Any]):
         """Setup configuration for external registry (DockerHub, GHCR)."""
         provider = config["provider"]

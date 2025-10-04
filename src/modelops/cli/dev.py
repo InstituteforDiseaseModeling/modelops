@@ -208,6 +208,11 @@ def smoke_test(
         30,
         "--timeout", "-t",
         help="Timeout in seconds"
+    ),
+    skip_port_forward: bool = typer.Option(
+        False,
+        "--skip-port-forward",
+        help="Skip automatic port-forwarding (if already set up)"
     )
 ):
     """Run smoke test for OCI bundle fetching on workers.
@@ -215,8 +220,9 @@ def smoke_test(
     This command:
     1. Creates/uses a minimal test bundle
     2. Pushes it to the registry
-    3. Submits a simulation via DaskSimulationService
-    4. Verifies the worker can fetch and execute the bundle
+    3. Sets up port-forwarding if needed
+    4. Submits a simulation via DaskSimulationService
+    5. Verifies the worker can fetch and execute the bundle
 
     Example:
         mops dev smoke-test
@@ -226,6 +232,7 @@ def smoke_test(
     info("🧪 Starting OCI bundle smoke test...")
 
     client = None
+    port_forward_proc = None
     try:
         # 1. Create or use bundle
         if bundle_path:
@@ -251,49 +258,150 @@ def smoke_test(
         # 3. Push bundle
         info("Pushing bundle to registry...")
         try:
-            bundle_ref = push_bundle(bundle_dir, registry)
+            digest = push_bundle(bundle_dir, registry)
+            # Prepend repository name for the bundle_ref
+            bundle_ref = f"smoke_bundle@{digest}"
             success(f"Pushed bundle: {bundle_ref}")
         except ValueError as e:
             error(f"Failed to push bundle: {e}")
             raise typer.Exit(1)
 
-        # 4. Connect to Dask
+        # 4. Set up port-forwarding if needed
         scheduler_url = scheduler or os.environ.get("DASK_SCHEDULER", "tcp://localhost:8786")
-        info(f"Connecting to Dask: {scheduler_url}")
-        try:
-            client = Client(scheduler_url, timeout='10s')
-            n_workers = len(client.scheduler_info()['workers'])
-            if n_workers == 0:
-                error("No workers available in Dask cluster")
+
+        if not skip_port_forward and scheduler_url.startswith("tcp://localhost:"):
+            # Kill any existing port-forward processes
+            info("Cleaning up any existing port-forward processes...")
+            subprocess.run(
+                ["pkill", "-f", "kubectl port-forward.*dask-scheduler"],
+                capture_output=True,
+                check=False
+            )
+
+            # Wait for Dask deployment to be ready
+            namespace = f"modelops-dask-{env}"
+            info(f"Checking Dask deployment status in namespace {namespace}...")
+
+            # Wait for deployment to be ready
+            max_wait = 60  # seconds
+            for i in range(max_wait // 5):
+                result = subprocess.run(
+                    ["kubectl", "get", "deployment", "dask-scheduler", "-n", namespace, "-o", "jsonpath={.status.readyReplicas}"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0 and result.stdout.strip() == "1":
+                    success("Dask scheduler deployment is ready")
+                    break
+                if i == 0:
+                    info("Waiting for Dask scheduler deployment to be ready...")
+                import time
+                time.sleep(5)
+            else:
+                error("Dask scheduler deployment not ready after 60 seconds")
                 raise typer.Exit(1)
-            success(f"Connected to Dask cluster with {n_workers} workers")
-        except Exception as e:
-            error(f"Failed to connect to Dask: {e}")
+
+            # Start port-forward
+            info("Starting kubectl port-forward...")
+            port_forward_proc = subprocess.Popen(
+                ["kubectl", "port-forward", "-n", namespace, "svc/dask-scheduler", "8786:8786"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            # Wait a bit for port-forward to establish
+            import time
+            for i in range(10):
+                time.sleep(1)
+                # Check if port is listening
+                import socket
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                try:
+                    result = sock.connect_ex(('localhost', 8786))
+                    sock.close()
+                    if result == 0:
+                        success("Port-forward established successfully")
+                        break
+                except:
+                    pass
+            else:
+                error("Port-forward failed to establish after 10 seconds")
+                if port_forward_proc:
+                    port_forward_proc.terminate()
+                raise typer.Exit(1)
+
+        # 5. Connect to Dask with retries
+        info(f"Connecting to Dask: {scheduler_url}")
+        client_connected = False
+        for attempt in range(3):
+            try:
+                client = Client(scheduler_url, timeout='10s')
+                n_workers = len(client.scheduler_info()['workers'])
+                if n_workers == 0:
+                    if attempt < 2:
+                        warning(f"No workers available (attempt {attempt+1}/3), retrying...")
+                        import time
+                        time.sleep(5)
+                        continue
+                    else:
+                        error("No workers available in Dask cluster after 3 attempts")
+                        raise typer.Exit(1)
+                success(f"Connected to Dask cluster with {n_workers} workers")
+                client_connected = True
+                break
+            except Exception as e:
+                if attempt < 2:
+                    warning(f"Connection failed (attempt {attempt+1}/3): {e}, retrying...")
+                    import time
+                    time.sleep(5)
+                else:
+                    error(f"Failed to connect to Dask after 3 attempts: {e}")
+                    raise typer.Exit(1)
+
+        if not client_connected:
+            error("Could not connect to Dask cluster")
             raise typer.Exit(1)
 
-        # 5. Create SimulationService
+        # 6. Create SimulationService
         info("Initializing simulation service...")
+        # Set the registry in environment for RuntimeConfig
+        os.environ["MODELOPS_BUNDLE_REGISTRY"] = registry
         config = RuntimeConfig.from_env()
         sim_service = DaskSimulationService(client, config)
 
-        # 6. Submit task
+        # 7. Submit task
         info("Submitting simulation task...")
+        from modelops_contracts import UniqueParameterSet
+        import time
+        # Add timestamp to force new task (bypass cache)
+        param_set = UniqueParameterSet.from_dict({
+            "test": "smoke",
+            "message": "Testing OCI bundle fetch",
+            "timestamp": int(time.time())
+        })
         task = SimTask(
-            fn_ref="simulate:simulate",
-            params={"test": "smoke", "message": "Testing OCI bundle fetch"},
+            entrypoint="simulate.simulate/smoke",  # module.function/scenario format
+            params=param_set,
             seed=12345,
             bundle_ref=bundle_ref
         )
         future = sim_service.submit(task)
 
-        # 7. Get result
+        # 8. Get result
         info(f"Waiting for result (timeout: {timeout}s)...")
         result = future.result(timeout=timeout)
 
         # Display result
         success(f"Task completed successfully!")
         info("Result:")
-        console.print(json.dumps(result, indent=2))
+        # Convert SimReturn to dict for display
+        if hasattr(result, '__dict__'):
+            result_dict = result.__dict__
+        else:
+            result_dict = result
+        console.print(json.dumps(result_dict, indent=2, default=str))
 
         # Verify result structure
         if isinstance(result, dict) and result.get("status") == "completed":
@@ -307,8 +415,19 @@ def smoke_test(
         error(f"❌ Smoke test FAILED: {e}")
         raise typer.Exit(1)
     finally:
+        # Clean up client connection
         if client:
             client.close()
+
+        # Clean up port-forward process
+        if port_forward_proc:
+            info("Cleaning up port-forward process...")
+            port_forward_proc.terminate()
+            try:
+                port_forward_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                port_forward_proc.kill()
+                port_forward_proc.wait()
 
 
 @app.command()
@@ -356,6 +475,153 @@ def test_connection(
     except Exception as e:
         error(f"❌ Connection failed: {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def diagnose_auth():
+    """Diagnose bundle authentication setup.
+
+    Checks that workers have proper environment variables and can authenticate
+    to the container registry and storage.
+    """
+    import subprocess
+
+    section("Bundle Authentication Diagnostics")
+
+    # Get a worker pod
+    result = subprocess.run(
+        ["kubectl", "get", "pod", "-n", "modelops-dask-dev",
+         "-l", "app=dask-worker", "-o", "jsonpath={.items[0].metadata.name}"],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0 or not result.stdout.strip():
+        error("No worker pods found. Is the workspace running?")
+        info("Run: mops workspace status")
+        raise typer.Exit(1)
+
+    pod = result.stdout.strip()
+    info(f"Checking pod: {pod}")
+
+    # Check environment variables
+    info("\nEnvironment variables:")
+    result = subprocess.run(
+        ["kubectl", "exec", pod, "-n", "modelops-dask-dev", "--", "env"],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0:
+        error(f"Failed to check environment: {result.stderr}")
+        raise typer.Exit(1)
+
+    env_vars = result.stdout
+    has_registry = "MODELOPS_BUNDLE_REGISTRY" in env_vars
+    has_username = "REGISTRY_USERNAME" in env_vars
+    has_password = "REGISTRY_PASSWORD" in env_vars
+    has_storage = "AZURE_STORAGE_CONNECTION_STRING" in env_vars
+
+    # Show status
+    if has_registry:
+        # Extract the actual value
+        for line in env_vars.split('\n'):
+            if line.startswith("MODELOPS_BUNDLE_REGISTRY="):
+                registry_val = line.split('=', 1)[1]
+                success(f"  MODELOPS_BUNDLE_REGISTRY: {registry_val}")
+                break
+    else:
+        error("  MODELOPS_BUNDLE_REGISTRY: ✗ (missing)")
+
+    if has_username:
+        success("  REGISTRY_USERNAME: ✓ (set)")
+    else:
+        error("  REGISTRY_USERNAME: ✗ (missing)")
+
+    if has_password:
+        success("  REGISTRY_PASSWORD: ✓ (set)")
+    else:
+        error("  REGISTRY_PASSWORD: ✗ (missing)")
+
+    if has_storage:
+        success("  AZURE_STORAGE_CONNECTION_STRING: ✓ (set)")
+    else:
+        warning("  AZURE_STORAGE_CONNECTION_STRING: ✗ (missing - OK if not using blob storage)")
+
+    # Test ACR authentication if all vars present
+    if all([has_registry, has_username, has_password]):
+        info("\nTesting ACR authentication...")
+        test_script = '''
+import os, urllib.request, base64, json
+
+registry = os.environ.get("MODELOPS_BUNDLE_REGISTRY", "").split("/")[0]
+username = os.environ["REGISTRY_USERNAME"]
+password = os.environ["REGISTRY_PASSWORD"]
+
+if not registry:
+    print("✗ No registry URL found")
+    exit(1)
+
+url = f"https://{registry}/v2/"
+auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+req = urllib.request.Request(url, headers={"Authorization": f"Basic {auth}"})
+
+try:
+    with urllib.request.urlopen(req) as resp:
+        print(f"✓ Auth successful! Status: {resp.status}")
+        # Try to check if we can list repositories
+        catalog_url = f"https://{registry}/v2/_catalog"
+        catalog_req = urllib.request.Request(catalog_url, headers={"Authorization": f"Basic {auth}"})
+        try:
+            with urllib.request.urlopen(catalog_req) as catalog_resp:
+                data = json.loads(catalog_resp.read())
+                repos = data.get("repositories", [])
+                if repos:
+                    print(f"✓ Can list repositories. Found {len(repos)} repos")
+                else:
+                    print("⚠ No repositories found in registry")
+        except Exception as e:
+            print(f"⚠ Cannot list repositories: {e}")
+except urllib.error.HTTPError as e:
+    print(f"✗ Auth failed: HTTP {e.code} - {e.reason}")
+    if e.code == 401:
+        print("  Check that ACR admin user is enabled or token is valid")
+    elif e.code == 404:
+        print("  Check that the registry URL is correct")
+except Exception as e:
+    print(f"✗ Auth failed: {e}")
+'''
+        result = subprocess.run(
+            ["kubectl", "exec", pod, "-n", "modelops-dask-dev", "--",
+             "python", "-c", test_script],
+            capture_output=True, text=True
+        )
+
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if line.strip():
+                    if line.startswith('✓'):
+                        success(f"  {line}")
+                    elif line.startswith('✗'):
+                        error(f"  {line}")
+                    elif line.startswith('⚠'):
+                        warning(f"  {line}")
+                    else:
+                        info(f"    {line}")
+        else:
+            error(f"  Test failed: {result.stderr}")
+    else:
+        warning("\nSkipping ACR auth test - missing required environment variables")
+        info("This usually means the bundle-credentials secret is not mounted")
+        info("Check: kubectl describe deployment dask-workers -n modelops-dask-dev | grep envFrom")
+
+    # Summary
+    info("\nSummary:")
+    if all([has_registry, has_username, has_password]):
+        success("✓ Bundle authentication is properly configured")
+        info("Workers should be able to pull bundles from the registry")
+    else:
+        error("✗ Bundle authentication is not properly configured")
+        info("Run: mops infra up --component registry storage workspace")
+        info("This should create and mount the bundle-credentials secret automatically")
 
 
 @app.command()

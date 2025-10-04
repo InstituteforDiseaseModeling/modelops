@@ -128,6 +128,22 @@ def get_safe_outputs(
     return safe_outputs
 
 
+def canonicalize_component_name(name: str) -> str:
+    """Canonicalize component name to use underscores consistently.
+
+    Args:
+        name: Component name (may use hyphens or underscores)
+
+    Returns:
+        Canonicalized name with underscores
+
+    Examples:
+        "resource-group" -> "resource_group"
+        "resource_group" -> "resource_group"
+    """
+    return name.replace("-", "_")
+
+
 class DependencyGraph:
     """Manages component dependencies for infrastructure."""
 
@@ -138,21 +154,35 @@ class DependencyGraph:
         Args:
             dependencies: Optional explicit dependencies
         """
+        # Default dependencies with canonical names (underscores)
         self.dependencies = dependencies or {
+            # Resource group is the root dependency - all Azure resources need it
+            "resource_group": set(),
+            # Storage and Registry depend on resource group existing first
+            "storage": {"resource_group"},
+            "registry": {"resource_group"},
+            # CRITICAL: Cluster depends on registry to grant ACR pull permissions
+            # Without this dependency, cluster provisioning races with registry creation,
+            # causing "ResourceNotFound" errors when granting ACR permissions to AKS.
+            # This ensures registry exists before cluster tries to reference it.
+            # Cluster also depends on resource_group for the RG itself.
+            "cluster": {"resource_group", "registry"},
+            # Workspace depends on cluster and storage
             "workspace": {"cluster", "storage"},
-            "storage": set(),
-            "registry": set(),
-            "cluster": set(),
         }
 
     def add_dependency(self, component: str, depends_on: str):
         """Add a dependency relationship."""
+        component = canonicalize_component_name(component)
+        depends_on = canonicalize_component_name(depends_on)
         if component not in self.dependencies:
             self.dependencies[component] = set()
         self.dependencies[component].add(depends_on)
 
     def remove_dependency(self, component: str, depends_on: str):
         """Remove a dependency relationship."""
+        component = canonicalize_component_name(component)
+        depends_on = canonicalize_component_name(depends_on)
         if component in self.dependencies:
             self.dependencies[component].discard(depends_on)
 
@@ -168,22 +198,24 @@ class DependencyGraph:
         Raises:
             RuntimeError: If circular dependencies detected
         """
-        # Build graph of components we care about
-        graph = {}
+        # Canonicalize all component names
+        components = [canonicalize_component_name(c) for c in components]
+
+        # Build graph of what each component depends on
+        depends_on = {}
         for comp in components:
-            graph[comp] = self.dependencies.get(comp, set()).intersection(components)
+            depends_on[comp] = self.dependencies.get(comp, set()).intersection(components)
+
+        # Build reverse graph: what depends on each component
+        depended_by = {comp: set() for comp in components}
+        for comp, deps in depends_on.items():
+            for dep in deps:
+                depended_by[dep].add(comp)
 
         # Topological sort using Kahn's algorithm
         result = []
-        in_degree = {comp: 0 for comp in graph}
-
-        # Calculate in-degrees
-        for comp in graph:
-            for dep in graph[comp]:
-                in_degree[dep] = in_degree.get(dep, 0) + 1
-
-        # Find nodes with no incoming edges
-        queue = [comp for comp, degree in in_degree.items() if degree == 0]
+        # Start with components that have no dependencies
+        queue = [comp for comp in components if not depends_on[comp]]
 
         while queue:
             # Sort for deterministic order
@@ -191,19 +223,20 @@ class DependencyGraph:
             current = queue.pop(0)
             result.append(current)
 
-            # Remove edges from current
-            for neighbor in graph.get(current, []):
-                in_degree[neighbor] -= 1
-                if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
+            # Check all components that depend on current
+            for dependent in depended_by[current]:
+                # Remove current from dependent's dependencies
+                depends_on[dependent].discard(current)
+                # If dependent has no more dependencies, it can be processed
+                if not depends_on[dependent]:
+                    queue.append(dependent)
 
         # Check for cycles
-        if len(result) != len(graph):
-            missing = set(graph.keys()) - set(result)
+        if len(result) != len(components):
+            missing = set(components) - set(result)
             raise RuntimeError(f"Circular dependencies detected among: {missing}")
 
-        # Reverse to get provision order (dependencies first)
-        return list(reversed(result))
+        return result
 
     def get_destroy_order(self, components: List[str]) -> List[str]:
         """Get destroy order for components (reverse of provision order).
@@ -218,10 +251,12 @@ class DependencyGraph:
 
     def get_dependencies(self, component: str) -> Set[str]:
         """Get direct dependencies of a component."""
+        component = canonicalize_component_name(component)
         return self.dependencies.get(component, set())
 
     def get_dependents(self, component: str) -> Set[str]:
         """Get components that depend on this component."""
+        component = canonicalize_component_name(component)
         dependents = set()
         for comp, deps in self.dependencies.items():
             if component in deps:

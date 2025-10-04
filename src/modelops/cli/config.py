@@ -13,17 +13,26 @@ app = typer.Typer(help="Manage ModelOps configuration")
 @app.command()
 def init(
     interactive: bool = typer.Option(
-        True,
+        False,
         "--interactive/--no-interactive",
         help="Interactive mode with prompts"
     )
 ):
     """Initialize configuration file.
-    
-    Creates ~/.modelops/config.yaml with default values or prompts for them.
+
+    Creates ~/.modelops/config.yaml with sensible defaults.
+    Uses non-interactive mode by default for automation.
     """
+    import getpass
+
+    # Start with sensible defaults
     config = ModelOpsConfig()
-    
+    config.pulumi.organization = "institutefordiseasemodeling"
+    config.defaults.environment = "dev"
+    config.defaults.provider = "azure"
+    # Always set username - default to system user
+    config.defaults.username = getpass.getuser()
+
     if interactive:
         # Prompt for Pulumi settings
         section("Pulumi Configuration")
@@ -36,7 +45,7 @@ def init(
             "  Organization name",
             default=config.pulumi.organization
         )
-        
+
         # Prompt for defaults
         section("Default Settings")
         env = typer.prompt(
@@ -48,19 +57,19 @@ def init(
             default=config.defaults.provider
         )
         username = typer.prompt(
-            "  Username override (optional)",
-            default="",
-            show_default=False
+            "  Username (for resource naming)",
+            default=getpass.getuser(),
+            show_default=True
         )
-        
+
         # Update config
         if backend:
             config.pulumi.backend_url = backend
         config.pulumi.organization = org
         config.defaults.environment = env
         config.defaults.provider = provider
-        if username:
-            config.defaults.username = username
+        # Always set username (from prompt or default)
+        config.defaults.username = username
     
     # Check if file exists
     if CONFIG_FILE.exists():

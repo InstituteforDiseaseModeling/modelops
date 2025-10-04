@@ -88,6 +88,18 @@ class RegistryService(BaseService):
             pulumi.export("registry_name", registry.registry_name)
             pulumi.export("provider", pulumi.Output.from_input(config.get("provider", "azure")))
             pulumi.export("requires_auth", registry.requires_auth)
+            # CRITICAL: Export registry_id for cluster to use when granting ACR permissions
+            # This allows cluster to reference the actual Azure resource ID, not compute it
+            if hasattr(registry, 'registry_id') and registry.registry_id:
+                pulumi.export("registry_id", registry.registry_id)
+
+            # Export bundle credentials if available (needed by workspace)
+            if hasattr(registry, 'bundles_pull_username') and registry.bundles_pull_username:
+                pulumi.export("bundles_pull_username", registry.bundles_pull_username)
+            if hasattr(registry, 'bundles_pull_password') and registry.bundles_pull_password:
+                pulumi.export("bundles_pull_password", registry.bundles_pull_password)
+            if hasattr(registry, 'bundle_repo') and registry.bundle_repo:
+                pulumi.export("bundle_repo", registry.bundle_repo)
 
             return registry
 
@@ -164,68 +176,6 @@ class RegistryService(BaseService):
                 details={"error": str(e)}
             )
 
-    def _save_to_environment_config(self, outputs: Dict[str, Any]):
-        """Save registry outputs to environment config."""
-        from ..core.env_config import load_environment_config, save_environment_config
-        from ..core.automation import get_output_value
-
-        # Extract registry configuration
-        registry_config = {
-            "provider": get_output_value(outputs, "provider", "azure"),
-            "login_server": get_output_value(outputs, "login_server"),
-            "registry_name": get_output_value(outputs, "registry_name"),
-            "requires_auth": get_output_value(outputs, "requires_auth", False),
-            "cluster_pull_configured": get_output_value(outputs, "cluster_pull_configured", False)
-        }
-
-        # Load existing config and merge
-        existing_storage = None
-        try:
-            existing_config = load_environment_config(self.env)
-            if existing_config and existing_config.storage:
-                existing_storage = existing_config.storage.model_dump()
-        except FileNotFoundError:
-            pass
-
-        # Save merged config
-        config_path = save_environment_config(
-            self.env,
-            registry_outputs=registry_config,
-            storage_outputs=existing_storage
-        )
-        print(f"  ✓ Environment config updated at {config_path}")
-
-    def _remove_from_environment_config(self):
-        """Remove registry from environment config."""
-        from ..core.env_config import load_environment_config, save_environment_config
-        from pathlib import Path
-
-        try:
-            existing_config = load_environment_config(self.env)
-        except FileNotFoundError:
-            return
-
-        # Check if config exists
-        if not existing_config:
-            return
-
-        # Keep storage if it exists
-        existing_storage = existing_config.storage.model_dump() if existing_config.storage else None
-
-        if existing_storage:
-            # Update with storage only
-            config_path = save_environment_config(
-                self.env,
-                registry_outputs=None,
-                storage_outputs=existing_storage
-            )
-            print(f"  ✓ Removed registry from environment config")
-        else:
-            # Remove entire config if nothing left
-            config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
-            if config_path.exists():
-                config_path.unlink()
-                print(f"  ✓ Removed environment config for {self.env}")
 
     def login(self) -> bool:
         """

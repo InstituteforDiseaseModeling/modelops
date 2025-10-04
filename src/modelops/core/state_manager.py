@@ -10,8 +10,6 @@ from typing import Optional, Dict, Any, Callable
 import psutil
 import pulumi.automation as auto
 
-from .env_config import load_environment_config, save_environment_config
-
 
 class PulumiStateManager:
     """
@@ -44,10 +42,17 @@ class PulumiStateManager:
             component: Component name (storage, registry, cluster, workspace)
             env: Environment name (dev, staging, prod)
         """
+        from .paths import ensure_work_dir
+        from .automation import _ensure_passphrase
+
         self.component = component
         self.env = env
-        self.work_dir = Path.home() / ".modelops" / "pulumi" / component
+        # Use ensure_work_dir to create the directory if it doesn't exist
+        self.work_dir = ensure_work_dir(component)
         self.lock_timeout_seconds = 900  # 15 minutes
+
+        # Ensure passphrase is configured for all subprocess calls
+        _ensure_passphrase()
 
     def execute_with_recovery(
         self,
@@ -85,15 +90,12 @@ class PulumiStateManager:
 
             if operation == "up":
                 result = stack.up(on_output=on_output or (lambda x: None), **kwargs)
-                # Update environment YAML on success
-                if result.summary.result != "failed":
-                    self._update_environment_yaml(result.outputs)
+                # Note: Environment reconciliation happens at higher level (InfrastructureService)
                 return result
 
             elif operation == "destroy":
                 stack.destroy(on_output=on_output or (lambda x: None), **kwargs)
-                # Remove from environment YAML on success
-                self._remove_from_environment_yaml()
+                # Note: Environment reconciliation happens at higher level (InfrastructureService)
                 return None
 
             elif operation == "refresh":
@@ -213,7 +215,8 @@ class PulumiStateManager:
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
             )
 
             if result.returncode == 0:
@@ -229,21 +232,79 @@ class PulumiStateManager:
             print(f"  ⚠ Error clearing lock: {e}")
 
     def _reconcile_state(self):
-        """Reconcile Pulumi state with cloud reality using refresh."""
+        """Reconcile Pulumi state with cloud reality using refresh.
+
+        Handles pending CREATE operations that require interactive refresh.
+        """
         try:
             print(f"  Refreshing {self.component} state...")
-            stack = self._get_stack()
-            result = stack.refresh(on_output=lambda x: None)
 
-            if result.summary.result == "succeeded":
-                print(f"  ✓ State refreshed successfully")
+            # First check if we have pending operations
+            stack_name = self._get_stack_name()
+            pending_ops = self._check_pending_operations()
+
+            if pending_ops:
+                print(f"  ⚠ Found {len(pending_ops)} pending operations, running interactive refresh...")
+                # For pending CREATE operations, we need to run refresh with --yes to clear them
+                result = subprocess.run(
+                    ["pulumi", "refresh", "--yes", "--skip-preview", "-s", stack_name],
+                    cwd=self.work_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
+                )
+
+                if result.returncode == 0:
+                    print(f"  ✓ Cleared pending operations and refreshed state")
+                else:
+                    print(f"  ⚠ Refresh completed with warnings: {result.stderr}")
             else:
-                print(f"  ⚠ State refresh had issues but continuing")
+                # Normal refresh through automation API
+                stack = self._get_stack()
+                result = stack.refresh(on_output=lambda x: None)
 
+                if result.summary.result == "succeeded":
+                    print(f"  ✓ State refreshed successfully")
+                else:
+                    print(f"  ⚠ State refresh had issues but continuing")
+
+        except subprocess.TimeoutExpired:
+            print(f"  ⚠ Refresh timed out, continuing anyway")
         except Exception as e:
             # Don't fail the operation if refresh fails
             print(f"  ⚠ Could not refresh state: {e}")
             print(f"    Continuing with potentially stale state...")
+
+    def _check_pending_operations(self) -> list:
+        """Check for pending operations in the stack.
+
+        Returns:
+            List of pending operation URNs
+        """
+        import json  # Import at module level to avoid scope issues
+
+        try:
+            # Use pulumi stack export to check for pending operations
+            result = subprocess.run(
+                ["pulumi", "stack", "export", "-s", self._get_stack_name()],
+                cwd=self.work_dir,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
+            )
+
+            if result.returncode == 0:
+                stack_data = json.loads(result.stdout)
+                deployment = stack_data.get("deployment", {})
+                pending = deployment.get("pending_operations", [])
+                return pending if pending else []
+
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
+            pass
+
+        return []
 
     def _get_stack(self, program: Optional[Callable] = None) -> auto.Stack:
         """Get or create Pulumi stack.
@@ -273,102 +334,6 @@ class PulumiStateManager:
         from .naming import StackNaming
         return StackNaming.get_stack_name(self.component, self.env)
 
-    def _update_environment_yaml(self, outputs: Optional[Dict[str, Any]]):
-        """Update environment YAML with outputs - THIS IS THE ONLY WRITER.
-
-        Args:
-            outputs: Pulumi stack outputs to save
-        """
-        if not outputs:
-            return
-
-        # Extract plain values from Pulumi outputs
-        plain_outputs = {}
-        for key, value in outputs.items():
-            if hasattr(value, 'value'):
-                plain_outputs[key] = value.value
-            elif isinstance(value, dict) and 'value' in value:
-                plain_outputs[key] = value['value']
-            else:
-                plain_outputs[key] = value
-
-        # Load existing config (returns BundleEnvironment object or raises FileNotFoundError)
-        try:
-            existing_config = load_environment_config(self.env)
-        except FileNotFoundError:
-            existing_config = None
-
-        # Update with new outputs for this component
-        if self.component == "registry" and plain_outputs:
-            # For registry, save the entire output dict
-            # existing_config is a BundleEnvironment object, not a dict
-            existing_storage = existing_config.storage.model_dump() if existing_config and existing_config.storage else None
-            save_environment_config(
-                self.env,
-                registry_outputs=plain_outputs,
-                storage_outputs=existing_storage
-            )
-        elif self.component == "storage" and plain_outputs:
-            # For storage, save the entire output dict
-            # existing_config is a BundleEnvironment object, not a dict
-            existing_registry = existing_config.registry.model_dump() if existing_config and existing_config.registry else None
-            save_environment_config(
-                self.env,
-                registry_outputs=existing_registry,
-                storage_outputs=plain_outputs
-            )
-        elif self.component == "cluster":
-            # Cluster outputs are not saved to environment YAML
-            # They're accessed directly via Pulumi when needed
-            pass
-        elif self.component == "workspace":
-            # Workspace outputs are not saved to environment YAML
-            pass
-
-    def _remove_from_environment_yaml(self):
-        """Remove component from environment YAML."""
-        try:
-            config = load_environment_config(self.env)
-            if not config:
-                return
-
-            # Remove this component's data
-            # config is a BundleEnvironment object, not a dict
-            updated = False
-            remaining_registry = None
-            remaining_storage = None
-
-            if self.component == "registry" and config.registry:
-                # Keep storage, remove registry
-                remaining_storage = config.storage.model_dump() if config.storage else None
-                updated = True
-            elif self.component == "storage" and config.storage:
-                # Keep registry, remove storage
-                remaining_registry = config.registry.model_dump() if config.registry else None
-                updated = True
-            else:
-                # Component not in config, nothing to remove
-                return
-
-            if updated:
-                # Save updated config or delete if empty
-                if remaining_registry or remaining_storage:
-                    # Still has data, update the file
-                    save_environment_config(
-                        self.env,
-                        registry_outputs=remaining_registry,
-                        storage_outputs=remaining_storage
-                    )
-                else:
-                    # No data left, delete the file
-                    config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
-                    if config_path.exists():
-                        config_path.unlink()
-                        print(f"  ✓ Removed environment config for {self.env}")
-
-        except Exception as e:
-            # Don't fail the destroy operation if config removal fails
-            print(f"  ⚠ Could not update environment config: {e}")
 
     def _handle_lock_error(self, error: Exception):
         """Handle lock errors with helpful messages.

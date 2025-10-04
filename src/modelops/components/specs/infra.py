@@ -120,6 +120,12 @@ class UnifiedInfraSpec(ConfigModel):
             List of component names that are configured
         """
         components = []
+
+        # Resource group is always needed for Azure components
+        # Add it first if any Azure components are configured
+        if self.registry or self.cluster or self.storage:
+            components.append("resource_group")
+
         if self.registry:
             components.append("registry")
         if self.cluster:

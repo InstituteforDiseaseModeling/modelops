@@ -33,6 +33,8 @@ class StorageConfig(ConfigModel):
     
     # Storage account settings (optional, with smart defaults)
     account_name: Optional[str] = None  # Auto-generated if not provided
+    resource_group: Optional[str] = None  # Explicit resource group to use
+    username: Optional[str] = None  # Explicit username for naming (usually auto-detected)
     sku: Literal["Standard_LRS", "Standard_GRS", "Premium_LRS"] = "Standard_LRS"
     location: Optional[str] = None  # Inherit from infrastructure
     

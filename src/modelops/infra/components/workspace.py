@@ -24,21 +24,32 @@ class DaskWorkspace(pulumi.ComponentResource):
     def __init__(self, name: str, infra_stack_ref: str,
                  config: Optional[Dict[str, Any]] = None,
                  storage_stack_ref: Optional[str] = None,
+                 registry_stack_ref: Optional[str] = None,
                  opts: Optional[pulumi.ResourceOptions] = None):
         """Initialize Dask workspace deployment.
-        
+
         Args:
             name: Component name (e.g., "dask")
             infra_stack_ref: Reference to infrastructure stack
             config: Optional workspace configuration
             storage_stack_ref: Optional reference to storage stack for blob access
+            registry_stack_ref: Optional reference to registry stack for OCI bundle access
             opts: Optional Pulumi resource options
         """
         super().__init__("modelops:workspace:dask", name, None, opts)
         
-        # Read outputs from Stack 1 (infrastructure)
+        # Create all stack references once at the top to avoid duplicates
         infra = pulumi.StackReference(infra_stack_ref)
+        registry = pulumi.StackReference(registry_stack_ref) if registry_stack_ref else None
+        storage = pulumi.StackReference(storage_stack_ref) if storage_stack_ref else None
+
+        # Read outputs from Stack 1 (infrastructure)
         kubeconfig = infra.require_output("kubeconfig")
+
+        # Read outputs from registry stack if provided
+        registry_url = None
+        if registry:
+            registry_url = registry.require_output("login_server")
 
         # Create K8s provider using kubeconfig from Stack 1
         k8s_provider = k8s.Provider(
@@ -133,12 +144,40 @@ class DaskWorkspace(pulumi.ComponentResource):
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
         
-        # Create storage secret if storage stack is referenced
-        if storage_stack_ref:
-            storage = pulumi.StackReference(storage_stack_ref)
+        # Initialize variables for conditional resources
+        has_registry = bool(registry_stack_ref)
+        has_storage = bool(storage_stack_ref)
+        bundle_secret = None
+        secret_checksum = None
+        bundle_registry = None
+
+        # Variables for credentials
+        registry_username = None
+        registry_password = None
+        sas_conn_str = None
+
+        # Get registry outputs if available (using registry reference created at top)
+        if has_registry and registry:
+            login_server = registry.require_output("login_server")
+            # Try to get bundle repo, default to modelops-bundles
+            bundle_repo = registry.get_output("bundle_repo")
+            if not bundle_repo:
+                bundle_repo = pulumi.Output.from_input("modelops-bundles")
+            # Try to get credentials - these may not exist if registry was created via infra up
+            registry_username = registry.get_output("bundles_pull_username")
+            registry_password = registry.get_output("bundles_pull_password")
+            # Set bundle registry to just the registry URL (without repo path)
+            # The modelops-bundle code will add the repository path as needed
+            bundle_registry = login_server
+
+        # Get storage outputs if available (using storage reference created at top)
+        if has_storage and storage:
             storage_conn_str = storage.require_output("connection_string")
             storage_account = storage.require_output("account_name")
-            
+            # Try to get SAS connection string - may not exist if created via infra up
+            sas_conn_str = storage.get_output("sas_connection_string")
+
+            # Create storage secret (kept for backward compatibility)
             k8s.core.v1.Secret(
                 f"{name}-storage-secret",
                 metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -155,15 +194,111 @@ class DaskWorkspace(pulumi.ComponentResource):
                     depends_on=[ns]
                 )
             )
+
+        # Create bundle credentials secret if registry is available AND has credentials
+        # (storage is optional)
+        if has_registry and registry_username is not None and registry_password is not None:
+            import hashlib
+
+            # Build secret data - registry credentials are required, storage is optional
+            secret_data = {
+                "REGISTRY_USERNAME": registry_username,
+                "REGISTRY_PASSWORD": registry_password,
+            }
+
+            # Add storage connection string only if storage is configured and SAS exists
+            if has_storage and sas_conn_str is not None:
+                secret_data["AZURE_STORAGE_CONNECTION_STRING"] = sas_conn_str
+
+            # Compute checksum for pod rollout on secret change
+            # Include all available credentials in checksum
+            checksum_parts = [registry_username, registry_password]
+            if has_storage:
+                checksum_parts.append(sas_conn_str)
+
+            secret_checksum = pulumi.Output.all(*checksum_parts).apply(
+                lambda args: hashlib.sha256(
+                    "".join(str(arg) if arg is not None else "" for arg in args).encode()
+                ).hexdigest()[:16]
+            )
+
+            # Create the secret directly - Pulumi accepts Output[str] in string_data
+            bundle_secret = k8s.core.v1.Secret(
+                f"{name}-bundle-credentials",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name="bundle-credentials",
+                    namespace=namespace
+                ),
+                string_data=secret_data,
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[ns]
+                )
+            )
         
         # No image pull secrets needed for public GHCR images
         pull_secrets = []
-        
+
         # Optional: Could still support private registries if needed
         # ghcr_pat = os.getenv("GHCR_PAT")
         # if ghcr_pat and "ghcr.io" in scheduler_image:
         #     ... (secret creation code)
-        
+
+        # Compute env and envFrom lists for scheduler and workers
+        scheduler_env = []
+        worker_env = []
+        if bundle_registry is not None:
+            scheduler_env.append(k8s.core.v1.EnvVarArgs(
+                name="MODELOPS_BUNDLE_REGISTRY",
+                value=bundle_registry
+            ))
+            worker_env.append(k8s.core.v1.EnvVarArgs(
+                name="MODELOPS_BUNDLE_REGISTRY",
+                value=bundle_registry
+            ))
+
+        # Add user-configured env vars
+        scheduler_env.extend([k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])])
+        worker_env.extend([k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])])
+
+        scheduler_env_from = []
+        worker_env_from = []
+        if has_storage:
+            scheduler_env_from.append(k8s.core.v1.EnvFromSourceArgs(
+                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                    name="modelops-storage",
+                    optional=True  # Storage might not be configured
+                )
+            ))
+            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
+                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                    name="modelops-storage",
+                    optional=True  # Storage might not be configured
+                )
+            ))
+
+        if bundle_secret is not None:
+            scheduler_env_from.append(k8s.core.v1.EnvFromSourceArgs(
+                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                    name="bundle-credentials"
+                    # No optional=True - fail fast if missing when expected
+                )
+            ))
+            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
+                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                    name="bundle-credentials"
+                    # No optional=True - fail fast if missing when expected
+                )
+            ))
+
+        # Compute annotations for pod checksums
+        scheduler_annotations = {}
+        worker_annotations = {}
+        if secret_checksum is not None:
+            scheduler_annotations["checksum/bundle-credentials"] = secret_checksum
+            worker_annotations["checksum/bundle-credentials"] = secret_checksum
+
         # Create Dask scheduler deployment
         scheduler = k8s.apps.v1.Deployment(
             f"{name}-scheduler",
@@ -185,7 +320,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                         labels={
                             "app": "dask-scheduler",
                             "modelops.io/component": "scheduler"
-                        }
+                        },
+                        annotations=scheduler_annotations if scheduler_annotations else None
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # Security: Run containers as non-root to prevent privilege escalation
@@ -228,16 +364,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "1"
                                     })
                                 ),
-                                env=[k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])],
-                                # Mount storage secret if available
-                                env_from=[
-                                    k8s.core.v1.EnvFromSourceArgs(
-                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                                            name="modelops-storage",
-                                            optional=True  # Don't fail if secret doesn't exist
-                                        )
-                                    )
-                                ] if storage_stack_ref else None
+                                env=scheduler_env if scheduler_env else None,
+                                env_from=scheduler_env_from if scheduler_env_from else None
                             )
                         ],
                         node_selector=scheduler_node_selector if scheduler_node_selector else None,
@@ -246,7 +374,11 @@ class DaskWorkspace(pulumi.ComponentResource):
                     )
                 )
             ),
-            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+            opts=pulumi.ResourceOptions(
+                provider=k8s_provider,
+                parent=self,
+                depends_on=[ns] + ([bundle_secret] if bundle_secret else [])
+            )
         )
         
         # Create scheduler service
@@ -316,7 +448,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                         labels={
                             "app": "dask-worker",
                             "modelops.io/component": "worker"
-                        }
+                        },
+                        annotations=worker_annotations if worker_annotations else None
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # Security: Run containers as non-root to prevent privilege escalation
@@ -355,18 +488,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                                         "cpu": "2"
                                     })
                                 ),
-                                env=[
-                                    *[k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])]
-                                ],
-                                # Mount storage secret if available
-                                env_from=[
-                                    k8s.core.v1.EnvFromSourceArgs(
-                                        secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                                            name="modelops-storage",
-                                            optional=True  # Don't fail if secret doesn't exist
-                                        )
-                                    )
-                                ] if storage_stack_ref else None
+                                env=worker_env if worker_env else None,
+                                env_from=worker_env_from if worker_env_from else None
                             )
                         ],
                         node_selector=worker_node_selector if worker_node_selector else None,
@@ -376,9 +499,9 @@ class DaskWorkspace(pulumi.ComponentResource):
                 )
             ),
             opts=pulumi.ResourceOptions(
-                provider=k8s_provider, 
+                provider=k8s_provider,
                 parent=self,
-                depends_on=[scheduler]  # Workers depend on scheduler
+                depends_on=[scheduler] + ([bundle_secret] if bundle_secret else [])
             )
         )
 

@@ -487,9 +487,92 @@ reset-stacks:
 	@pulumi destroy --cwd ~/.modelops/pulumi/infra --stack modelops-infra-$(ENV) --yes 2>/dev/null || true
 	@echo "✓ All stacks reset. You can start fresh with 'mops infra up'"
 
+## Show all Azure ModelOps resources
+azure-status:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "                    Azure ModelOps Resources"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo ""
+	@echo "📁 RESOURCE GROUPS:"
+	@echo "───────────────────────────────────────────────────────────────────"
+	@az group list --query "[?contains(name, 'modelops')].{Name:name, Location:location}" -o table 2>/dev/null || echo "  ✗ No resource groups found"
+	@echo ""
+	@echo "🌐 KUBERNETES CLUSTERS (AKS):"
+	@echo "───────────────────────────────────────────────────────────────────"
+	@az aks list --query "[?contains(name, 'modelops')].{Name:name, ResourceGroup:resourceGroup, Status:powerState.code, Version:kubernetesVersion, Nodes:agentPoolProfiles[0].count}" -o table 2>/dev/null || echo "  ✗ No AKS clusters found"
+	@echo ""
+	@echo "📦 CONTAINER REGISTRIES (ACR):"
+	@echo "───────────────────────────────────────────────────────────────────"
+	@az acr list --query "[?contains(name, 'modelops')].{Name:name, ResourceGroup:resourceGroup, LoginServer:loginServer}" -o table 2>/dev/null || echo "  ✗ No container registries found"
+	@echo ""
+	@echo "💾 STORAGE ACCOUNTS:"
+	@echo "───────────────────────────────────────────────────────────────────"
+	@az storage account list --query "[?contains(name, 'modelops')].{Name:name, ResourceGroup:resourceGroup, Location:location, SKU:sku.name}" -o table 2>/dev/null || echo "  ✗ No storage accounts found"
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════"
+
+## Quick Azure resource cleanup check
+azure-check:
+	@echo "Checking for ModelOps resources in Azure..."
+	@RG_COUNT=$$(az group list --query "[?contains(name, 'modelops')] | length(@)" -o tsv 2>/dev/null || echo "0"); \
+	AKS_COUNT=$$(az aks list --query "[?contains(name, 'modelops')] | length(@)" -o tsv 2>/dev/null || echo "0"); \
+	ACR_COUNT=$$(az acr list --query "[?contains(name, 'modelops')] | length(@)" -o tsv 2>/dev/null || echo "0"); \
+	STORAGE_COUNT=$$(az storage account list --query "[?contains(name, 'modelops')] | length(@)" -o tsv 2>/dev/null || echo "0"); \
+	if [ "$$RG_COUNT" = "0" ] && [ "$$AKS_COUNT" = "0" ] && [ "$$ACR_COUNT" = "0" ] && [ "$$STORAGE_COUNT" = "0" ]; then \
+		echo "✓ Azure is clean - no ModelOps resources found"; \
+	else \
+		echo "⚠️  Found Azure resources:"; \
+		[ "$$RG_COUNT" != "0" ] && echo "  • $$RG_COUNT resource group(s)"; \
+		[ "$$AKS_COUNT" != "0" ] && echo "  • $$AKS_COUNT AKS cluster(s)"; \
+		[ "$$ACR_COUNT" != "0" ] && echo "  • $$ACR_COUNT container registry(s)"; \
+		[ "$$STORAGE_COUNT" != "0" ] && echo "  • $$STORAGE_COUNT storage account(s)"; \
+		echo ""; \
+		echo "Run 'make azure-status' for details or 'make azure-clean' to remove all"; \
+	fi
+
+## Delete all Azure ModelOps resources
+azure-clean:
+	@echo "⚠️  WARNING: This will delete ALL ModelOps resources in Azure!"
+	@echo "This includes all resource groups starting with 'modelops-'"
+	@read -p "Type 'DELETE AZURE' to confirm: " confirm && [ "$$confirm" = "DELETE AZURE" ] || exit 1
+	@echo "Deleting all ModelOps resource groups..."
+	@for rg in $$(az group list --query "[?contains(name, 'modelops')].name" -o tsv 2>/dev/null); do \
+		echo "  Deleting $$rg..."; \
+		az group delete --name $$rg --yes --no-wait; \
+	done
+	@echo "✓ Deletion initiated. Resources will be removed in the background."
+	@echo "Run 'make azure-check' in a few minutes to verify cleanup."
+
 ## Quick cleanup for common dev issues
 dev-cleanup:
 	@echo "Running quick cleanup for common development issues..."
 	@$(MOPS) cleanup unreachable workspace --yes 2>/dev/null || true
 	@$(MOPS) cleanup orphaned --yes 2>/dev/null || true
+
+## Clean local state (preserves passphrase for security)
+clean-local-state:
+	@echo "Cleaning local ModelOps state (preserving passphrase)..."
+	@# Preserve the passphrase file
+	@if [ -f ~/.modelops/secrets/pulumi-passphrase ]; then \
+		cp ~/.modelops/secrets/pulumi-passphrase /tmp/modelops-passphrase-backup; \
+	fi
+	@# Clean everything except passphrase
+	@find ~/.modelops -type f -not -path "*/secrets/*" -delete 2>/dev/null || true
+	@find ~/.modelops -type d -empty -delete 2>/dev/null || true
+	@# Restore passphrase if it was backed up
+	@if [ -f /tmp/modelops-passphrase-backup ]; then \
+		mkdir -p ~/.modelops/secrets; \
+		mv /tmp/modelops-passphrase-backup ~/.modelops/secrets/pulumi-passphrase; \
+		chmod 600 ~/.modelops/secrets/pulumi-passphrase; \
+	fi
+	@echo "✓ Local state cleaned (passphrase preserved)"
+
+## Nuclear clean: Remove everything including passphrase (use with caution!)
+clean-nuclear:
+	@echo "⚠️  WARNING: This will remove ALL local ModelOps data including the Pulumi passphrase!"
+	@echo "You will not be able to access existing Pulumi stacks after this."
+	@read -p "Type 'DELETE ALL' to confirm: " confirm && [ "$$confirm" = "DELETE ALL" ] || exit 1
+	@rm -rf ~/.modelops
+	@echo "✓ All local ModelOps data removed"
+	@echo "Note: If Pulumi stacks still exist, you'll need to delete them via Azure portal"
 	@echo "✓ Dev cleanup complete" 

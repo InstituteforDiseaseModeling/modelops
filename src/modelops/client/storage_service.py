@@ -187,68 +187,6 @@ class StorageService(BaseService):
         except:
             return None
 
-    def _save_to_environment_config(self, outputs: Dict[str, Any]):
-        """Save storage outputs to environment config."""
-        from ..core.env_config import load_environment_config, save_environment_config
-        from .utils import get_output_value
-
-        # Extract storage configuration
-        storage_config = {
-            "provider": "azure",
-            "account_name": get_output_value(outputs, "account_name"),
-            "connection_string": get_output_value(outputs, "connection_string"),
-            "primary_endpoint": get_output_value(outputs, "primary_endpoint"),
-            "containers": get_output_value(outputs, "containers", [])
-        }
-
-        # Load existing config and merge
-        existing_registry = None
-        try:
-            existing_config = load_environment_config(self.env)
-            if existing_config and existing_config.registry:
-                existing_registry = existing_config.registry.model_dump()
-        except FileNotFoundError:
-            pass
-
-        # Save merged config
-        config_path = save_environment_config(
-            self.env,
-            registry_outputs=existing_registry,
-            storage_outputs=storage_config
-        )
-        print(f"  ✓ Environment config updated at {config_path}")
-
-    def _remove_from_environment_config(self):
-        """Remove storage from environment config."""
-        from ..core.env_config import load_environment_config, save_environment_config
-        from pathlib import Path
-
-        try:
-            existing_config = load_environment_config(self.env)
-        except FileNotFoundError:
-            return
-
-        # Check if config exists
-        if not existing_config:
-            return
-
-        # Keep registry if it exists
-        existing_registry = existing_config.registry.model_dump() if existing_config.registry else None
-
-        if existing_registry:
-            # Update with registry only
-            config_path = save_environment_config(
-                self.env,
-                registry_outputs=existing_registry,
-                storage_outputs=None
-            )
-            print(f"  ✓ Removed storage from environment config")
-        else:
-            # Remove entire config if nothing left
-            config_path = Path.home() / ".modelops" / "environments" / f"{self.env}.yaml"
-            if config_path.exists():
-                config_path.unlink()
-                print(f"  ✓ Removed environment config for {self.env}")
 
     def get_info(self) -> Dict[str, Any]:
         """
