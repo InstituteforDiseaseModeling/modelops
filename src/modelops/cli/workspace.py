@@ -17,113 +17,6 @@ from .common_options import env_option, yes_option
 app = typer.Typer(help="Manage Dask workspaces")
 
 
-def run_workspace_smoke_tests(namespace: str, outputs: Dict[str, Any], env: str):
-    """Run smoke tests for workspace connectivity.
-    
-    Args:
-        namespace: Kubernetes namespace
-        outputs: Stack outputs
-        env: Environment name
-    """
-    from .k8s_client import get_k8s_client, cleanup_temp_kubeconfig, run_kubectl_with_fresh_config
-    from ..versions import SMOKETEST_IMAGE
-    import json
-    
-    # Test storage connectivity using smoke test pod
-    info("Testing storage connectivity...")
-    
-    # Create overrides JSON with complete container spec
-    overrides = {
-        "spec": {
-            "containers": [{
-                "name": "workspace-storage-test",
-                "image": SMOKETEST_IMAGE,
-                "envFrom": [{
-                    "secretRef": {
-                        "name": "modelops-storage",
-                        "optional": True
-                    }
-                }],
-                "command": ["/scripts/test.sh"]
-            }]
-        }
-    }
-    
-    test_cmd = [
-        "run", "workspace-storage-test",
-        "--rm", "-i", "--restart=Never",
-        "-n", namespace,
-        f"--image={SMOKETEST_IMAGE}",
-        "--overrides", json.dumps(overrides)
-    ]
-    
-    try:
-        result = run_kubectl_with_fresh_config(test_cmd, env, timeout=15)
-        if result.returncode == 0:
-            if "✓ Storage configured" in result.stdout:
-                success("  ✓ Storage environment variables present")
-                if "✓ Storage client initialized" in result.stdout:
-                    success("  ✓ Storage client connection verified")
-            else:
-                warning("  ⚠ Storage not configured")
-        else:
-            warning(f"  ⚠ Could not test storage: {result.stderr}")
-    except Exception as e:
-        error(f"  ❌ Test failed: {e}")
-    
-    # Test Dask scheduler and worker health using K8s client
-    info("\nTesting Dask scheduler health...")
-    try:
-        v1, _, temp_path = get_k8s_client(env)
-        
-        try:
-            # Get scheduler pods
-            pods = v1.list_namespaced_pod(
-                namespace=namespace,
-                label_selector="app=dask-scheduler"
-            )
-            
-            if pods.items:
-                for pod in pods.items:
-                    if pod.status.phase == "Running":
-                        ready = all(
-                            c.ready for c in (pod.status.container_statuses or [])
-                        )
-                        if ready:
-                            success(f"  ✓ Scheduler pod {pod.metadata.name} is healthy")
-                        else:
-                            warning(f"  ⚠ Scheduler pod {pod.metadata.name} not fully ready")
-                    else:
-                        warning(f"  ⚠ Scheduler pod {pod.metadata.name} is {pod.status.phase}")
-            else:
-                error("  ❌ No scheduler pods found")
-            
-            # Test worker health
-            info("\nTesting Dask workers...")
-            worker_count = automation.get_output_value(outputs, 'worker_count', 0)
-            
-            pods = v1.list_namespaced_pod(
-                namespace=namespace,
-                label_selector="app=dask-worker"
-            )
-            
-            if pods.items:
-                running_count = sum(
-                    1 for pod in pods.items
-                    if pod.status.phase == "Running"
-                )
-                success(f"  ✓ {running_count}/{worker_count} workers running")
-            else:
-                error("  ❌ No worker pods found")
-            
-        finally:
-            cleanup_temp_kubeconfig(temp_path)
-            
-    except Exception as e:
-        error(f"  ❌ Test failed: {e}")
-    
-    info("\nSmoke tests completed")
-
 
 @app.command()
 def up(
@@ -260,8 +153,7 @@ def status(
 
         # Run smoke tests if requested
         if smoke_test:
-            section("\nRunning Smoke Tests")
-            run_workspace_smoke_tests(namespace, outputs, env)
+            warning("\n⚠ Smoke test flag is deprecated. Use 'mops status --smoke-test' for connectivity tests.")
 
         workspace_commands(namespace)
 

@@ -262,59 +262,44 @@ def run_smoke_tests(all_stacks: Dict[str, List[Dict[str, Any]]]):
         for ws_stack in all_stacks.get("workspace", []):
             if ws_stack["status"] != "✓ Deployed":
                 continue
-            
+
             outputs = ws_stack.get("outputs", {})
             namespace = automation.get_output_value(outputs, "namespace", "")
-            
+
             if namespace:
                 info(f"Testing storage access from workspace ({namespace})...")
-                
+
                 # Check if namespace exists
                 if not namespace_exists(namespace, env):
                     warning(f"  ⚠ Namespace {namespace} not found")
                     continue
-                
-                # Use our custom smoke test image
-                from ..versions import SMOKETEST_IMAGE
-                import json
-                
-                # Create overrides JSON with complete container spec
-                overrides = {
-                    "spec": {
-                        "containers": [{
-                            "name": "storage-test",
-                            "image": SMOKETEST_IMAGE,
-                            "envFrom": [{
-                                "secretRef": {
-                                    "name": "modelops-storage",
-                                    "optional": True
-                                }
-                            }],
-                            "command": ["/scripts/test.sh"]
-                        }]
-                    }
-                }
-                
-                test_cmd = [
-                    "run", "storage-test",
-                    "--rm", "-i", "--restart=Never",
+
+                # Simple check: verify the storage secret exists in the namespace
+                check_cmd = [
+                    "get", "secret", "modelops-storage",
                     "-n", namespace,
-                    f"--image={SMOKETEST_IMAGE}",
-                    "--overrides", json.dumps(overrides)
+                    "-o", "name"
                 ]
-                
+
                 try:
-                    # Run test with fresh kubeconfig
-                    result = run_kubectl_with_fresh_config(test_cmd, env, timeout=30)
-                    
-                    if result.returncode == 0:
-                        if "✓ Storage configured" in result.stdout:
-                            success("  ✓ Storage environment variables present")
-                        else:
-                            warning("  ⚠ Storage not configured in workspace")
+                    result = run_kubectl_with_fresh_config(check_cmd, env, timeout=10)
+
+                    if result.returncode == 0 and "secret/modelops-storage" in result.stdout:
+                        success("  ✓ Storage secret configured in workspace")
+
+                        # Check if the secret has the expected keys
+                        get_keys_cmd = [
+                            "get", "secret", "modelops-storage",
+                            "-n", namespace,
+                            "-o", "jsonpath={.data}"
+                        ]
+                        keys_result = run_kubectl_with_fresh_config(get_keys_cmd, env, timeout=10)
+
+                        if keys_result.returncode == 0 and "AZURE_STORAGE_CONNECTION_STRING" in keys_result.stdout:
+                            success("  ✓ Storage connection string present")
                     else:
-                        warning(f"  ⚠ Storage test failed")
-                    
+                        warning("  ⚠ Storage secret not found in workspace")
+
                 except Exception as e:
                     error(f"  ❌ Test failed: {e}")
     

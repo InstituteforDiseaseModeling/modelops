@@ -32,7 +32,6 @@ PYTHON_VERSION ?= 3.11
 SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
 WORKER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
 RUNNER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-job-runner
-SMOKETEST_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-smoketest
 
 # GHCR Configuration
 GHCR_USER ?= $(shell git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' || echo "user")
@@ -167,27 +166,14 @@ build-multiarch-runner: setup-buildx ghcr-login
 		$(BUILD_CONTEXT)
 	@echo "✓ Runner image built and pushed: $(RUNNER_IMAGE):$(TAG)"
 
-## Build and push multi-arch smoketest image
-build-multiarch-smoketest: setup-buildx ghcr-login
-	@echo "Building multi-arch smoketest image for platforms: $(PLATFORMS)"
-	@docker buildx build \
-		--platform $(PLATFORMS) \
-		-f docker/Dockerfile.smoketest \
-		-t $(SMOKETEST_IMAGE):$(TAG) \
-		-t $(SMOKETEST_IMAGE):$(VERSION) \
-		--push \
-		$(BUILD_CONTEXT)/modelops
-	@echo "✓ Smoketest image built and pushed: $(SMOKETEST_IMAGE):$(TAG)"
 
 ## Build and push all multi-architecture images (can be parallelized with -j)
-build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarch-runner build-multiarch-smoketest
+build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarch-runner
 	@echo "✓ All multi-arch images built and pushed for: $(PLATFORMS)"
 	@echo "  $(SCHEDULER_IMAGE):$(TAG)"
 	@echo "  $(SCHEDULER_IMAGE):$(VERSION)"
 	@echo "  $(WORKER_IMAGE):$(TAG)"
 	@echo "  $(WORKER_IMAGE):$(VERSION)"
-	@echo "  $(SMOKETEST_IMAGE):$(TAG)"
-	@echo "  $(SMOKETEST_IMAGE):$(VERSION)"
 
 ## Build Dask scheduler image
 build-scheduler:
@@ -219,13 +205,6 @@ build-runner:
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		$(BUILD_CONTEXT)
 
-## Build smoke test image
-build-smoketest:
-	@echo "Building smoke test image: $(SMOKETEST_IMAGE):$(TAG)"
-	docker build \
-		-f docker/Dockerfile.smoketest \
-		-t $(SMOKETEST_IMAGE):$(TAG) \
-		.
 
 ## Login to GitHub Container Registry
 ghcr-login:

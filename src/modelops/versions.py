@@ -15,8 +15,6 @@ POSTGRES_IMAGE = f"postgres:{POSTGRES_VERSION}-alpine"
 PYTHON_IMAGE = f"python:{PYTHON_VERSION}-slim"
 # Placeholder for adaptive worker image - will be built and versioned
 ADAPTIVE_WORKER_IMAGE = f"ghcr.io/modelops/adaptive-worker:0.1.0"
-# Smoke test image for infrastructure testing
-SMOKETEST_IMAGE = "ghcr.io/institutefordiseasemodeling/modelops-smoketest:latest"
 
 # For pyproject.toml validation
 DASK_REQUIREMENT = f"dask[distributed]=={DASK_VERSION}"
