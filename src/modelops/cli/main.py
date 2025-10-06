@@ -31,7 +31,7 @@ app.add_typer(
 
 app.add_typer(
     adaptive.app,
-    name="run",
+    name="job",
     help="🔬 Run experiments and simulations"
 )
 

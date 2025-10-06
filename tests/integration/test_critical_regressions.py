@@ -77,7 +77,7 @@ class TestJSONRPCBufferFix:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0, "padding": large_data},
             seed=42
         )
@@ -110,7 +110,7 @@ class TestAggregationScale:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -152,7 +152,7 @@ class TestAggregationScale:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario=scenario,
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i * 0.1, "beta": 2.0},
                 seed=100 + i
             )
@@ -191,7 +191,7 @@ class TestWorkerPluginInitialization:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -225,7 +225,7 @@ class TestRapidTaskSubmission:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i*0.01, "beta": 2.0},
                 seed=2000 + i
             )

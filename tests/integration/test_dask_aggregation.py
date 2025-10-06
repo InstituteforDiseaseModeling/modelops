@@ -70,7 +70,7 @@ class TestDaskAggregation:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -104,7 +104,7 @@ class TestDaskAggregation:
             base_task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": alpha, "beta": 2.0},
                 seed=42
             )
@@ -137,7 +137,7 @@ class TestDaskAggregation:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": -999.0, "beta": 2.0},  # Will cause error
             seed=42
         )
@@ -171,7 +171,7 @@ class TestProcessPoolReuse:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -181,7 +181,7 @@ class TestProcessPoolReuse:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i*0.1, "beta": 2.0},
                 seed=42 + i
             )
@@ -197,7 +197,7 @@ class TestProcessPoolReuse:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",  # Same bundle!
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",  # Same bundle!
                 params={"alpha": 2.0 + i*0.1, "beta": 3.0},
                 seed=100 + i
             )

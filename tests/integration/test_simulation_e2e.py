@@ -70,7 +70,7 @@ class TestSimulationE2E:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -93,7 +93,7 @@ class TestSimulationE2E:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i*0.1, "beta": 2.0},
                 seed=42 + i
             )
@@ -118,7 +118,7 @@ class TestSimulationE2E:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": -999.0, "beta": 2.0},  # Invalid param
             seed=42
         )
@@ -135,11 +135,11 @@ class TestSimulationE2E:
     
     def test_simulation_with_missing_bundle(self, simulation_service):
         """Test simulation behavior with missing bundle."""
-        # Create task with non-existent bundle
+        # Create task with non-existent bundle (invalid digest)
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://nonexistent_bundle",
+            bundle_ref="sha256:0000000000000000000000000000000000000000000000000000000000000000",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -151,7 +151,8 @@ class TestSimulationE2E:
         # Should fail with appropriate error
         assert isinstance(result, SimReturn)
         assert result.error is not None
-        assert "not found" in result.error.message.lower() or "does not exist" in result.error.message.lower()
+        # Error message should indicate bundle not found
+        assert any(phrase in result.error.message.lower() for phrase in ["not found", "does not exist", "no such", "failed to find"])
     
     def test_simulation_determinism(self, simulation_service):
         """Test that simulations with same seed produce same results."""
@@ -159,7 +160,7 @@ class TestSimulationE2E:
         task1 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.5, "beta": 2.5},
             seed=12345
         )
@@ -167,7 +168,7 @@ class TestSimulationE2E:
         task2 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.5, "beta": 2.5},
             seed=12345
         )
@@ -194,7 +195,7 @@ class TestSimulationE2E:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario=scenario,
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0, "beta": 2.0},
                 seed=42
             )
@@ -219,7 +220,7 @@ class TestBundleCaching:
         task1 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -234,7 +235,7 @@ class TestBundleCaching:
         task2 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",  # Same bundle
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",  # Same bundle
             params={"alpha": 2.0, "beta": 3.0},  # Different params
             seed=43
         )
@@ -251,23 +252,24 @@ class TestBundleCaching:
     
     def test_multiple_bundles(self, simulation_service):
         """Test handling of multiple different bundles."""
-        bundles = ["test_bundle", "test_bundle"]  # Use same bundle for now
+        # Use same bundle digest for now (would use different ones in real test)
+        bundle_digest = "sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c"
         futures = []
-        
-        for i, bundle in enumerate(bundles):
+
+        for i in range(2):
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref=f"local://{bundle}",
+                bundle_ref=bundle_digest,
                 params={"alpha": 1.0 + i, "beta": 2.0},
                 seed=42 + i
             )
             futures.append(simulation_service.submit(task))
         
         results = simulation_service.gather(futures)
-        
+
         # All should complete
-        assert len(results) == len(bundles)
+        assert len(results) == 2
         for result in results:
             assert result.error is None  # Success
 
@@ -285,7 +287,7 @@ class TestSimulationLoadBalancing:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i*0.01, "beta": 2.0},
                 seed=1000 + i
             )
@@ -321,7 +323,7 @@ class TestSimulationLoadBalancing:
                 task = SimTask.from_components(
                     import_path="simulations.test",
                     scenario="baseline",
-                    bundle_ref="local://test_bundle",
+                    bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                     params={
                         "alpha": 1.0 + batch*0.1 + i*0.01,
                         "beta": 2.0 + batch*0.1
@@ -351,7 +353,7 @@ class TestSimulationTimeout:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params={"alpha": 1.0, "beta": 2.0, "iterations": 1000},
             seed=42
         )
@@ -370,7 +372,7 @@ class TestSimulationTimeout:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="local://test_bundle",
+                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
                 params={"alpha": 1.0 + i, "beta": 2.0},
                 seed=42 + i
             )

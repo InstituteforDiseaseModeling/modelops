@@ -45,7 +45,7 @@ def main():
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="local://test_bundle",
+            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
             params=dict(params.params),
             seed=42
         )
@@ -122,7 +122,7 @@ def main():
     new_task = SimTask.from_components(
         import_path="simulations.test",
         scenario="baseline",  # Same scenario, same bundle
-        bundle_ref="local://test_bundle",  # SAME bundle
+        bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",  # SAME bundle
         params={"alpha": 0.5, "beta": 1.5},
         seed=1000
     )
