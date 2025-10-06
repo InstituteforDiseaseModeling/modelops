@@ -64,13 +64,13 @@ def simulation_service(dask_cluster):
 class TestSimulationE2E:
     """End-to-end tests for simulation execution."""
     
-    def test_single_simulation_execution(self, simulation_service):
+    def test_single_simulation_execution(self, simulation_service, test_bundle_ref):
         """Test execution of a single simulation task."""
         # Create a simulation task
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -85,7 +85,7 @@ class TestSimulationE2E:
         # Check we got some outputs
         assert result.outputs is not None and len(result.outputs) > 0
     
-    def test_parallel_simulation_execution(self, simulation_service):
+    def test_parallel_simulation_execution(self, simulation_service, test_bundle_ref):
         """Test parallel execution of multiple simulations."""
         # Create multiple tasks with different parameters
         tasks = []
@@ -93,7 +93,7 @@ class TestSimulationE2E:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i*0.1, "beta": 2.0},
                 seed=42 + i
             )
@@ -112,13 +112,13 @@ class TestSimulationE2E:
             assert result.error is None  # Success
             assert result.outputs is not None
     
-    def test_simulation_with_invalid_params(self, simulation_service):
+    def test_simulation_with_invalid_params(self, simulation_service, test_bundle_ref):
         """Test simulation behavior with invalid parameters."""
         # Create task with invalid params
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": -999.0, "beta": 2.0},  # Invalid param
             seed=42
         )
@@ -154,13 +154,13 @@ class TestSimulationE2E:
         # Error message should indicate bundle not found
         assert any(phrase in result.error.message.lower() for phrase in ["not found", "does not exist", "no such", "failed to find"])
     
-    def test_simulation_determinism(self, simulation_service):
+    def test_simulation_determinism(self, simulation_service, test_bundle_ref):
         """Test that simulations with same seed produce same results."""
         # Create identical tasks
         task1 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.5, "beta": 2.5},
             seed=12345
         )
@@ -168,7 +168,7 @@ class TestSimulationE2E:
         task2 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.5, "beta": 2.5},
             seed=12345
         )
@@ -186,7 +186,7 @@ class TestSimulationE2E:
         if result1.error is None and result2.error is None:
             assert result1.outputs.keys() == result2.outputs.keys()
     
-    def test_different_scenarios(self, simulation_service):
+    def test_different_scenarios(self, simulation_service, test_bundle_ref):
         """Test execution with different scenarios."""
         scenarios = ["baseline", "optimistic", "pessimistic"]
         futures = []
@@ -195,7 +195,7 @@ class TestSimulationE2E:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario=scenario,
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0, "beta": 2.0},
                 seed=42
             )
@@ -213,14 +213,14 @@ class TestSimulationE2E:
 class TestBundleCaching:
     """Test bundle caching and process reuse."""
     
-    def test_bundle_cache_reuse(self, simulation_service):
+    def test_bundle_cache_reuse(self, simulation_service, test_bundle_ref):
         """Test that bundles are cached and reused across simulations."""
         # First simulation - cold start
         start_cold = time.time()
         task1 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -235,7 +235,7 @@ class TestBundleCaching:
         task2 = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",  # Same bundle
+            bundle_ref=test_bundle_ref,  # Same bundle
             params={"alpha": 2.0, "beta": 3.0},  # Different params
             seed=43
         )
@@ -250,10 +250,10 @@ class TestBundleCaching:
         assert result1.error is None
         assert result2.error is None
     
-    def test_multiple_bundles(self, simulation_service):
+    def test_multiple_bundles(self, simulation_service, test_bundle_ref):
         """Test handling of multiple different bundles."""
         # Use same bundle digest for now (would use different ones in real test)
-        bundle_digest = "sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c"
+        bundle_digest = test_bundle_ref
         futures = []
 
         for i in range(2):
@@ -277,7 +277,7 @@ class TestBundleCaching:
 class TestSimulationLoadBalancing:
     """Test load balancing across Dask workers."""
     
-    def test_load_distribution(self, simulation_service):
+    def test_load_distribution(self, simulation_service, test_bundle_ref):
         """Test that simulations are distributed across workers."""
         # Submit many tasks to ensure distribution
         n_tasks = 20
@@ -287,7 +287,7 @@ class TestSimulationLoadBalancing:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i*0.01, "beta": 2.0},
                 seed=1000 + i
             )
@@ -310,7 +310,7 @@ class TestSimulationLoadBalancing:
         # Should have used multiple workers (if available in diagnostics)
         # Note: This might not always be verifiable depending on implementation
     
-    def test_concurrent_batch_submission(self, simulation_service):
+    def test_concurrent_batch_submission(self, simulation_service, test_bundle_ref):
         """Test submitting multiple batches concurrently."""
         batch_size = 5
         n_batches = 3
@@ -323,7 +323,7 @@ class TestSimulationLoadBalancing:
                 task = SimTask.from_components(
                     import_path="simulations.test",
                     scenario="baseline",
-                    bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                    bundle_ref=test_bundle_ref,
                     params={
                         "alpha": 1.0 + batch*0.1 + i*0.01,
                         "beta": 2.0 + batch*0.1
@@ -346,14 +346,14 @@ class TestSimulationLoadBalancing:
 class TestSimulationTimeout:
     """Test simulation timeout and cancellation."""
     
-    def test_long_running_simulation(self, simulation_service):
+    def test_long_running_simulation(self, simulation_service, test_bundle_ref):
         """Test handling of long-running simulations."""
         # This test assumes the test bundle can simulate long-running tasks
         # For now, we'll just test normal execution
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0, "iterations": 1000},
             seed=42
         )
@@ -364,7 +364,7 @@ class TestSimulationTimeout:
         result = future.result(timeout=30)
         assert result.error is None  # Success
     
-    def test_simulation_cancellation(self, simulation_service):
+    def test_simulation_cancellation(self, simulation_service, test_bundle_ref):
         """Test cancellation of submitted simulations."""
         # Submit multiple tasks
         futures = []
@@ -372,7 +372,7 @@ class TestSimulationTimeout:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i, "beta": 2.0},
                 seed=42 + i
             )

@@ -2,6 +2,7 @@
 """End-to-end test of ReplicateSet and aggregation through warm processes."""
 
 import time
+from pathlib import Path
 from dask.distributed import Client
 from modelops_contracts import (
     SimTask, UniqueParameterSet
@@ -9,6 +10,7 @@ from modelops_contracts import (
 from modelops_contracts.simulation import ReplicateSet
 from modelops.services.dask_simulation import DaskSimulationService
 from modelops.worker.config import RuntimeConfig
+from modelops.utils.test_bundle_digest import compute_test_bundle_digest, format_test_bundle_ref
 
 def main():
     """Test full replicate set and aggregation flow."""
@@ -26,6 +28,15 @@ def main():
     print(f"Config: bundle_source={config.bundle_source}, bundles_dir={config.bundles_dir}")
     print(f"Force fresh venv: {config.force_fresh_venv}")
     service = DaskSimulationService(client, config)
+
+    # Compute test bundle digest dynamically
+    test_bundle_path = Path(__file__).parent / "test_bundle"
+    if not test_bundle_path.exists():
+        raise RuntimeError(f"Test bundle not found at {test_bundle_path}")
+
+    bundle_digest = compute_test_bundle_digest(test_bundle_path)
+    bundle_ref = format_test_bundle_ref(bundle_digest)
+    print(f"Using test bundle with digest: {bundle_ref[:24]}...")
     
     # Create parameter sets for optimization
     param_sets = [
@@ -45,7 +56,7 @@ def main():
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=bundle_ref,
             params=dict(params.params),
             seed=42
         )

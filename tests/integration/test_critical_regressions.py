@@ -61,7 +61,7 @@ def dask_cluster():
 class TestJSONRPCBufferFix:
     """Test that the 65KB JSON-RPC buffer issue is fixed."""
     
-    def test_large_params_handling(self, dask_cluster):
+    def test_large_params_handling(self, dask_cluster, test_bundle_ref):
         """Test handling of large parameters (>65KB)."""
         config = RuntimeConfig(
             bundle_source="file",
@@ -77,7 +77,7 @@ class TestJSONRPCBufferFix:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0, "padding": large_data},
             seed=42
         )
@@ -94,7 +94,7 @@ class TestAggregationScale:
     """Test aggregation at scale doesn't OOM."""
     
     @pytest.mark.skipif(IS_CI, reason="Too resource-intensive for CI")
-    def test_moderate_scale_aggregation(self, dask_cluster):
+    def test_moderate_scale_aggregation(self, dask_cluster, test_bundle_ref):
         """Test aggregation with moderate number of replicates."""
         config = RuntimeConfig(
             bundle_source="file",
@@ -110,7 +110,7 @@ class TestAggregationScale:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -133,7 +133,7 @@ class TestAggregationScale:
         assert result.loss is not None
         assert result.n_replicates == n_replicates
     
-    def test_partial_failure_aggregation(self, dask_cluster):
+    def test_partial_failure_aggregation(self, dask_cluster, test_bundle_ref):
         """Test aggregation handles partial failures correctly."""
         config = RuntimeConfig(
             bundle_source="file",
@@ -152,7 +152,7 @@ class TestAggregationScale:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario=scenario,
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i * 0.1, "beta": 2.0},
                 seed=100 + i
             )
@@ -176,7 +176,7 @@ class TestAggregationScale:
 class TestWorkerPluginInitialization:
     """Test worker plugin initializes correctly."""
     
-    def test_plugin_installs_on_workers(self, dask_cluster):
+    def test_plugin_installs_on_workers(self, dask_cluster, test_bundle_ref):
         """Test that ModelOpsWorkerPlugin installs on all workers."""
         config = RuntimeConfig(
             bundle_source="file",
@@ -191,7 +191,7 @@ class TestWorkerPluginInitialization:
         task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -207,7 +207,7 @@ class TestWorkerPluginInitialization:
 class TestRapidTaskSubmission:
     """Test rapid task submission (original JSON-RPC bug trigger)."""
     
-    def test_rapid_submission_no_corruption(self, dask_cluster):
+    def test_rapid_submission_no_corruption(self, dask_cluster, test_bundle_ref):
         """Test rapid task submission doesn't cause JSON-RPC corruption."""
         config = RuntimeConfig(
             bundle_source="file",
@@ -225,7 +225,7 @@ class TestRapidTaskSubmission:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i*0.01, "beta": 2.0},
                 seed=2000 + i
             )

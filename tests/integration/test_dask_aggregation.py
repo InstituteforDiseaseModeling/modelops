@@ -64,13 +64,13 @@ def simulation_service(dask_cluster):
 class TestDaskAggregation:
     """Test aggregation functionality with Dask."""
     
-    def test_simple_aggregation(self, simulation_service):
+    def test_simple_aggregation(self, simulation_service, test_bundle_ref):
         """Test basic aggregation with a single replicate set."""
         # Create a replicate set
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -95,7 +95,7 @@ class TestDaskAggregation:
         assert result.n_replicates == 3
         assert result.diagnostics is not None
     
-    def test_multiple_replicate_sets(self, simulation_service):
+    def test_multiple_replicate_sets(self, simulation_service, test_bundle_ref):
         """Test aggregation of multiple replicate sets in parallel."""
         futures = []
         
@@ -104,7 +104,7 @@ class TestDaskAggregation:
             base_task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": alpha, "beta": 2.0},
                 seed=42
             )
@@ -131,13 +131,13 @@ class TestDaskAggregation:
             assert isinstance(result.loss, float)
             assert result.n_replicates == 5
     
-    def test_error_handling_in_aggregation(self, simulation_service):
+    def test_error_handling_in_aggregation(self, simulation_service, test_bundle_ref):
         """Test that aggregation handles simulation errors gracefully."""
         # Create task that will fail (invalid params)
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": -999.0, "beta": 2.0},  # Will cause error
             seed=42
         )
@@ -162,7 +162,7 @@ class TestDaskAggregation:
 class TestProcessPoolReuse:
     """Test warm process pool reuse."""
     
-    def test_process_reuse_performance(self, simulation_service):
+    def test_process_reuse_performance(self, simulation_service, test_bundle_ref):
         """Test that process reuse improves performance."""
         import time
         
@@ -171,7 +171,7 @@ class TestProcessPoolReuse:
         base_task = SimTask.from_components(
             import_path="simulations.test",
             scenario="baseline",
-            bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+            bundle_ref=test_bundle_ref,
             params={"alpha": 1.0, "beta": 2.0},
             seed=42
         )
@@ -181,7 +181,7 @@ class TestProcessPoolReuse:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",
+                bundle_ref=test_bundle_ref,
                 params={"alpha": 1.0 + i*0.1, "beta": 2.0},
                 seed=42 + i
             )
@@ -197,7 +197,7 @@ class TestProcessPoolReuse:
             task = SimTask.from_components(
                 import_path="simulations.test",
                 scenario="baseline",
-                bundle_ref="sha256:f987e0ab742272c3969d63207162993f65c6c3af01f07910bd3c239f4407c51c",  # Same bundle!
+                bundle_ref=test_bundle_ref,  # Same bundle!
                 params={"alpha": 2.0 + i*0.1, "beta": 3.0},
                 seed=100 + i
             )
