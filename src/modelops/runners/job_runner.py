@@ -20,7 +20,6 @@ from modelops_contracts import (
     SimJob,
     CalibrationJob,
     SimTask,
-    SimBatch,
     TargetSpec,
     UniqueParameterSet,
 )
@@ -51,7 +50,7 @@ def load_job_from_blob() -> Job:
 
     # Download from blob storage
     blob_service = BlobServiceClient.from_connection_string(conn_str)
-    container_client = blob_service.get_container_client("tasks")
+    container_client = blob_service.get_container_client("jobs")
     blob_client = container_client.get_blob_client(blob_key)
 
     job_json = blob_client.download_blob().readall().decode("utf-8")
@@ -77,11 +76,27 @@ def deserialize_job(data: Dict[str, Any]) -> Job:
 
     match job_type:
         case "simulation":
-            # Reconstruct SimJob
-            batches = []
-            for batch_data in data["batches"]:
-                tasks = []
-                for task_data in batch_data["tasks"]:
+            # Reconstruct SimJob - now with flat task list
+            tasks = []
+            # Support both old format (batches) and new format (flat tasks)
+            if "batches" in data:
+                # Old format with batches - flatten into tasks
+                for batch_data in data["batches"]:
+                    for task_data in batch_data["tasks"]:
+                        task = SimTask(
+                            bundle_ref=task_data["bundle_ref"],
+                            entrypoint=task_data["entrypoint"],
+                            params=UniqueParameterSet(
+                                param_id=task_data["params"]["param_id"],
+                                params=task_data["params"]["values"],
+                            ),
+                            seed=task_data["seed"],
+                            outputs=task_data.get("outputs"),
+                        )
+                        tasks.append(task)
+            elif "tasks" in data:
+                # New format with flat task list
+                for task_data in data["tasks"]:
                     task = SimTask(
                         bundle_ref=task_data["bundle_ref"],
                         entrypoint=task_data["entrypoint"],
@@ -94,19 +109,12 @@ def deserialize_job(data: Dict[str, Any]) -> Job:
                     )
                     tasks.append(task)
 
-                batch = SimBatch(
-                    batch_id=batch_data["batch_id"],
-                    tasks=tasks,
-                    sampling_method=batch_data["sampling_method"],
-                    metadata=batch_data.get("metadata", {}),
-                )
-                batches.append(batch)
-
             return SimJob(
                 job_id=data["job_id"],
                 bundle_ref=data["bundle_ref"],
-                batches=batches,
+                tasks=tasks,
                 priority=data.get("priority", 0),
+                metadata=data.get("metadata", {}),
             )
 
         case "calibration":
@@ -135,39 +143,36 @@ def deserialize_job(data: Dict[str, Any]) -> Job:
 def run_simulation_job(job: SimJob, client: Client) -> None:
     """Execute a simulation job.
 
-    Processes all batches and tasks using DaskSimulationService.
+    Processes all tasks using DaskSimulationService.
 
     Args:
         job: SimJob to execute
         client: Dask client connected to cluster
     """
-    from ..services.dask_simulation import DaskSimulationService
+    from modelops.services.dask_simulation import DaskSimulationService
 
     logger.info(f"Running simulation job {job.job_id}")
-    logger.info(f"Total tasks: {job.total_task_count()}")
+    logger.info(f"Total tasks: {len(job.tasks)}")
 
     # Create simulation service
     sim_service = DaskSimulationService(client)
 
-    # Process each batch
-    for batch in job.batches:
-        logger.info(f"Processing batch {batch.batch_id} with {len(batch.tasks)} tasks")
+    # Submit all tasks
+    logger.info(f"Submitting {len(job.tasks)} tasks")
+    futures = []
+    for task in job.tasks:
+        future = sim_service.submit(task)
+        futures.append(future)
 
-        # Submit all tasks in batch
-        futures = []
-        for task in batch.tasks:
-            future = sim_service.submit(task)
-            futures.append(future)
+    # Gather results
+    results = sim_service.gather(futures)
+    logger.info(f"Job complete: {len(results)} results")
 
-        # Gather results
-        results = sim_service.gather(futures)
-        logger.info(f"Batch {batch.batch_id} complete: {len(results)} results")
-
-        # TODO: Upload results to blob storage
-        # For now, just log success
-        for i, result in enumerate(results[:3]):  # Log first 3
-            if hasattr(result, "outputs"):
-                logger.info(f"  Task {i}: {list(result.outputs.keys())}")
+    # TODO: Upload results to blob storage
+    # For now, just log success
+    for i, result in enumerate(results[:3]):  # Log first 3
+        if hasattr(result, "outputs"):
+            logger.info(f"  Task {i}: {list(result.outputs.keys())}")
 
     logger.info(f"Job {job.job_id} completed successfully")
 
@@ -181,7 +186,7 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
         job: CalibrationJob to execute
         client: Dask client connected to cluster
     """
-    from ..services.dask_simulation import DaskSimulationService
+    from modelops.services.dask_simulation import DaskSimulationService
 
     logger.info(f"Running calibration job {job.job_id}")
     logger.info(f"Algorithm: {job.algorithm}")

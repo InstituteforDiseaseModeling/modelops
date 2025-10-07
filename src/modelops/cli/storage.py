@@ -123,8 +123,9 @@ def connection_string(
 
     try:
         conn_str = service.get_connection_string(show_secrets=True)
-        account_name = service.get_account_name()
-        
+        info = service.get_info()
+        account_name = info.get('account_name', 'unknown')
+
         if not conn_str:
             error("Connection string not found in stack outputs")
             raise typer.Exit(1)

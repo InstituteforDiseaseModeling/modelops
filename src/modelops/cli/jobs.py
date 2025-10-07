@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Optional
 
 from modelops_contracts import SimulationStudy, CalibrationSpec
-from modelops_contracts.types import UniqueParameterSet
 
 from ..client import JobSubmissionClient
 from .display import console, success, error, info, warning, section
@@ -64,8 +63,9 @@ def submit(
             study_data = json.load(f)
 
         # Reconstruct SimulationStudy
+        # Extract just the parameter dictionaries (not UniqueParameterSet objects)
         parameter_sets = [
-            UniqueParameterSet(params=ps["params"])
+            ps["params"] if isinstance(ps, dict) and "params" in ps else ps
             for ps in study_data.get("parameter_sets", [])
         ]
 

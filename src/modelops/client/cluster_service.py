@@ -354,7 +354,7 @@ class ClusterService(BaseService):
         ]
 
         for cmd in commands:
-            subprocess.run(cmd, capture_output=True, stderr=subprocess.DEVNULL, check=False)
+            subprocess.run(cmd, capture_output=True, check=False)
 
     def _merge_kubeconfig(self, kubeconfig_yaml: str):
         """Merge kubeconfig with existing ~/.kube/config."""

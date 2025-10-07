@@ -6,7 +6,7 @@ import os
 from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
 from .utils import stack_exists
 from ..core import StackNaming, automation
-from ..core.automation import get_output_value
+from ..core.automation import get_output_value, _ensure_passphrase
 from ..core.paths import ensure_work_dir
 from ..core.state_manager import PulumiStateManager
 
@@ -43,6 +43,9 @@ class ResourceGroupService(BaseService):
             """Create ResourceGroup component."""
             from ..infra.components.resource_group import ResourceGroup
             import pulumi
+            # import os
+            # import hashlib
+            # from pathlib import Path
 
             # Add environment to config
             rg_config = config.copy()
@@ -56,6 +59,19 @@ class ResourceGroupService(BaseService):
             pulumi.export("resource_group_id", rg.resource_group_id)
             pulumi.export("location", rg.location)
             pulumi.export("environment", self.env)
+
+            # INSTRUMENTATION: Export diagnostic info
+            # passphrase_file = Path.home() / ".modelops" / "secrets" / "pulumi-passphrase"
+            # if passphrase_file.exists():
+            #     content = passphrase_file.read_text().strip()
+            #     hash_val = hashlib.sha256(content.encode()).hexdigest()[:8]
+            # else:
+            #     hash_val = "NO_FILE"
+
+            # pulumi.export("diag_pass_hash", hash_val)
+            # pulumi.export("diag_pass_file", os.environ.get("PULUMI_CONFIG_PASSPHRASE_FILE", "NOT_SET"))
+            # pulumi.export("diag_pass_env_set", "SET" if os.environ.get("PULUMI_CONFIG_PASSPHRASE") else "NOT_SET")
+            # pulumi.export("diag_secrets_provider", os.environ.get("PULUMI_SECRETS_PROVIDER", "NOT_SET"))
 
             return rg
 
@@ -90,6 +106,9 @@ class ResourceGroupService(BaseService):
         """
         import subprocess
 
+        # Ensure passphrase is configured for subprocess
+        _ensure_passphrase()
+
         # First, we need to unprotect the resource group since it's created with protect=True
         # Get the URN of the resource group to unprotect it
         work_dir = ensure_work_dir("resource-group")
@@ -108,7 +127,7 @@ class ResourceGroupService(BaseService):
             "--yes"
         ]
 
-        result = subprocess.run(unprotect_cmd, capture_output=True, text=True)
+        result = subprocess.run(unprotect_cmd, capture_output=True, text=True, env=os.environ.copy())
         if result.returncode != 0 and "not protected" not in result.stderr:
             # Only fail if it's not already unprotected
             print(f"  Warning: Could not unprotect resource group: {result.stderr}")

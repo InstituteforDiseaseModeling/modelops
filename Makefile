@@ -174,6 +174,8 @@ build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarc
 	@echo "  $(SCHEDULER_IMAGE):$(VERSION)"
 	@echo "  $(WORKER_IMAGE):$(TAG)"
 	@echo "  $(WORKER_IMAGE):$(VERSION)"
+	@echo "  $(RUNNER_IMAGE):$(TAG)"
+	@echo "  $(RUNNER_IMAGE):$(VERSION)"
 
 ## Build Dask scheduler image
 build-scheduler:

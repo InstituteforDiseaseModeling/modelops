@@ -421,3 +421,46 @@ workspace.yaml → Pulumi → K8s Deployment → Dask Workers
 ```
 
 See `docs/dask-configuration.md` for detailed guidance.
+
+## Pulumi Passphrase Management
+
+### Critical Bug Fix (October 2024)
+
+A critical bug was discovered and fixed in October 2024 where Pulumi stacks were becoming inaccessible with "incorrect passphrase" errors. This section documents the issue for future reference.
+
+**The Bug**:
+Different Pulumi stacks appeared to be encrypted with different passphrases, making them inaccessible after creation. This manifested as "incorrect passphrase" errors when trying to access stacks.
+
+**Root Cause**:
+The `LocalWorkspaceOptions` in `src/modelops/core/automation.py` was not passing environment variables to Pulumi subprocesses. Specifically, `env_vars` was set to `None`, preventing `PULUMI_CONFIG_PASSPHRASE_FILE` from being inherited by the Pulumi language host.
+
+**The Fix**:
+```python
+# In workspace_options() function:
+return auto.LocalWorkspaceOptions(
+    # ... other settings ...
+    env_vars=dict(os.environ)  # CRITICAL: Pass full environment to subprocess
+)
+```
+
+**Additional Safeguards**:
+1. Always remove `PULUMI_CONFIG_PASSPHRASE` from environment to avoid precedence issues
+2. Use only `PULUMI_CONFIG_PASSPHRASE_FILE` pointing to `~/.modelops/secrets/pulumi-passphrase`
+3. Ensure `_ensure_passphrase()` is called before every Pulumi operation
+
+**Known Race Condition**:
+The current implementation has a TOCTOU (Time of Check, Time of Use) race condition in passphrase file creation. Multiple concurrent processes could potentially create different passphrases. This is mitigated by:
+- Sequential execution in most workflows
+- File creation being idempotent after first write
+
+**Future Improvements**:
+- Implement atomic file creation using tempfile + rename pattern
+- Consider file locking to prevent concurrent writes
+- Pin `secrets_provider="passphrase"` in `create_or_select_stack`
+
+**Testing**:
+Run `uv run pytest tests/test_pulumi_passphrase.py` to verify the fix. This test suite ensures:
+- Environment variables are properly passed to Pulumi
+- Direct passphrase is removed to avoid precedence
+- Passphrase file creation is idempotent
+- All stacks are accessible with the same passphrase

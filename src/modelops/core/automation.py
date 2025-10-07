@@ -2,6 +2,38 @@
 
 This module provides simplified interfaces for common Pulumi operations,
 eliminating repetitive code in CLI modules.
+
+DEVELOPER NOTES - CRITICAL BUG FIX (October 2024)
+=================================================
+
+Bug: "Incorrect passphrase" errors when accessing Pulumi stacks
+----------------------------------------------------------------
+Different stacks were encrypted with different passphrases, making them
+inaccessible after creation. This caused infrastructure operations to fail
+with "incorrect passphrase" errors.
+
+Root Causes:
+1. LocalWorkspaceOptions was not passing environment variables to Pulumi
+   subprocesses (env_vars was None)
+2. PULUMI_CONFIG_PASSPHRASE_FILE was set in Python process but not inherited
+   by Pulumi language host
+3. Potential race condition in passphrase file creation (still exists but
+   mitigated by sequential execution)
+
+The Fix:
+1. Set env_vars=dict(os.environ) in workspace_options() - CRITICAL
+2. Remove PULUMI_CONFIG_PASSPHRASE to avoid precedence issues
+3. Ensure _ensure_passphrase() is called before every Pulumi operation
+
+Testing:
+- Run tests/test_pulumi_passphrase.py to verify the fix
+- All stacks should be accessible with the same passphrase
+- No "incorrect passphrase" errors should occur
+
+Future Improvements:
+- Implement atomic file creation for passphrase (using tempfile + rename)
+- Consider using file locking to prevent concurrent writes
+- Pin secrets_provider="passphrase" in create_or_select_stack
 """
 
 import os
@@ -29,34 +61,30 @@ configure_quiet_environment()
 
 
 def _ensure_passphrase(verbose: bool = False):
-    """Ensure Pulumi passphrase is configured securely.
+    """Ensure Pulumi passphrase is configured from secrets file.
 
-    Generates a random passphrase on first use and stores it locally.
-    Uses the file-based passphrase approach for security.
-
-    Priority order:
-    1. PULUMI_CONFIG_PASSPHRASE (if explicitly set - e.g., CI/CD)
-    2. PULUMI_CONFIG_PASSPHRASE_FILE (if explicitly set)
-    3. Auto-generated file at ~/.modelops/secrets/pulumi-passphrase
+    Always uses ~/.modelops/secrets/pulumi-passphrase for consistency.
+    Single source of truth - no fallbacks, no priority order.
     """
-    # Check if already configured via environment
-    if os.environ.get("PULUMI_CONFIG_PASSPHRASE"):
-        if verbose:
-            print("  Using PULUMI_CONFIG_PASSPHRASE from environment")
-        return
-    if os.environ.get("PULUMI_CONFIG_PASSPHRASE_FILE"):
-        if verbose:
-            print(f"  Using PULUMI_CONFIG_PASSPHRASE_FILE: {os.environ['PULUMI_CONFIG_PASSPHRASE_FILE']}")
-        return
+    # import hashlib
+    # import threading
 
-    # Check for local passphrase file
     passphrase_file = Path.home() / ".modelops" / "secrets" / "pulumi-passphrase"
+    # thread_id = threading.current_thread().name
+    # pid = os.getpid()
 
     if not passphrase_file.exists():
+        # INSTRUMENTATION: Log creation attempt
+        # print(f"[DIAG] Thread {thread_id} PID {pid}: Passphrase file does not exist, creating...")
+
         # Generate strong random passphrase ONCE
         passphrase_file.parent.mkdir(parents=True, exist_ok=True)
         passphrase = secrets.token_urlsafe(32)
         passphrase_file.write_text(passphrase)
+
+        # INSTRUMENTATION: Log what was written
+        # hash_val = hashlib.sha256(passphrase.encode()).hexdigest()[:8]
+        # print(f"[DIAG] Thread {thread_id} PID {pid}: Created passphrase file with hash: {hash_val}")
 
         # Set permissions (skip on Windows)
         if os.name != 'nt':
@@ -64,21 +92,45 @@ def _ensure_passphrase(verbose: bool = False):
 
         if verbose:
             print(f"  ✓ Generated Pulumi passphrase: {passphrase_file}")
+    # else:
+        # INSTRUMENTATION: Log that file exists and its hash
+        # content = passphrase_file.read_text().strip()
+        # hash_val = hashlib.sha256(content.encode()).hexdigest()[:8]
+        # print(f"[DIAG] Thread {thread_id} PID {pid}: Passphrase file exists with hash: {hash_val}")
 
-    # Set environment to use the file
+    # Always set to use this file - don't check other env vars
     os.environ["PULUMI_CONFIG_PASSPHRASE_FILE"] = str(passphrase_file)
+
+    # INSTRUMENTATION: Log environment state
+    # has_direct = "PULUMI_CONFIG_PASSPHRASE" in os.environ
+    # print(f"[DIAG] Thread {thread_id} PID {pid}: PULUMI_CONFIG_PASSPHRASE_FILE set to: {passphrase_file}")
+    # print(f"[DIAG] Thread {thread_id} PID {pid}: PULUMI_CONFIG_PASSPHRASE is: {'SET (DANGEROUS!)' if has_direct else 'NOT SET'}")
 
 
 def workspace_options(project: str, work_dir: Path) -> auto.LocalWorkspaceOptions:
     """Create standard LocalWorkspaceOptions for Pulumi operations.
-    
+
     Args:
         project: Project name
         work_dir: Working directory for Pulumi operations
-        
+
     Returns:
         Configured LocalWorkspaceOptions with backend settings
     """
+    # Ensure passphrase environment is loaded and clean
+    _ensure_passphrase()
+
+    # Remove any direct passphrase to avoid precedence issues
+    os.environ.pop("PULUMI_CONFIG_PASSPHRASE", None)
+
+    # INSTRUMENTATION: Check what environment variables are set
+    # pass_file = os.environ.get("PULUMI_CONFIG_PASSPHRASE_FILE", "NOT SET")
+    # pass_direct = "SET" if os.environ.get("PULUMI_CONFIG_PASSPHRASE") else "NOT SET"
+    # print(f"[DIAG] workspace_options for {project}:")
+    # print(f"[DIAG]   PULUMI_CONFIG_PASSPHRASE_FILE: {pass_file}")
+    # print(f"[DIAG]   PULUMI_CONFIG_PASSPHRASE: {pass_direct}")
+    # print(f"[DIAG]   env_vars will be: PASSING FULL ENVIRONMENT")
+
     return auto.LocalWorkspaceOptions(
         work_dir=str(work_dir),
         project_settings=auto.ProjectSettings(
@@ -86,6 +138,12 @@ def workspace_options(project: str, work_dir: Path) -> auto.LocalWorkspaceOption
             runtime="python",
             backend=auto.ProjectBackend(url=get_backend_url()),
         ),
+        # CRITICAL FIX (Oct 2024): Pass environment to Pulumi subprocess
+        # Without this, PULUMI_CONFIG_PASSPHRASE_FILE is not inherited by
+        # the Pulumi language host, causing "incorrect passphrase" errors.
+        # This was the root cause of stacks being encrypted with different
+        # passphrases. NEVER set this to None!
+        env_vars=dict(os.environ)
     )
 
 
@@ -113,6 +171,11 @@ def select_stack(
     Returns:
         Selected or created Pulumi stack
     """
+    # INSTRUMENTATION: Log stack selection
+    # import datetime
+    # timestamp = datetime.datetime.now().isoformat()
+    # print(f"[DIAG] {timestamp} Selecting stack for component: {component}, env: {env}")
+
     # Ensure secure passphrase is configured
     _ensure_passphrase()
 
@@ -124,6 +187,8 @@ def select_stack(
         work_dir = ensure_work_dir(component)
     else:
         work_dir = Path(work_dir)
+
+    # print(f"[DIAG] Creating/selecting stack: {stack} in project: {project}")
 
     return auto.create_or_select_stack(
         stack_name=stack,

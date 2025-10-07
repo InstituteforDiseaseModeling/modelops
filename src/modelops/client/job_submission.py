@@ -55,7 +55,7 @@ class JobSubmissionClient:
         # Get storage connection from Pulumi or environment
         connection_string = self._get_storage_connection()
         self.storage = AzureBlobBackend(
-            container="tasks",
+            container="jobs",
             connection_string=connection_string
         )
 
@@ -99,7 +99,7 @@ class JobSubmissionClient:
         )
 
     def _get_storage_connection(self) -> str:
-        """Get storage connection string from Pulumi stack or environment.
+        """Get storage connection string from environment or Pulumi stack.
 
         Returns:
             Connection string for Azure storage
@@ -107,12 +107,12 @@ class JobSubmissionClient:
         Raises:
             ValueError: If connection string not found
         """
-        # Try environment first (for CI/CD or explicit overrides)
+        # Check environment FIRST (avoids all passphrase issues)
         conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
         if conn_str:
             return conn_str
 
-        # Try to get from Pulumi storage stack
+        # Only try Pulumi as fallback
         try:
             outputs = automation.outputs("storage", self.env, refresh=False)
             if outputs and "connection_string" in outputs:
@@ -151,11 +151,14 @@ class JobSubmissionClient:
         blob_key = self._upload_job(job)
 
         # Determine runner image based on job type
+        # Use public registry for runner images (not user's ACR)
+        # This image is built once by ModelOps devs and published publicly
         match job:
             case SimJob():
                 image = "ghcr.io/institutefordiseasemodeling/modelops-job-runner:latest"
             case CalibrationJob():
-                image = "ghcr.io/institutefordiseasemodeling/modelops-calibration-runner:latest"
+                # For now, use same runner for both types
+                image = "ghcr.io/institutefordiseasemodeling/modelops-job-runner:latest"
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 
@@ -368,28 +371,21 @@ class JobSubmissionClient:
 
         # Add type-specific fields
         match job:
-            case SimJob(batches=batches, priority=priority):
+            case SimJob(tasks=tasks, priority=priority, metadata=metadata):
                 data["priority"] = priority
-                data["batches"] = [
+                data["metadata"] = metadata
+                data["tasks"] = [
                     {
-                        "batch_id": batch.batch_id,
-                        "sampling_method": batch.sampling_method,
-                        "metadata": batch.metadata,
-                        "tasks": [
-                            {
-                                "entrypoint": str(task.entrypoint),
-                                "bundle_ref": task.bundle_ref,
-                                "params": {
-                                    "param_id": task.params.param_id,
-                                    "values": dict(task.params.params),  # Convert MappingProxyType to dict
-                                },
-                                "seed": task.seed,
-                                "outputs": task.outputs,
-                            }
-                            for task in batch.tasks
-                        ],
+                        "entrypoint": str(task.entrypoint),
+                        "bundle_ref": task.bundle_ref,
+                        "params": {
+                            "param_id": task.params.param_id,
+                            "values": dict(task.params.params),  # Convert MappingProxyType to dict
+                        },
+                        "seed": task.seed,
+                        "outputs": task.outputs,
                     }
-                    for batch in batches
+                    for task in tasks
                 ]
 
             case CalibrationJob(
@@ -471,18 +467,19 @@ class JobSubmissionClient:
                             ],
                             restart_policy="Never",
                             service_account_name="default",
-                            tolerations=[
-                                # Tolerate CPU node taint
-                                k8s_client.V1Toleration(
-                                    key="modelops.io/role",
-                                    operator="Equal",
-                                    value="cpu",
-                                    effect="NoSchedule"
-                                )
-                            ],
-                            node_selector={
-                                "modelops.io/role": "cpu"
-                            },
+                            # TODO: Re-enable node selector when nodes are properly labeled
+                            # tolerations=[
+                            #     # Tolerate CPU node taint
+                            #     k8s_client.V1Toleration(
+                            #         key="modelops.io/role",
+                            #         operator="Equal",
+                            #         value="cpu",
+                            #         effect="NoSchedule"
+                            #     )
+                            # ],
+                            # node_selector={
+                            #     "modelops.io/role": "cpu"
+                            # },
                         )
                     ),
                     backoff_limit=3,  # Retry up to 3 times
