@@ -53,16 +53,14 @@ aks:
 #   name: modelopsmvpacr  # Must be globally unique
 #   sku: Standard
 
-# Optional blob storage for bundles and results
+# Optional blob storage for experiment data and large files
 # Can also be deployed standalone: mops storage up examples/storage.yaml
 # storage:
-#   containers:
-#     - name: bundles
-#     - name: bundle-blobs
-#     - name: workspace
-#       lifecycle_days: 7  # Auto-cleanup
-#     - name: results
-#     - name: tasks
+#   # Standard containers are automatically created:
+#   # - bundle-blobs: Large files referenced by OCI bundles in ACR
+#   # - workspace: Scratch space with 7-day auto-cleanup
+#   # - results: Permanent experiment outputs
+#   # - jobs: Kubernetes job metadata
 
 # Note: Stack names are automatically generated based on environment
 # Use --env flag to specify environment (dev, staging, prod)

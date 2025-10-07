@@ -97,13 +97,28 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
 
             # Build storage config
             containers = automation.get_output_value(sto_outputs, "containers", [])
-            if containers and isinstance(containers[0], dict):
-                container_names = [c.get("name", "unnamed") for c in containers]
-            else:
-                container_names = containers or ["bundles"]
 
-            primary_container = "bundles" if "bundles" in container_names else (
-                container_names[0] if container_names else "bundles"
+            # Handle different serialization formats from Pulumi
+            container_names = []
+            if containers:
+                if isinstance(containers[0], dict):
+                    # Normal dict format
+                    container_names = [c.get("name", "unnamed") for c in containers]
+                elif isinstance(containers[0], list):
+                    # Nested list format [[['name', 'value'], ...], ...]
+                    for container_data in containers:
+                        container_dict = dict(container_data) if container_data else {}
+                        if "name" in container_dict:
+                            container_names.append(container_dict["name"])
+                elif isinstance(containers[0], str):
+                    # Already a list of strings
+                    container_names = containers
+
+            if not container_names:
+                container_names = ["bundle-blobs"]
+
+            primary_container = "bundle-blobs" if "bundle-blobs" in container_names else (
+                container_names[0] if container_names else "bundle-blobs"
             )
 
             storage = StorageConfig(

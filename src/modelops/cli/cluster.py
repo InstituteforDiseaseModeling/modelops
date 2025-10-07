@@ -111,7 +111,7 @@ def down(
     
     # Check for dependent stacks unless forced
     if not force:
-        import subprocess
+        from ..core.subprocess_utils import run_pulumi_command
         from ..core.paths import WORK_DIRS
         
         dependent_stacks = []
@@ -124,12 +124,12 @@ def down(
             
             # Check if stack exists
             cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_pulumi_command(cmd, cwd=str(work_dir), capture_output=True, text=True)
             
             if result.returncode == 0:
                 # Stack exists, check if it has resources
                 cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name, "--show-urns"]
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = run_pulumi_command(cmd, cwd=str(work_dir), capture_output=True, text=True)
                 if "URN" in result.stdout:
                     dependent_stacks.append(component)
         

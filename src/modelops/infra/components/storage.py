@@ -223,11 +223,11 @@ class BlobStorage(pulumi.ComponentResource):
         # Compute start time with 5-minute buffer for clock skew
         start_time = (datetime.utcnow() - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        # Generate SAS token for bundles container
-        # Find the bundles container name from config (default to "bundles")
-        bundles_container = "bundles"
+        # Generate SAS token for bundle-blobs container
+        # Find the bundle-blobs container name from config
+        bundles_container = "bundle-blobs"
         for container in containers:
-            if container.name == "bundles" or "bundle" in container.name.lower():
+            if container.name == "bundle-blobs" or container.name == "bundle-blob":
                 bundles_container = container.name
                 break
 

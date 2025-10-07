@@ -224,11 +224,6 @@ def status(
         help="Name of adaptive infrastructure"
     ),
     env: Optional[str] = env_option(),
-    smoke_test: bool = typer.Option(
-        False,
-        "--smoke-test",
-        help="Run smoke tests to validate connectivity"
-    )
 ):
     """Show status of adaptive infrastructure."""
     env = resolve_env(env)
@@ -268,17 +263,8 @@ def status(
         if outputs.get('scheduler_address'):
             info(f"  Scheduler: {automation.get_output_value(outputs, 'scheduler_address')}")
         
-        # Show smoke test status if available
-        if outputs.get('smoke_test_job'):
-            job_name = automation.get_output_value(outputs, 'smoke_test_job', '')
-            info(f"  Smoke test: Job '{job_name}' deployed")
-        
         namespace = automation.get_output_value(outputs, 'namespace', f'modelops-adaptive-{env}-{name}')
         workers_name = automation.get_output_value(outputs, 'workers_name', f'adaptive-workers')
-        
-        # Run smoke tests if requested
-        if smoke_test:
-            warning("\n⚠ Smoke test flag is deprecated. Use 'mops status --smoke-test' for connectivity tests.")
         
         section("\nCommands:")
         commands([

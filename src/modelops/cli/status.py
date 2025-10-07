@@ -176,12 +176,23 @@ def status_all(
                     if account:
                         console.print(f"    [dim]• Account:[/dim] {account}")
                     if containers:
-                        # Handle list of dicts
+                        # Handle different serialization formats from Pulumi
+                        container_names = []
                         if isinstance(containers[0], dict):
+                            # Normal dict format
                             container_names = [c.get('name', '') for c in containers]
-                        else:
+                        elif isinstance(containers[0], list):
+                            # Nested list format [[['name', 'value'], ...], ...]
+                            for container_data in containers:
+                                container_dict = dict(container_data) if container_data else {}
+                                if "name" in container_dict:
+                                    container_names.append(container_dict["name"])
+                        elif isinstance(containers[0], str):
+                            # Already a list of strings
                             container_names = containers
-                        console.print(f"    [dim]• Containers:[/dim] {', '.join(container_names[:4])}")
+
+                        if container_names:
+                            console.print(f"    [dim]• Containers:[/dim] {', '.join(container_names[:4])}")
                 
                 elif component == "workspace":
                     namespace = automation.get_output_value(outputs, "namespace", "")
@@ -217,8 +228,6 @@ def status_all(
     commands([
         ("Workspace details", f"mops workspace status{' --env ' + env_filter if env_filter else ''}"),
         ("Storage info", f"mops storage info{' --env ' + env_filter if env_filter else ''}"),
-        ("Infrastructure details", f"mops infra status{' --env ' + env_filter if env_filter else ''}"),
-        ("Run smoke tests", f"mops status --smoke-test{' --env ' + env_filter if env_filter else ''}")
     ])
 
 

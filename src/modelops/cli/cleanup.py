@@ -2,11 +2,12 @@
 
 import os
 import typer
-import subprocess
+import subprocess  # Still needed for TimeoutExpired exception
 from pathlib import Path
 from typing import Optional
 from ..core import StackNaming, automation
 from ..core.paths import ensure_work_dir, WORK_DIRS
+from ..core.subprocess_utils import run_pulumi_command
 from .utils import handle_pulumi_error, resolve_env
 from .display import console, success, warning, error, info, section, dim, commands
 from .common_options import env_option, yes_option
@@ -56,10 +57,6 @@ def unreachable(
     try:
         warning(f"\nCleaning up unreachable resources...")
         
-        # Set environment variable for Pulumi
-        env_vars = os.environ.copy()
-        env_vars["PULUMI_K8S_DELETE_UNREACHABLE"] = "true"
-        
         # Run refresh first to identify unreachable resources
         cmd = [
             "pulumi", "refresh",
@@ -67,9 +64,10 @@ def unreachable(
             "--stack", stack_name,
             "--yes"
         ]
-        
+
         info("Refreshing stack to identify unreachable resources...")
-        result = subprocess.run(cmd, env=env_vars, capture_output=True, text=True)
+        # Pass extra env var for unreachable resources
+        result = run_pulumi_command(cmd, cwd=str(work_dir), env={"PULUMI_K8S_DELETE_UNREACHABLE": "true"})
         
         if "unreachable" in result.stdout or "unreachable" in result.stderr:
             # Now destroy the unreachable resources
@@ -81,7 +79,7 @@ def unreachable(
             ]
             
             info("Removing unreachable resources from state...")
-            result = subprocess.run(cmd, env=env_vars, capture_output=True, text=True)
+            result = run_pulumi_command(cmd, cwd=str(work_dir), env={"PULUMI_K8S_DELETE_UNREACHABLE": "true"})
             
             if result.returncode == 0:
                 success(f"\n✓ Successfully cleaned up unreachable resources from {component}")
@@ -138,7 +136,7 @@ def all(
         try:
             # Check if stack exists
             cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = run_pulumi_command(cmd, cwd=str(work_dir))
             
             if result.returncode != 0:
                 dim(f"  Stack {stack_name} does not exist, skipping")
@@ -147,17 +145,14 @@ def all(
             
             # Try to refresh to check for issues
             cmd = ["pulumi", "refresh", "--cwd", str(work_dir), "--stack", stack_name, "--yes"]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = run_pulumi_command(cmd, cwd=str(work_dir), timeout=30)
             
             if "unreachable" in result.stdout or "unreachable" in result.stderr:
                 warning(f"  Found unreachable resources in {component}")
                 
                 # Clean them up
-                env_vars = os.environ.copy()
-                env_vars["PULUMI_K8S_DELETE_UNREACHABLE"] = "true"
-                
                 cmd = ["pulumi", "destroy", "--cwd", str(work_dir), "--stack", stack_name, "--yes"]
-                result = subprocess.run(cmd, env=env_vars, capture_output=True, text=True)
+                result = run_pulumi_command(cmd, cwd=str(work_dir), env={"PULUMI_K8S_DELETE_UNREACHABLE": "true"})
                 
                 if result.returncode == 0:
                     success(f"  ✓ Cleaned up {component}")
@@ -213,7 +208,7 @@ def orphaned(
     infra_stack = StackNaming.get_stack_name("infra", env)
     
     cmd = ["pulumi", "stack", "--cwd", str(infra_work_dir), "--stack", infra_stack]
-    infra_result = subprocess.run(cmd, capture_output=True, text=True)
+    infra_result = run_pulumi_command(cmd, cwd=str(infra_work_dir), capture_output=True, text=True)
     
     infra_exists = infra_result.returncode == 0
     
@@ -227,8 +222,8 @@ def orphaned(
             stack_name = StackNaming.get_stack_name(component, env)
             
             cmd = ["pulumi", "stack", "--cwd", str(work_dir), "--stack", stack_name]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
+            result = run_pulumi_command(cmd, cwd=str(work_dir), capture_output=True, text=True)
+
             if result.returncode == 0:
                 orphaned.append(component)
         
@@ -258,8 +253,10 @@ def orphaned(
                     "--stack", stack_name,
                     "--yes"
                 ]
-                
-                result = subprocess.run(cmd, env=env_vars, capture_output=True, text=True)
+
+                result = run_pulumi_command(cmd, cwd=str(work_dir),
+                                           env={"PULUMI_K8S_DELETE_UNREACHABLE": "true"},
+                                           capture_output=True, text=True)
                 
                 if result.returncode == 0:
                     success(f"  ✓ Destroyed {component}")
@@ -326,12 +323,14 @@ def reset(
         
         # Destroy resources
         cmd = ["pulumi", "destroy", "--cwd", str(work_dir), "--stack", stack_name, "--yes"]
-        subprocess.run(cmd, env=env_vars, capture_output=True, text=True)
+        run_pulumi_command(cmd, cwd=str(work_dir),
+                          env={"PULUMI_K8S_DELETE_UNREACHABLE": "true"},
+                          capture_output=True, text=True)
         
         # Remove the stack entirely
         cmd = ["pulumi", "stack", "rm", "--cwd", str(work_dir), "--stack", stack_name, "--yes"]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
+        result = run_pulumi_command(cmd, cwd=str(work_dir), capture_output=True, text=True)
+
         if result.returncode == 0:
             success(f"✓ Reset {comp} complete")
         else:

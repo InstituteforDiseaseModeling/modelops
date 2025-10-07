@@ -70,8 +70,8 @@ def save_environment_config(
         else:
             container_names = containers
 
-        # Use the primary container (bundles) for the singular container field
-        primary_container = "bundles" if "bundles" in container_names else (container_names[0] if container_names else "bundles")
+        # Use the primary container (bundle-blobs) for the singular container field
+        primary_container = "bundle-blobs" if "bundle-blobs" in container_names else (container_names[0] if container_names else "bundle-blobs")
 
         storage = StorageConfig(
             provider="azure",  # Default for now
@@ -175,7 +175,7 @@ def create_local_dev_config() -> Path:
 
     storage = StorageConfig(
         provider="azure",  # Azurite is Azure-compatible
-        container="bundles",
+        container="bundle-blobs",
         connection_string=(
             "DefaultEndpointsProtocol=http;"
             "AccountName=devstoreaccount1;"

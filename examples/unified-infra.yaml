@@ -31,15 +31,17 @@ cluster:
         max: 10
 
 # Storage configuration
+# Note: Standard containers are automatically created:
+# - bundle-blobs: Large files referenced by OCI bundles
+# - workspace: Scratch space with auto-cleanup
+# - results: Permanent experiment outputs
+# - jobs: Kubernetes job metadata
 storage:
   provider: azure
   account_name: modelopsdev
   resource_group: modelops
   location: eastus2
-  containers:
-    - name: bundles
-    - name: results
-    - name: artifacts
+  # Containers are no longer configurable - standard set is used
 
 # Workspace configuration
 workspace:

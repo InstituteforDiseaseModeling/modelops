@@ -110,9 +110,8 @@ class ResourceGroup(pulumi.ComponentResource):
                 f"{name}-rg",
                 id=rg_id,
                 opts=pulumi.ResourceOptions(
-                    parent=self,
-                    protect=True  # Prevent accidental deletion
-                    # Note: NO retain_on_delete - we want actual deletion when destroyed
+                    parent=self
+                    # Note: NO protect or retain_on_delete - we use --delete-rg flag for safety
                 )
             )
 
@@ -139,9 +138,8 @@ class ResourceGroup(pulumi.ComponentResource):
                 location=location,
                 tags=tags,
                 opts=pulumi.ResourceOptions(
-                    parent=self,
-                    protect=True  # Prevent accidental deletion
-                    # Note: NO retain_on_delete - we want actual deletion when destroyed
+                    parent=self
+                    # Note: NO protect or retain_on_delete - we use --delete-rg flag for safety
                 )
             )
 

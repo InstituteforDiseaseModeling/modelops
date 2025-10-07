@@ -1,12 +1,11 @@
 """Service for Azure Resource Group management."""
 
 from typing import Dict, Any, Optional
-import os
 
 from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
 from .utils import stack_exists
 from ..core import StackNaming, automation
-from ..core.automation import get_output_value, _ensure_passphrase
+from ..core.automation import get_output_value
 from ..core.paths import ensure_work_dir
 from ..core.state_manager import PulumiStateManager
 
@@ -104,35 +103,7 @@ class ResourceGroupService(BaseService):
         Raises:
             Exception: If destruction fails
         """
-        import subprocess
-
-        # Ensure passphrase is configured for subprocess
-        _ensure_passphrase()
-
-        # First, we need to unprotect the resource group since it's created with protect=True
-        # Get the URN of the resource group to unprotect it
-        work_dir = ensure_work_dir("resource-group")
-        stack_name = StackNaming.get_stack_name("resource-group", self.env)
-
-        # Unprotect the resource group before destroying
-        print("  Unprotecting resource group for deletion...")
-        # Build the URN dynamically based on environment
-        urn = f"urn:pulumi:modelops-resource-group-{self.env}::modelops-resource-group::modelops:azure:ResourceGroup$azure-native:resources:ResourceGroup::resource-group-rg"
-
-        unprotect_cmd = [
-            "pulumi", "state", "unprotect",
-            urn,
-            "--stack", stack_name,
-            "--cwd", str(work_dir),
-            "--yes"
-        ]
-
-        result = subprocess.run(unprotect_cmd, capture_output=True, text=True, env=os.environ.copy())
-        if result.returncode != 0 and "not protected" not in result.stderr:
-            # Only fail if it's not already unprotected
-            print(f"  Warning: Could not unprotect resource group: {result.stderr}")
-
-        # Now destroy using PulumiStateManager
+        # Destroy using PulumiStateManager
         state_manager = PulumiStateManager("resource-group", self.env)
         capture = OutputCapture(verbose)
 

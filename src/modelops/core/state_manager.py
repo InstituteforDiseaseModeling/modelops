@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+from .subprocess_utils import run_pulumi_command
 import time
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -210,13 +211,12 @@ class PulumiStateManager:
         stack_name = self._get_stack_name()
 
         try:
-            result = subprocess.run(
+            result = run_pulumi_command(
                 ["pulumi", "cancel", "--yes", "-s", stack_name],
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
-                timeout=30,
-                env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
+                timeout=30
             )
 
             if result.returncode == 0:
@@ -246,13 +246,12 @@ class PulumiStateManager:
             if pending_ops:
                 print(f"  ⚠ Found {len(pending_ops)} pending operations, running interactive refresh...")
                 # For pending CREATE operations, we need to run refresh with --yes to clear them
-                result = subprocess.run(
+                result = run_pulumi_command(
                     ["pulumi", "refresh", "--yes", "--skip-preview", "-s", stack_name],
                     cwd=self.work_dir,
                     capture_output=True,
                     text=True,
-                    timeout=60,
-                    env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
+                    timeout=60
                 )
 
                 if result.returncode == 0:
@@ -286,13 +285,12 @@ class PulumiStateManager:
 
         try:
             # Use pulumi stack export to check for pending operations
-            result = subprocess.run(
+            result = run_pulumi_command(
                 ["pulumi", "stack", "export", "-s", self._get_stack_name()],
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
-                timeout=10,
-                env=os.environ.copy()  # Pass current environment including PULUMI_CONFIG_PASSPHRASE_FILE
+                timeout=10
             )
 
             if result.returncode == 0:

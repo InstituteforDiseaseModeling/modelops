@@ -9,31 +9,15 @@ provider: azure
 sku: Standard_LRS  # Standard_LRS (cheapest), Standard_GRS, Premium_LRS
 # location: eastus2  # Inherits from infrastructure if not specified
 
-# Containers for different purposes
-containers:
-  - name: bundles
-    purpose: "OCI artifacts and small model packages (<100MB)"
-    access_level: private
-    
-  - name: bundle-blobs
-    purpose: "Large files referenced by bundles (>100MB, sharded storage)"
-    access_level: private
-    
-  - name: workspace
-    purpose: "Scratch space for active computations"
-    access_level: private
-    lifecycle_days: 60  # Auto-delete files older than 60 days
-    
-  - name: results
-    purpose: "Permanent experiment outputs and metrics"
-    access_level: private
-    
-  - name: tasks
-    purpose: "ZeroOps task registry definitions"
-    access_level: private
+# Standard containers are automatically created:
+# - bundle-blobs: Large files (>50MB) referenced by OCI bundles in ACR
+# - workspace: Scratch space with 7-day auto-cleanup
+# - results: Permanent experiment outputs
+# - jobs: Kubernetes job metadata
+#
+# Note: Bundles themselves are stored in ACR (container registry), not blob storage
 
 # Notes:
 # - Connection string will be exported to ~/.modelops/storage.env
 # - K8s secrets automatically created for pod access
 # - All containers are private by default for security
-# - Workspace container has automatic cleanup after 7 days
