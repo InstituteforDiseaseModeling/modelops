@@ -36,8 +36,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-modelops-bundle = { path = "../modelops-bundle" }
 modelops-contracts = { path = "../modelops-contracts", editable = true }
+modelops-bundle = { path = "../modelops-bundle", editable = true }
 
 [dependency-groups]
 azure = [

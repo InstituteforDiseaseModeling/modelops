@@ -25,6 +25,7 @@ import pytest
 import pulumi.automation as auto
 
 from modelops.core import automation
+from modelops.core.config import ModelOpsConfig
 
 
 class TestPulumiPassphrase:
@@ -39,8 +40,14 @@ class TestPulumiPassphrase:
         with tempfile.TemporaryDirectory() as tmpdir:
             work_dir = Path(tmpdir)
 
-            # Call workspace_options
-            opts = automation.workspace_options("test-project", work_dir)
+            # Mock the config to avoid needing config file
+            mock_config = MagicMock(spec=ModelOpsConfig)
+            mock_pulumi = MagicMock()
+            mock_pulumi.backend_url = f"file://{tmpdir}"
+            mock_config.pulumi = mock_pulumi
+            with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+                # Call workspace_options
+                opts = automation.workspace_options("test-project", work_dir)
 
             # CRITICAL ASSERTION: env_vars must not be None
             assert opts.env_vars is not None, (
@@ -65,8 +72,14 @@ class TestPulumiPassphrase:
             with tempfile.TemporaryDirectory() as tmpdir:
                 work_dir = Path(tmpdir)
 
-                # Call workspace_options
-                opts = automation.workspace_options("test-project", work_dir)
+                # Mock the config to avoid needing config file
+                mock_config = MagicMock(spec=ModelOpsConfig)
+                mock_pulumi = MagicMock()
+                mock_pulumi.backend_url = f"file://{tmpdir}"
+                mock_config.pulumi = mock_pulumi
+                with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+                    # Call workspace_options
+                    opts = automation.workspace_options("test-project", work_dir)
 
                 # Verify direct passphrase is NOT in env_vars
                 assert "PULUMI_CONFIG_PASSPHRASE" not in opts.env_vars, (
@@ -154,10 +167,16 @@ class TestPulumiPassphrase:
         """Verify that select_stack always ensures passphrase is configured."""
         with patch('modelops.core.automation._ensure_passphrase') as mock_ensure:
             with patch('modelops.core.automation.auto.create_or_select_stack') as mock_create:
-                mock_create.return_value = MagicMock()
+                # Mock the config to avoid needing config file
+                mock_config = MagicMock(spec=ModelOpsConfig)
+                mock_pulumi = MagicMock()
+                mock_pulumi.backend_url = "file:///tmp/test"
+                mock_config.pulumi = mock_pulumi
+                with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+                    mock_create.return_value = MagicMock()
 
-                # Call select_stack with a valid component
-                automation.select_stack("infra", "dev")
+                    # Call select_stack with a valid component
+                    automation.select_stack("infra", "dev")
 
                 # Verify _ensure_passphrase was called (twice: once in select_stack, once in workspace_options)
                 assert mock_ensure.call_count == 2
