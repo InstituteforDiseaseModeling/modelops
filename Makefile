@@ -65,10 +65,18 @@ help:
 	@echo "  make test-e2e-fresh    # Run e2e tests with fresh venvs (debugging)"
 	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
 	@echo ""
-	@echo "Docker Commands:"
-	@echo "  make build            # Build and push AMD64 images (scheduler, worker, runner)"
-	@echo "  make build-mac        # Build images for dev Mac (Apple Silicon/ARM64)"
-	@echo "  make build-multiarch  # Build all images for AMD64 deployment"
+	@echo "Docker Commands (ALWAYS BUILDS FOR DEPLOYMENT):"
+	@echo "  make build            # Build ALL images for K8s deployment (linux/amd64)"
+	@echo "  make build-worker     # Build worker image for K8s deployment (linux/amd64)"
+	@echo "  make build-scheduler  # Build scheduler image for K8s deployment (linux/amd64)"
+	@echo "  make build-runner     # Build runner image for K8s deployment (linux/amd64)"
+	@echo "  make deploy           # Build ALL images and rollout to cluster"
+	@echo "  make deploy-worker    # Build worker and rollout to cluster"
+	@echo ""
+	@echo "Local Testing Only:"
+	@echo "  make build-worker-local     # Build worker for Mac testing (ARM64)"
+	@echo "  make build-scheduler-local  # Build scheduler for Mac testing (ARM64)"
+	@echo "  make build-runner-local     # Build runner for Mac testing (ARM64)"
 	@echo "  make setup-buildx     # Setup Docker buildx for multi-arch"
 	@echo "  make release          # Tag and push release version"
 	@echo "  make update-cluster   # Update cluster with new images"
@@ -110,9 +118,10 @@ lint:
 .PHONY: build build-scheduler build-worker build-multiarch build-mac setup-buildx
 .PHONY: ghcr-login release update-cluster clean-images show-images test-images check-visibility make-public
 
-## Build all Docker images (multi-architecture for deployment)
-build: build-multiarch check-visibility 
-	@echo "✓ Built and pushed images with version: $(VERSION)"
+## Build all images for deployment (linux/amd64) - USE THIS FOR DEPLOYMENT
+build: build-scheduler build-worker build-runner check-visibility
+	@echo "✓ All images built and pushed for DEPLOYMENT (linux/amd64)"
+	@echo "✓ Version: $(VERSION)"
 
 ## Setup Docker buildx for multi-architecture builds
 setup-buildx:
@@ -177,35 +186,74 @@ build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarc
 	@echo "  $(RUNNER_IMAGE):$(TAG)"
 	@echo "  $(RUNNER_IMAGE):$(VERSION)"
 
-## Build Dask scheduler image
-build-scheduler:
-	@echo "Building Dask scheduler image: $(SCHEDULER_IMAGE):$(TAG)"
-	@echo "Note: Requires ../modelops-contracts and ../calabaria to exist"
-	docker build \
+## Build scheduler for deployment (linux/amd64) - THIS IS WHAT YOU WANT
+build-scheduler: setup-buildx ghcr-login
+	@echo "Building scheduler for DEPLOYMENT (linux/amd64): $(SCHEDULER_IMAGE):$(TAG)"
+	@docker buildx build \
+		--no-cache \
+		--platform linux/amd64 \
 		-f docker/Dockerfile.scheduler \
 		-t $(SCHEDULER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
 		$(BUILD_CONTEXT)
+	@echo "✓ Scheduler built and pushed for linux/amd64"
 
-## Build Dask worker image  
-build-worker:
-	@echo "Building Dask worker image: $(WORKER_IMAGE):$(TAG)"
-	@echo "Note: Requires ../modelops-contracts and ../calabaria to exist"
+## Build scheduler for local Mac testing only
+build-scheduler-local:
+	@echo "Building scheduler for LOCAL MAC testing: $(SCHEDULER_IMAGE):local"
 	docker build \
+		-f docker/Dockerfile.scheduler \
+		-t $(SCHEDULER_IMAGE):local \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		$(BUILD_CONTEXT)
+	@echo "✓ Local scheduler built (NOT pushed, use :local tag)"
+
+## Build worker for deployment (linux/amd64) - THIS IS WHAT YOU WANT
+build-worker: setup-buildx ghcr-login
+	@echo "Building worker for DEPLOYMENT (linux/amd64): $(WORKER_IMAGE):$(TAG)"
+	@docker buildx build \
+		--no-cache \
+		--platform linux/amd64 \
 		-f docker/Dockerfile.worker \
 		-t $(WORKER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
 		$(BUILD_CONTEXT)
+	@echo "✓ Worker built and pushed for linux/amd64"
 
-## Build job runner image
-build-runner:
-	@echo "Building job runner image: $(RUNNER_IMAGE):$(TAG)"
-	@echo "Note: Requires ../modelops-contracts to exist"
+## Build worker for local Mac testing only
+build-worker-local:
+	@echo "Building worker for LOCAL MAC testing: $(WORKER_IMAGE):local"
 	docker build \
+		-f docker/Dockerfile.worker \
+		-t $(WORKER_IMAGE):local \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		$(BUILD_CONTEXT)
+	@echo "✓ Local worker built (NOT pushed, use :local tag)"
+
+## Build runner for deployment (linux/amd64) - THIS IS WHAT YOU WANT
+build-runner: setup-buildx ghcr-login
+	@echo "Building runner for DEPLOYMENT (linux/amd64): $(RUNNER_IMAGE):$(TAG)"
+	@docker buildx build \
+		--no-cache \
+		--platform linux/amd64 \
 		-f docker/Dockerfile.runner \
 		-t $(RUNNER_IMAGE):$(TAG) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--push \
 		$(BUILD_CONTEXT)
+	@echo "✓ Runner built and pushed for linux/amd64"
+
+## Build runner for local Mac testing only
+build-runner-local:
+	@echo "Building runner for LOCAL MAC testing: $(RUNNER_IMAGE):local"
+	docker build \
+		-f docker/Dockerfile.runner \
+		-t $(RUNNER_IMAGE):local \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		$(BUILD_CONTEXT)
+	@echo "✓ Local runner built (NOT pushed, use :local tag)"
 
 
 ## Login to GitHub Container Registry
@@ -343,7 +391,14 @@ test-images:
 
 # === Combined Workflows ===
 
-.PHONY: dev-setup dev-test dev-deploy
+.PHONY: dev-setup dev-test dev-deploy deploy-worker
+
+## Quick worker deployment (build + rollout) - MOST COMMON WORKFLOW
+deploy-worker: build-worker rollout-images
+
+## Deploy all images (build + rollout) - Full deployment workflow
+deploy: build rollout-images
+	@echo "✓ Worker deployed! Check with: kubectl -n $(NAMESPACE) get pods"
 
 ## Build and test everything
 dev-test: test test-images

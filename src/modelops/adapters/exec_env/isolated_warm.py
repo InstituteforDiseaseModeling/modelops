@@ -195,6 +195,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Returns:
             Tuple of (digest, local_path)
         """
+        # SimTask supports both sha256:... and repository@sha256:... formats
+        # The bundle repository should handle both
         return self.bundle_repo.ensure_local(bundle_ref)
 
 

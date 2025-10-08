@@ -34,7 +34,8 @@ class StoredResult:
 
 
 class ProvenanceStore:
-    """Unified storage for all simulation and aggregation results.
+    """
+    Unified storage for all simulation and aggregation results.
 
     Uses provenance-based (input-addressed) storage to enable
     efficient caching and invalidation. For MVP, always stores

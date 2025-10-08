@@ -30,11 +30,8 @@ def submit(
     bundle: Optional[str] = typer.Option(
         None, "--bundle", "-b", help="Explicit bundle reference (sha256:...)"
     ),
-    build: bool = typer.Option(
-        False, "--build", help="Build and push bundle from current directory"
-    ),
-    latest: bool = typer.Option(
-        False, "--latest", help="Use latest bundle from registry"
+    auto: bool = typer.Option(
+        False, "--auto", help="Auto-push bundle from current directory"
     ),
     env: Optional[str] = env_option(),
 ):
@@ -45,16 +42,15 @@ def submit(
     to blob storage to avoid ConfigMap size limits.
 
     Examples:
-        # Use explicit bundle
+        # Auto-push current directory and submit
+        mops jobs submit study.json --auto
+
+        # Use explicit bundle digest
         mops jobs submit study.json --bundle sha256:abc123...
-
-        # Use latest bundle from registry
-        mops jobs submit study.json --latest
-
-        # Build and push current directory
-        mops jobs submit study.json --build
     """
-    env = env or "dev"
+    # Use config default if env not specified
+    from .utils import resolve_env
+    env = resolve_env(env)
 
     # Load study from JSON
     section("Loading simulation study")
@@ -88,21 +84,57 @@ def submit(
         error(f"Failed to load study file: {e}")
         raise typer.Exit(1)
 
-    # Determine bundle strategy
-    if build:
-        strategy = "build"
-        bundle_ref = None
-        info("\n📦 Will build and push bundle from current directory")
-    elif latest:
-        strategy = "latest"
-        bundle_ref = None
-        info("\n📦 Will use latest bundle from registry")
+    # Determine bundle reference
+    if auto and bundle:
+        error("Cannot use both --auto and --bundle")
+        raise typer.Exit(1)
+
+    if auto:
+        # Auto-push bundle from current directory
+        section("Auto-pushing bundle")
+        try:
+            from modelops_bundle.api import push_dir
+            from modelops_bundle.ops import load_config
+
+            info("  Building and pushing bundle from current directory...")
+            digest = push_dir(".")
+
+            # Get repository name from bundle config
+            try:
+                config = load_config()
+                registry_ref = config.registry_ref  # e.g. "acr.io/my-project"
+
+                # Extract repository name from registry_ref
+                if '/' in registry_ref:
+                    repository_name = registry_ref.split('/', 1)[1]
+                    bundle_ref = f"{repository_name}@{digest}"
+                else:
+                    # Fallback to digest-only if parsing fails
+                    warning(f"  Could not parse repository from registry_ref: {registry_ref}")
+                    bundle_ref = digest
+            except Exception as e:
+                warning(f"  Could not load bundle config: {e}")
+                warning("  Using digest-only reference")
+                bundle_ref = digest
+
+            success(f"  ✓ Pushed bundle: {bundle_ref[:50]}...")
+
+        except ImportError:
+            error("\nAuto-push requires modelops-bundle. Install with:")
+            error("  uv pip install 'modelops[bundle]'")
+            raise typer.Exit(1)
+        except FileNotFoundError:
+            error("\nCurrent directory is not a bundle project.")
+            error("Initialize with: modelops-bundle init .")
+            raise typer.Exit(1)
+        except Exception as e:
+            error(f"\nBundle push failed: {e}")
+            raise typer.Exit(1)
     elif bundle:
-        strategy = "explicit"
         bundle_ref = bundle
-        info(f"\n📦 Using explicit bundle: {bundle[:20]}...")
+        info(f"\n📦 Using explicit bundle: {bundle_ref[:20]}...")
     else:
-        error("Must specify --bundle, --latest, or --build")
+        error("Must specify either --bundle or --auto")
         raise typer.Exit(1)
 
     # Submit using client
@@ -111,7 +143,7 @@ def submit(
 
     try:
         job_id = client.submit_sim_job(
-            study=study, bundle_strategy=strategy, bundle_ref=bundle_ref
+            study=study, bundle_strategy="explicit", bundle_ref=bundle_ref
         )
 
         success(f"\n✓ Job submitted successfully!")

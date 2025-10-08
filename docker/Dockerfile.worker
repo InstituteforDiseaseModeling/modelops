@@ -26,17 +26,20 @@ RUN pip install --no-cache-dir \
 # Copy local repositories (these must exist at build time)
 # Build context should be the parent directory containing all repos
 COPY modelops-contracts /tmp/modelops-contracts
-COPY calabaria /tmp/calabaria
 COPY modelops /tmp/modelops
 COPY modelops-bundle /tmp/modelops-bundle
 
 # Install modelops dependencies
+# Note: calabaria is NOT needed in workers (science framework)
+# Workers need:
+#   - modelops (for worker code)
+#   - modelops-contracts (for protocols)
+#   - modelops-bundle (for pulling bundles from registry)
 RUN pip install --no-cache-dir \
     /tmp/modelops-contracts \
-    /tmp/calabaria \
     /tmp/modelops \
     /tmp/modelops-bundle \
-    && rm -rf /tmp/modelops-contracts /tmp/calabaria /tmp/modelops /tmp/modelops-bundle
+    && rm -rf /tmp/modelops-contracts /tmp/modelops /tmp/modelops-bundle
 
 # Switch to non-root user
 USER 1000

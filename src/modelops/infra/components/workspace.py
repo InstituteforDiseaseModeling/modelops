@@ -236,7 +236,31 @@ class DaskWorkspace(pulumi.ComponentResource):
                     depends_on=[ns]
                 )
             )
-        
+
+        # Create GitHub credentials secret for private repo access (e.g., modelops-calabaria)
+        github_token = os.getenv("GITHUB_TOKEN")
+        if github_token:
+            github_secret = k8s.core.v1.Secret(
+                f"{name}-github-credentials",
+                metadata=k8s.meta.v1.ObjectMetaArgs(
+                    name="github-credentials",
+                    namespace=namespace
+                ),
+                string_data={
+                    "GITHUB_TOKEN": github_token,
+                    # For git operations via HTTPS
+                    "GIT_USERNAME": "x-access-token",
+                    "GIT_PASSWORD": github_token,
+                    # For UV to use when installing from private GitHub repos
+                    "UV_EXTRA_INDEX_URL": f"git+https://x-access-token:{github_token}@github.com/",
+                },
+                opts=pulumi.ResourceOptions(
+                    provider=k8s_provider,
+                    parent=self,
+                    depends_on=[ns]
+                )
+            )
+
         # No image pull secrets needed for public GHCR images
         pull_secrets = []
 
@@ -289,6 +313,15 @@ class DaskWorkspace(pulumi.ComponentResource):
                 secret_ref=k8s.core.v1.SecretEnvSourceArgs(
                     name="bundle-credentials"
                     # No optional=True - fail fast if missing when expected
+                )
+            ))
+
+        # Add GitHub credentials for private repo access
+        if github_token:
+            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
+                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                    name="github-credentials",
+                    optional=True  # Optional since not all bundles need private deps
                 )
             ))
 

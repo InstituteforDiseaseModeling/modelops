@@ -288,7 +288,7 @@ class TestSimulationIntegration:
         # Submit task
         task = SimTask(
             bundle_ref=TEST_BUNDLE_REF,
-            entrypoint="examples.simulations.monte_carlo_pi/test",
+            entrypoint="simulations.monte_carlo_pi/test",
             params=UniqueParameterSet.from_dict({"n_samples": 1000}),
             seed=42
         )

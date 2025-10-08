@@ -742,6 +742,235 @@ def validate_bundle(
 
 
 @app.command()
+def check_credentials(
+    env: str = typer.Option("dev", "--env", "-e", help="Environment"),
+    namespace: Optional[str] = typer.Option(None, "--namespace", "-n", help="K8s namespace")
+):
+    """Check if worker pods have all required credentials.
+
+    Verifies that workers have the necessary environment variables
+    for bundle fetching and storage operations.
+
+    Example:
+        mops dev check-credentials
+        mops dev check-credentials --env prod
+    """
+    if not namespace:
+        namespace = f"modelops-dask-{env}"
+
+    info(f"Checking credentials in namespace: {namespace}")
+
+    # Required environment variables to check
+    required_vars = [
+        ("REGISTRY_USERNAME", "ACR username for bundle pulls"),
+        ("REGISTRY_PASSWORD", "ACR password for bundle pulls"),
+        ("AZURE_STORAGE_CONNECTION_STRING", "Azure blob storage access"),
+        ("AZURE_STORAGE_ACCOUNT", "Azure storage account name"),
+        ("MODELOPS_BUNDLE_REGISTRY", "Registry URL for bundles")
+    ]
+
+    # Optional but useful variables
+    optional_vars = [
+        ("MODELOPS_BUNDLE_INSECURE", "Allow insecure registry (dev only)"),
+        ("MODELOPS_STORAGE_BACKEND", "Storage backend type (local/azure)"),
+        ("GITHUB_TOKEN", "GitHub PAT for private repo access"),
+        ("GIT_USERNAME", "Git username for HTTPS operations"),
+        ("GIT_PASSWORD", "Git password for HTTPS operations")
+    ]
+
+    info("\n✓ = Set, ✗ = Missing\n")
+
+    missing_required = []
+
+    # Check required variables
+    console.print("[bold]Required Variables:[/bold]")
+    for var_name, description in required_vars:
+        result = subprocess.run(
+            ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
+             "--", "sh", "-c", f"echo ${{{var_name}}}"],
+            capture_output=True, text=True
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            # Variable is set
+            if "PASSWORD" in var_name or "CONNECTION_STRING" in var_name:
+                # Don't show sensitive values
+                console.print(f"  [green]✓[/green] {var_name}: [dim]{description}[/dim]")
+            else:
+                # Show non-sensitive values
+                value = result.stdout.strip()
+                console.print(f"  [green]✓[/green] {var_name}: {value} [dim]({description})[/dim]")
+        else:
+            # Variable is missing
+            console.print(f"  [red]✗[/red] {var_name}: [red]Missing[/red] [dim]({description})[/dim]")
+            missing_required.append(var_name)
+
+    # Check optional variables
+    console.print("\n[bold]Optional Variables:[/bold]")
+    for var_name, description in optional_vars:
+        result = subprocess.run(
+            ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
+             "--", "sh", "-c", f"echo ${{{var_name}}}"],
+            capture_output=True, text=True
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            value = result.stdout.strip()
+            console.print(f"  [green]✓[/green] {var_name}: {value} [dim]({description})[/dim]")
+        else:
+            console.print(f"  [dim]✗ {var_name}: Not set ({description})[/dim]")
+
+    # Summary
+    console.print("\n" + "─" * 60)
+    if missing_required:
+        error(f"Missing {len(missing_required)} required credential(s)")
+        info("\nTo fix, ensure these secrets are mounted:")
+        info("  • bundle-credentials (for registry access)")
+        info("  • modelops-storage (for blob storage)")
+        info("\nCheck deployment: kubectl describe deployment dask-workers -n " + namespace)
+        raise typer.Exit(1)
+    else:
+        success("All required credentials are present!")
+
+
+@app.command()
+def test_bundle_fetch(
+    bundle_ref: str = typer.Argument(..., help="Bundle reference to test (e.g., sha256:abc123...)"),
+    env: str = typer.Option("dev", "--env", "-e", help="Environment"),
+    namespace: Optional[str] = typer.Option(None, "--namespace", "-n", help="K8s namespace")
+):
+    """Test if workers can fetch a bundle from the registry.
+
+    This command runs a test script inside a worker pod to verify
+    that bundle fetching works with the current credentials.
+
+    Example:
+        mops dev test-bundle-fetch sha256:a7671b13481871066dde8a541dcbca5781fd5eb3234d43df7cae96ffe8147965
+        mops dev test-bundle-fetch simulation-workflow@sha256:abc123...
+    """
+    if not namespace:
+        namespace = f"modelops-dask-{env}"
+
+    info(f"Testing bundle fetch in namespace: {namespace}")
+    info(f"Bundle reference: {bundle_ref}")
+
+    # Create a Python test script to run in the worker
+    test_script = f'''
+import os
+import sys
+import traceback
+
+# Check if we have the registry configured
+registry = os.getenv("MODELOPS_BUNDLE_REGISTRY")
+if not registry:
+    print("✗ MODELOPS_BUNDLE_REGISTRY not set", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Registry: {{registry}}")
+print(f"Testing bundle: {bundle_ref}")
+
+# Check if we have credentials
+has_username = bool(os.getenv("REGISTRY_USERNAME"))
+has_password = bool(os.getenv("REGISTRY_PASSWORD"))
+print(f"Credentials: username={{has_username}}, password={{has_password}}")
+
+try:
+    # Import the bundle repository
+    from modelops_bundle.repository import ModelOpsBundleRepository
+
+    # Create repository instance
+    repo = ModelOpsBundleRepository(
+        registry_ref=registry,
+        cache_dir="/tmp/modelops/bundles",
+        insecure=os.getenv("MODELOPS_BUNDLE_INSECURE", "false").lower() == "true"
+    )
+
+    print("\\nAttempting to fetch bundle...")
+    result = repo.ensure_local("{bundle_ref}")
+
+    # Handle both tuple (digest, path) and plain path returns
+    if isinstance(result, tuple):
+        digest, local_path = result
+        print(f"✓ Bundle fetched successfully!")
+        print(f"  Digest: {{digest}}")
+        print(f"  Local path: {{local_path}}")
+    else:
+        local_path = result
+        print(f"✓ Bundle fetched successfully!")
+        print(f"  Local path: {{local_path}}")
+
+    # Check if it's a directory
+    import os.path
+    if os.path.isdir(local_path):
+        # List contents
+        import os
+        contents = os.listdir(local_path)
+        print(f"  Contents: {{', '.join(contents[:5])}}")
+        if len(contents) > 5:
+            print(f"  ... and {{len(contents)-5}} more files")
+
+except ImportError as e:
+    print(f"✗ Import error: {{e}}", file=sys.stderr)
+    print("  modelops-bundle might not be installed in the worker image", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"✗ Bundle fetch failed: {{e}}", file=sys.stderr)
+    print("\\nFull traceback:", file=sys.stderr)
+    traceback.print_exc()
+
+    # Check if it's an auth error
+    if "401" in str(e) or "Unauthorized" in str(e):
+        print("\\nThis appears to be an authentication issue.", file=sys.stderr)
+        print("Check that ACR credentials are correct and have pull permissions.", file=sys.stderr)
+    elif "404" in str(e) or "Not found" in str(e):
+        print("\\nBundle not found in registry.", file=sys.stderr)
+        print("Check that the bundle has been pushed to the registry.", file=sys.stderr)
+    elif "JSONDecodeError" in str(e) or "Expecting value" in str(e):
+        print("\\nReceived non-JSON response (likely an HTML error page).", file=sys.stderr)
+        print("This usually indicates an authentication or configuration issue.", file=sys.stderr)
+
+    sys.exit(1)
+'''
+
+    # Run the test script in a worker pod
+    info("\nRunning test script in worker pod...")
+    result = subprocess.run(
+        ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
+         "--", "python", "-c", test_script],
+        capture_output=True, text=True
+    )
+
+    # Display output
+    if result.stdout:
+        for line in result.stdout.split('\n'):
+            if line.strip():
+                if '✓' in line:
+                    success(line)
+                elif '✗' in line:
+                    error(line)
+                else:
+                    console.print(line)
+
+    if result.stderr:
+        for line in result.stderr.split('\n'):
+            if line.strip():
+                error(line)
+
+    # Exit with appropriate code
+    if result.returncode != 0:
+        console.print("\n" + "─" * 60)
+        error("Bundle fetch test failed!")
+        info("\nTroubleshooting steps:")
+        info("  1. Check credentials: mops dev check-credentials")
+        info("  2. Verify bundle exists in registry")
+        info("  3. Check worker logs: kubectl logs -n " + namespace + " -l app=dask-worker")
+        raise typer.Exit(1)
+    else:
+        console.print("\n" + "─" * 60)
+        success("Bundle fetch test passed! Workers can pull bundles from the registry.")
+
+
+@app.command()
 def quick_sim(
     params: str = typer.Argument(..., help="JSON params string or @file.json"),
     bundle_ref: str = typer.Option(..., "--bundle", help="Bundle reference (sha256:...)"),

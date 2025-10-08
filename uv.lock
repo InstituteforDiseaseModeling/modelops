@@ -596,7 +596,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "azure-storage-blob", extras = ["azure"], specifier = ">=12.26.0" },
+    { name = "azure-storage-blob", specifier = ">=12.26.0" },
     { name = "dask", extras = ["distributed"], specifier = "==2024.8.0" },
     { name = "kubernetes", specifier = ">=28.0.0" },
     { name = "modelops-contracts", editable = "../modelops-contracts" },
@@ -616,7 +616,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 azure = [{ name = "azure-storage-blob", specifier = ">=12.26.0" }]
-bundle = [{ name = "modelops-bundle", directory = "../modelops-bundle" }]
+bundle = [{ name = "modelops-bundle", editable = "../modelops-bundle" }]
 dev = [
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
@@ -626,7 +626,7 @@ dev = [
 [[package]]
 name = "modelops-bundle"
 version = "0.1.0"
-source = { directory = "../modelops-bundle" }
+source = { editable = "../modelops-bundle" }
 dependencies = [
     { name = "azure-storage-blob" },
     { name = "modelops-contracts" },
@@ -643,7 +643,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "azure-storage-blob", specifier = ">=12.14.0" },
-    { name = "modelops-contracts", editable = "../modelops-contracts" },
+    { name = "modelops-contracts", specifier = ">=0.1.0" },
     { name = "oras", git = "https://github.com/vsbuffalo/oras-py.git" },
     { name = "pathspec", specifier = ">=0.12.1" },
     { name = "portalocker", specifier = ">=3.2.0" },
@@ -669,12 +669,14 @@ version = "0.1.0"
 source = { editable = "../modelops-contracts" }
 dependencies = [
     { name = "pydantic" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 provides-extras = ["dev"]
 

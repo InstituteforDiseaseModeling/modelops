@@ -35,7 +35,13 @@ def up(
         mops infra up --config ~/.modelops/providers/azure.yaml
     """
     env = resolve_env(env)
-    
+
+    # Validate config file exists
+    if not config.exists():
+        error(f"Configuration file not found: {config}")
+        info("Please provide a valid provider configuration file")
+        raise typer.Exit(1)
+
     # Load and validate configuration
     provider_config = AzureProviderConfig.from_yaml(config)
     
@@ -105,7 +111,13 @@ def down(
     Use --delete-rg to also delete the resource group.
     """
     env = resolve_env(env)
-    
+
+    # Validate config file exists
+    if not config.exists():
+        error(f"Configuration file not found: {config}")
+        info("Please provide a valid provider configuration file")
+        raise typer.Exit(1)
+
     # Load and validate configuration
     provider_config = AzureProviderConfig.from_yaml(config)
     

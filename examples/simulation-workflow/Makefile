@@ -1,126 +1,217 @@
-# K8s Job Submission Workflow Test
-# This Makefile simulates a user environment for testing ModelOps job submission
+# ------------------------------------------------------------
+# K8s Job Submission Workflow Test (cleaned up)
+# ------------------------------------------------------------
 
+.DEFAULT_GOAL := help
+SHELL := bash
+.SHELLFLAGS := -eu -o pipefail -c
+.ONESHELL:
+
+# --- Repo layout (adjust if your paths differ) ---
+REPO_ROOT   := $(abspath ../../..)
+CONTRACTS   := $(REPO_ROOT)/modelops-contracts
+BUNDLE      := $(REPO_ROOT)/modelops-bundle
+CALABARIA   := $(REPO_ROOT)/modelops-calabaria
+MODELOPS    := $(abspath ../..)  # Current repo is modelops
+
+# --- Example config ---
 MODEL_CLASS := models.seir:StochasticSEIR
-STUDY_FILE := study.json
-N_SAMPLES := 20
-TAG := seir-test
+STUDY_FILE  := study.json
+N_SAMPLES   := 20
+NAMESPACE   := modelops-dask-dev
 
-# Virtual environment for user-like setup
-VENV := .venv
-ACTIVATE := . $(VENV)/bin/activate
-PYTHONPATH_PREFIX := PYTHONPATH=$(PWD):$$PYTHONPATH
+# --- Venv and tools ---
+VENV    := .venv
+BIN     := $(VENV)/bin
+UV      := uv
+PY      := $(BIN)/python
+
+# Constraints generated locally to pin contracts to a single source
+CONSTRAINTS := .constraints.txt
+
+# Ensure user code importable (for cb to find models/)
+export PYTHONPATH := $(CURDIR):$(PYTHONPATH)
 
 .PHONY: help
 help:
 	@echo "ModelOps Job Submission Workflow"
 	@echo ""
-	@echo "Setup Commands:"
-	@echo "  make setup        - Create user environment with calabaria & bundle"
-	@echo "  make clean-all    - Clean everything including venv"
+	@echo "Setup:"
+	@echo "  make venv            - Create venv"
+	@echo "  make setup           - Install cb + modelops-bundle (+ mops) with constraints"
 	@echo ""
-	@echo "Bundle Commands:"
-	@echo "  make bundle-init  - Initialize bundle tracking"
-	@echo "  make bundle-add   - Add files to bundle tracking"
-	@echo "  make bundle-status- Check bundle status"
-	@echo "  make bundle-push  - Push model to registry"
+	@echo "Bundle:"
+	@echo "  make bundle-init     - Initialize bundle metadata in this dir"
+	@echo "  make bundle-register - Register models for cloud job submission"
+	@echo "  make bundle-status   - Show bundle status"
+	@echo "  make bundle-push     - Push bundle to registry (optional)"
 	@echo ""
-	@echo "Workflow Commands:"
-	@echo "  make study        - Generate Sobol parameter samples"
-	@echo "  make submit       - Submit job to K8s cluster"
-	@echo "  make workflow     - Run full workflow"
+	@echo "Workflow:"
+	@echo "  make study           - Generate Sobol samples -> $(STUDY_FILE)"
+	@echo "  make submit          - Submit job with auto-push bundle"
+	@echo "  make workflow        - setup -> bundle -> study -> submit"
 	@echo ""
 	@echo "Monitoring:"
-	@echo "  make status       - Check job status"
-	@echo "  make logs         - View job logs"
+	@echo "  make status          - k8s job + pods"
+	@echo "  make logs            - tail first job pod logs"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  make clean        - Clean study files"
-	@echo "  make clean-bundle - Clean bundle state"
-	@echo "  make clean-all    - Clean everything"
+	@echo "  make clean           - remove remove everything, including venv and study outputs"
+	@echo "  make clean-bundle    - remove local bundle state"
+
+# --- Environment setup ---
+
+$(VENV):
+	$(UV) venv $(VENV) --python 3.13
+
+$(CONSTRAINTS):
+	@echo "modelops-contracts @ file://$(CONTRACTS)" > $@
+
+.PHONY: venv
+venv: $(VENV) $(CONSTRAINTS)
+	@echo "✓ venv ready: $(VENV)"
+
+# install the tools into THIS venv so we can call $(BIN)/cb, $(BIN)/modelops-bundle, $(BIN)/mops
+# contracts is pinned via $(CONSTRAINTS); do not install it directly here.
+# Use order-only prerequisites (after |) to avoid rebuilding when venv exists
+$(VENV)/.installed: | $(VENV) $(CONSTRAINTS)
+	@if [ ! -f $@ ]; then \
+		echo "Installing tools into venv..."; \
+		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(BUNDLE)); \
+		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(CALABARIA)); \
+		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(MODELOPS)); \
+		touch $@; \
+	fi
 
 .PHONY: setup
-setup:
-	@echo "Creating user-like environment..."
-	uv venv $(VENV) --clear
-	@echo "Installing packages with constraints..."
-	$(ACTIVATE) && uv pip install -c ../../constraints.txt ../../../modelops-contracts
-	$(ACTIVATE) && uv pip install -c ../../constraints.txt ../../../modelops-bundle
-	$(ACTIVATE) && uv pip install -c ../../constraints.txt -e ../../../modelops-calabaria
-	@echo "Setup complete. User tools (cb, modelops-bundle) installed in $(VENV)"
+setup: $(VENV)/.installed
+	@echo "✓ User tools installed in $(VENV):"
+	@echo "  - $$( $(BIN)/cb --help >/dev/null 2>&1 && echo 'cb installed' || echo 'cb missing' )"
+	@echo "  - $$( $(BIN)/modelops-bundle --help >/dev/null 2>&1 && echo 'modelops-bundle installed' || echo 'modelops-bundle missing' )"
+	@echo "  - $$( $(BIN)/mops --help >/dev/null 2>&1 && echo 'mops installed' || echo 'mops missing')"
+
+# --- Bundle commands ---
 
 .PHONY: bundle-init
-bundle-init:
-	@echo "Initializing bundle project in current workflow..."
+bundle-init: $(VENV)/.installed
 	@if [ ! -f pyproject.toml ]; then \
-		echo "Creating pyproject.toml for workflow..."; \
-		$(ACTIVATE) && modelops-bundle init .; \
+		echo "Initializing bundle project..."; \
+		$(BIN)/modelops-bundle init .; \
+		echo "dev" > .modelops-bundle/env; \
 	else \
 		echo "Project already initialized (pyproject.toml exists)"; \
+		[ -f .modelops-bundle/env ] || echo "dev" > .modelops-bundle/env; \
 	fi
 
 .PHONY: bundle-status
-bundle-status:
-	$(ACTIVATE) && modelops-bundle status
+bundle-status: $(VENV)/.installed
+	$(BIN)/modelops-bundle status
 
-.PHONY: bundle-add
-bundle-add:
-	$(ACTIVATE) && modelops-bundle add models/
-	@echo "Added SEIR model files to bundle tracking"
+.PHONY: bundle-register
+bundle-register: $(VENV)/.installed
+	# First ensure files are tracked
+	@$(BIN)/modelops-bundle add models/ 2>/dev/null || true
+	# Then register the model for cloud job submission
+	$(BIN)/modelops-bundle register-model models/seir.py --no-confirm
+	@echo "✓ Registered SEIR model for cloud job submission"
 
 .PHONY: bundle-push
-bundle-push:
-	$(ACTIVATE) && modelops-bundle push --tag $(TAG)
+bundle-push: $(VENV)/.installed
+	$(BIN)/modelops-bundle push
+	@echo "✓ Bundle pushed to registry"
 
-.PHONY: bundle-resolve
-bundle-resolve:
-	@$(ACTIVATE) && modelops-bundle resolve $(TAG) | grep -o 'sha256:[a-f0-9]*'
+# --- Study + Submit ---
 
 .PHONY: study
-study:
-	$(ACTIVATE) && $(PYTHONPATH_PREFIX) cb sampling sobol $(MODEL_CLASS) \
+study: $(STUDY_FILE)
+
+$(STUDY_FILE): $(VENV)/.installed
+	$(BIN)/cb sampling sobol $(MODEL_CLASS) \
 		--scenario baseline \
 		--n-samples $(N_SAMPLES) \
 		--output $(STUDY_FILE) \
 		--seed 42 \
 		--scramble
+	@echo "✓ Wrote $(STUDY_FILE)"
 
 .PHONY: submit
-submit:
-	cd ../.. && uv run --package modelops mops jobs submit examples/simulation-workflow/$(STUDY_FILE) \
-		--bundle $$($(ACTIVATE) && cd ../.. && mops-bundle resolve $(TAG) | grep -o 'sha256:[a-f0-9]*') \
-		--env dev
+submit: $(STUDY_FILE) $(VENV)/.installed
+	# Submit with auto-push from current directory
+	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE)) --auto
+	@echo "✓ Submitted job with auto-pushed bundle"
 
 .PHONY: workflow
-workflow: setup bundle-init bundle-add bundle-push study submit
-	@echo "Workflow complete. Check status with: make status"
+workflow: setup bundle-init bundle-register study submit
+	@echo "✓ Workflow complete. Try: make status"
+
+# --- Monitoring ---
 
 .PHONY: status
 status:
-	kubectl get jobs -n modelops-dask-dev
-	kubectl get pods -n modelops-dask-dev | grep job
+	kubectl get jobs -n $(NAMESPACE) || true
+	kubectl get pods -n $(NAMESPACE) | grep job || true
 
 .PHONY: logs
 logs:
-	@echo "Fetching job logs..."
-	@kubectl logs -n modelops-dask-dev $$(kubectl get pods -n modelops-dask-dev -o name | grep job | head -1) --tail=50
+	@pod="$$(kubectl get pods -n $(NAMESPACE) -o name | grep job | head -1)"; \
+	[ -n "$$pod" ] && kubectl logs -n $(NAMESPACE) "$$pod" --tail=50 || echo "No job pod found"
 
-.PHONY: clean
-clean: clean-study
-	@echo "Cleaning generated files..."
-	rm -f $(STUDY_FILE)
+.PHONY: check-pod-results
+check-pod-results:
+	@echo "Checking results stored on worker pods..."
+	@kubectl exec deployment/dask-workers -n $(NAMESPACE) -- bash -c \
+		"echo 'Results in /tmp/modelops/provenance:' && \
+		 find /tmp/modelops/provenance -name '*.json' -type f 2>/dev/null | wc -l | xargs echo 'JSON files:' && \
+		 find /tmp/modelops/provenance -name '*.arrow' -type f 2>/dev/null | wc -l | xargs echo 'Arrow files:' && \
+		 echo && echo 'Sample result path:' && \
+		 find /tmp/modelops/provenance -name 'result.json' -type f 2>/dev/null | head -1" \
+		 2>/dev/null || echo "No worker pods running or no results found"
+
+.PHONY: sync-results
+sync-results:
+	@echo "Syncing results from worker pods to local results/ directory..."
+	@mkdir -p results
+	@# Get all worker pods and sync from each
+	@kubectl get pods -n $(NAMESPACE) -l app=dask-worker -o name | while read pod; do \
+		POD_NAME=$$(echo $$pod | cut -d/ -f2); \
+		echo "Syncing from $$POD_NAME..."; \
+		kubectl cp $(NAMESPACE)/$$POD_NAME:/tmp/modelops/provenance results/$$POD_NAME 2>/dev/null || \
+		echo "  Warning: Could not sync from $$POD_NAME (pod may have no results or be terminating)"; \
+	done
+	@echo ""
+	@echo "Local results summary:"
+	@find results -name '*.json' -type f 2>/dev/null | wc -l | xargs echo "  JSON files:"
+	@find results -name '*.arrow' -type f 2>/dev/null | wc -l | xargs echo "  Arrow files:"
+	@find results -name 'result.json' -type f 2>/dev/null | wc -l | xargs echo "  Result files:"
+	@echo ""
+	@echo "Results synced to: results/"
+
+.PHONY: list-results
+list-results:
+	@echo "Checking job results in Azure Blob Storage..."
+	@# Try to get storage account dynamically, fallback to modelopsdev
+	@STORAGE_ACCOUNT=$$(az storage account list --query "[?tags.component=='modelops'].name" -o tsv 2>/dev/null | head -1); \
+	if [ -z "$$STORAGE_ACCOUNT" ]; then STORAGE_ACCOUNT="modelopsdev"; fi; \
+	echo "Storage account: $$STORAGE_ACCOUNT"; \
+	echo ""; \
+	echo "Jobs container:"; \
+	az storage blob list --container-name jobs --account-name "$$STORAGE_ACCOUNT" \
+		--query "[?starts_with(name, 'jobs/')].{name:name, size:properties.contentLength}" -o table 2>/dev/null || \
+		echo "No jobs found or az CLI not configured"; \
+	echo ""; \
+	echo "Results container (if exists):"; \
+	az storage blob list --container-name results --account-name "$$STORAGE_ACCOUNT" \
+		--query "[].{name:name, size:properties.contentLength}" -o table 2>/dev/null || \
+		echo "No results found or container doesn't exist"
+
+# --- Cleanup ---
 
 .PHONY: clean-bundle
 clean-bundle:
-	@echo "Cleaning bundle state..."
-	rm -rf .modelops-bundle
+	rm -rf .modelops-bundle pyproject.toml
 
-.PHONY: clean-all
-clean-all: clean clean-bundle
-	@echo "Cleaning everything including virtual environment..."
-	rm -rf $(VENV)
-	@echo "Clean complete"
-
-.PHONY: clean-study
-clean-study:
+.PHONY: clean
+clean: clean clean-bundle
 	rm -f $(STUDY_FILE)
+	rm -rf $(VENV) $(CONSTRAINTS)
+	@echo "✓ Clean complete"

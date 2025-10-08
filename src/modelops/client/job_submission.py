@@ -267,6 +267,7 @@ class JobSubmissionClient:
         if strategy == "explicit":
             if not bundle_ref:
                 raise ValueError("bundle_ref required for explicit strategy")
+            # Return bundle_ref as-is - SimTask supports repository@sha256 format
             return bundle_ref
 
         elif strategy == "latest":
@@ -457,6 +458,11 @@ class JobSubmissionClient:
                                         k8s_client.V1EnvVar(
                                             name="DASK_SCHEDULER_ADDRESS",
                                             value="tcp://dask-scheduler:8786",
+                                        ),
+                                        # Bundle registry for worker plugin
+                                        k8s_client.V1EnvVar(
+                                            name="MODELOPS_BUNDLE_REGISTRY",
+                                            value=self._get_registry_url(),
                                         ),
                                     ],
                                     resources=k8s_client.V1ResourceRequirements(

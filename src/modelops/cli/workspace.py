@@ -42,6 +42,12 @@ def up(
     """
     env = resolve_env(env)
 
+    # Validate config file exists if provided
+    if config and not config.exists():
+        error(f"Configuration file not found: {config}")
+        info("Please provide a valid workspace configuration file")
+        raise typer.Exit(1)
+
     # Load and validate configuration if provided
     validated_config = WorkspaceConfig.from_yaml_optional(config)
 

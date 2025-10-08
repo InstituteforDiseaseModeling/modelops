@@ -282,9 +282,29 @@ class WarmProcessManager:
 
             return warm_process
         except Exception as e:
+            # Try to capture any stderr before killing process
+            stderr_output = ""
+            if process.stderr and process.poll() is None:
+                try:
+                    # Non-blocking read of available stderr
+                    import select
+                    if select.select([process.stderr], [], [], 0.1)[0]:
+                        stderr_bytes = process.stderr.read()
+                        if stderr_bytes:
+                            stderr_output = stderr_bytes.decode('utf-8', errors='replace')
+                            logger.error(f"Subprocess stderr during initialization:\n{stderr_output}")
+                except Exception:
+                    pass  # Best effort
+
             process.terminate()
             process.wait()
-            raise RuntimeError(f"Failed to initialize process: {e}")
+
+            # Include stderr in the error message if available
+            error_msg = f"Failed to initialize process: {e}"
+            if stderr_output:
+                error_msg += f"\nSubprocess stderr:\n{stderr_output}"
+
+            raise RuntimeError(error_msg)
     
     def _compute_deps_hash(self, bundle_path: Path) -> str:
         """Compute hash of dependency files.

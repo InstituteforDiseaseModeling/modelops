@@ -263,20 +263,70 @@ class SubprocessRunner:
             os.unlink(temp_path)
             raise
     
-    def _run(self, cmd: list) -> None:
+    def _run(self, cmd: list, check: bool = True) -> int:
         logger.info("Running: %s", " ".join(cmd))
+        # Use existing environment to preserve git config and GITHUB_TOKEN
         env = {**os.environ, "PYTHONNOUSERSITE": "1"}  # keep user-site out
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(self.bundle_path))
         if result.stdout:
             logger.debug(result.stdout)
         if result.returncode != 0:
             logger.error(result.stderr)
-            raise RuntimeError(f"Install failed: {' '.join(cmd)}")
+            if check:
+                raise RuntimeError(f"Install failed: {' '.join(cmd)}")
+        return result.returncode
+
+    def _configure_git_auth(self) -> None:
+        """Configure git to use GitHub token if available."""
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if github_token:
+            logger.info("Configuring git authentication for private repos")
+            # Configure git to use the token for GitHub
+            # This sets it globally for this process and subprocesses
+            subprocess.run(
+                ["git", "config", "--global",
+                 f"url.https://x-access-token:{github_token}@github.com/.insteadOf",
+                 "https://github.com/"],
+                capture_output=True,
+                text=True,
+                check=False  # Don't fail if git config fails
+            )
+        else:
+            # TODO: Remove this error post-dev when all repos are public
+            logger.error("GITHUB_TOKEN not found in environment - private repos will fail to clone!")
 
     def _install_dependencies(self) -> None:
         logger.info("Installing dependencies for bundle at %s", self.bundle_path)
         pyproject = self.bundle_path / "pyproject.toml"
         requirements = self.bundle_path / "requirements.txt"
+
+        # Check for problematic dependency configurations
+        suspects = []
+        for fname in ("pyproject.toml", "uv.lock", "requirements.txt", ".constraints.txt"):
+            p = self.bundle_path / fname
+            if p.exists():
+                t = p.read_text()
+                # Check for malformed numpy git URLs
+                if "github.com/numpy/" in t and not "github.com/numpy/numpy" in t:
+                    suspects.append(f"{fname}: malformed numpy git URL detected")
+                # Check for problematic uv sources
+                if "[tool.uv.sources]" in t and "numpy" in t:
+                    suspects.append(f"{fname}: uv sources override for numpy detected")
+                # Check for local file dependencies that won't work in container
+                if "file:///" in t and "/Users/" in t:
+                    suspects.append(f"{fname}: local file:// dependency won't work in container")
+
+        if suspects:
+            logger.warning("Bundle has problematic dependency configurations:\n  - %s", "\n  - ".join(suspects))
+            # Clean up problematic files that might interfere
+            for fname in (".constraints.txt", "uv.lock"):
+                p = self.bundle_path / fname
+                if p.exists():
+                    logger.warning(f"Removing {fname} to avoid dependency resolution issues")
+                    p.unlink()
+
+        # Configure git auth before installing (for private repos)
+        self._configure_git_auth()
 
         # Prefer uv if present (fast), else pip
         # IMPORTANT: We ARE running inside the venv (sys.executable is venv python)
@@ -285,17 +335,51 @@ class SubprocessRunner:
         if pyproject.exists():
             logger.info("Found pyproject.toml, installing with %s", "uv" if uv else "pip")
             if uv:
-                # Need --python flag to tell uv which venv to install into
-                self._run([uv, "pip", "install", "--python", sys.executable, str(self.bundle_path)])
+                # Try uv first with explicit PyPI index to avoid config issues
+                rc = self._run([uv, "pip", "install",
+                               "--index-url", "https://pypi.org/simple",
+                               "--python", sys.executable,
+                               str(self.bundle_path)], check=False)
+
+                if rc != 0:
+                    logger.warning("uv failed; falling back to pip (PyPI only)")
+                    # Ensure pip is available (uv venv doesn't include it by default)
+                    self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
+                    # Upgrade pip
+                    self._run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+                    # Install with pip using --isolated to avoid config issues
+                    self._run([sys.executable, "-m", "pip", "install",
+                              "--isolated", "--disable-pip-version-check",
+                              "--no-cache-dir", "--no-input",
+                              str(self.bundle_path)])
             else:
-                self._run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", str(self.bundle_path)])
+                self._run([sys.executable, "-m", "pip", "install",
+                          "--isolated", "--disable-pip-version-check",
+                          "--no-cache-dir", "--no-input",
+                          str(self.bundle_path)])
         elif requirements.exists():
             logger.info("Found requirements.txt, installing with %s", "uv" if uv else "pip")
             if uv:
-                # Need --python flag to tell uv which venv to install into
-                self._run([uv, "pip", "install", "--python", sys.executable, "-r", str(requirements)])
+                # Try uv first with explicit PyPI index
+                rc = self._run([uv, "pip", "install",
+                               "--index-url", "https://pypi.org/simple",
+                               "--python", sys.executable,
+                               "-r", str(requirements)], check=False)
+
+                if rc != 0:
+                    logger.warning("uv failed; falling back to pip (PyPI only)")
+                    # Ensure pip is available
+                    self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
+                    self._run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
+                    self._run([sys.executable, "-m", "pip", "install",
+                              "--isolated", "--disable-pip-version-check",
+                              "--no-cache-dir", "--no-input",
+                              "-r", str(requirements)])
             else:
-                self._run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-r", str(requirements)])
+                self._run([sys.executable, "-m", "pip", "install",
+                          "--isolated", "--disable-pip-version-check",
+                          "--no-cache-dir", "--no-input",
+                          "-r", str(requirements)])
             # Ensure bundle code itself is importable when there's no pyproject
             if str(self.bundle_path) not in sys.path:
                 sys.path.insert(0, str(self.bundle_path))
