@@ -407,6 +407,8 @@ class SubprocessRunner:
                 raise RuntimeError(f"Multiple wire entry points found: {names}")
             ep = eps_list[0]
             logger.info("Using wire entry point: %s = %s", ep.name, ep.value)
+            logger.info("Bundle working directory: %s", self.bundle_path)
+            logger.info("Current working directory: %s", os.getcwd())
             return ep.load()
 
         logger.info("No entry points found; trying manifest/convention fallback")

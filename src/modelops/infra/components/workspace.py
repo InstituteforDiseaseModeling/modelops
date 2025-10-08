@@ -368,6 +368,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                             k8s.core.v1.ContainerArgs(
                                 name="scheduler",
                                 image=scheduler_image,
+                                image_pull_policy="Always" if scheduler_image.endswith(":latest") else "IfNotPresent",
                                 command=["dask-scheduler"],
                                 # Security: Drop all Linux capabilities to minimize attack surface
                                 # Dask doesn't need special kernel capabilities for normal operation
@@ -496,6 +497,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                             k8s.core.v1.ContainerArgs(
                                 name="worker",
                                 image=worker_image,
+                                image_pull_policy="Always" if worker_image.endswith(":latest") else "IfNotPresent",
                                 # Security: Drop all capabilities and prevent privilege escalation
                                 # Workers don't need kernel capabilities for computation tasks
                                 security_context=k8s.core.v1.SecurityContextArgs(

@@ -599,7 +599,7 @@ requires-dist = [
     { name = "azure-storage-blob", specifier = ">=12.26.0" },
     { name = "dask", extras = ["distributed"], specifier = "==2024.8.0" },
     { name = "kubernetes", specifier = ">=28.0.0" },
-    { name = "modelops-contracts", editable = "../modelops-contracts" },
+    { name = "modelops-contracts", git = "https://github.com/vsbuffalo/modelops-contracts.git" },
     { name = "numpy", specifier = ">=2.3.2" },
     { name = "pandas", specifier = ">=2.3.2" },
     { name = "polars", specifier = ">=0.20.0" },
@@ -616,7 +616,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 azure = [{ name = "azure-storage-blob", specifier = ">=12.26.0" }]
-bundle = [{ name = "modelops-bundle", editable = "../modelops-bundle" }]
+bundle = [{ name = "modelops-bundle", git = "https://github.com/vsbuffalo/modelops-bundle.git" }]
 dev = [
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
@@ -626,7 +626,7 @@ dev = [
 [[package]]
 name = "modelops-bundle"
 version = "0.1.0"
-source = { editable = "../modelops-bundle" }
+source = { git = "https://github.com/vsbuffalo/modelops-bundle.git#23a73f6a5967937ddf163da4ef54da8f39062f0e" }
 dependencies = [
     { name = "azure-storage-blob" },
     { name = "modelops-contracts" },
@@ -640,51 +640,13 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.metadata]
-requires-dist = [
-    { name = "azure-storage-blob", specifier = ">=12.14.0" },
-    { name = "modelops-contracts", specifier = ">=0.1.0" },
-    { name = "oras", git = "https://github.com/vsbuffalo/oras-py.git" },
-    { name = "pathspec", specifier = ">=0.12.1" },
-    { name = "portalocker", specifier = ">=3.2.0" },
-    { name = "pydantic", specifier = ">=2.11.7" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rich", specifier = ">=14.1.0" },
-    { name = "toml", specifier = ">=0.10.2" },
-    { name = "typer", specifier = ">=0.16.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = ">=25.9.0" },
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "pytest-cov", specifier = ">=6.2.1" },
-    { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "ruff", specifier = ">=0.13.2" },
-]
-
 [[package]]
 name = "modelops-contracts"
 version = "0.1.0"
-source = { editable = "../modelops-contracts" }
+source = { git = "https://github.com/vsbuffalo/modelops-contracts.git#b4b739b4da514dba670d5ef1c5f1dad6a2930667" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.11.7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = ">=25.1.0" },
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "ruff", specifier = ">=0.13.0" },
 ]
 
 [[package]]

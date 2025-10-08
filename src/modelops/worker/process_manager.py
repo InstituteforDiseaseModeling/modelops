@@ -242,6 +242,7 @@ class WarmProcessManager:
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
+            cwd=str(bundle_path),  # Run from bundle directory so relative paths work
             env=env
         )
         
@@ -409,6 +410,7 @@ class WarmProcessManager:
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
+            cwd=str(bundle_path),  # Run from bundle directory so relative paths work
             env=env
         )
         

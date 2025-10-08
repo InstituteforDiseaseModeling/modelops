@@ -23,23 +23,27 @@ RUN pip install --no-cache-dir \
     "bokeh!=3.0.*,>=2.4.2" \
     uv
 
-# Copy local repositories (these must exist at build time)
-# Build context should be the parent directory containing all repos
-COPY modelops-contracts /tmp/modelops-contracts
-COPY modelops /tmp/modelops
-COPY modelops-bundle /tmp/modelops-bundle
-
-# Install modelops dependencies
+# Copy local repositories (packages we need)
 # Note: calabaria is NOT needed in workers (science framework)
-# Workers need:
-#   - modelops (for worker code)
-#   - modelops-contracts (for protocols)
-#   - modelops-bundle (for pulling bundles from registry)
-RUN pip install --no-cache-dir \
-    /tmp/modelops-contracts \
-    /tmp/modelops \
-    /tmp/modelops-bundle \
-    && rm -rf /tmp/modelops-contracts /tmp/modelops /tmp/modelops-bundle
+COPY modelops-contracts /tmp/modelops-contracts
+COPY modelops-bundle /tmp/modelops-bundle
+COPY modelops /tmp/modelops
+
+# Install dependencies in correct order to avoid conflicts
+# 1. First install contracts (base dependency)
+RUN pip install --no-cache-dir /tmp/modelops-contracts
+
+# 2. Install oras-py from git (needed by modelops-bundle)
+RUN pip install --no-cache-dir "git+https://github.com/vsbuffalo/oras-py.git"
+
+# 3. Install modelops-bundle WITH its dependencies (it declares what it needs)
+RUN pip install --no-cache-dir /tmp/modelops-bundle
+
+# 4. Install modelops without dependencies to avoid conflicts
+RUN pip install --no-cache-dir --no-deps /tmp/modelops
+
+# 5. Clean up
+RUN rm -rf /tmp/modelops-contracts /tmp/modelops-bundle /tmp/modelops
 
 # Switch to non-root user
 USER 1000

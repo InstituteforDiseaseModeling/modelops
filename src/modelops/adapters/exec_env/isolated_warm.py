@@ -232,6 +232,26 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         for name, data in raw_artifacts.items():
             # Data comes back as base64-encoded strings from subprocess
             decoded_data = base64.b64decode(data) if isinstance(data, str) else data
+
+            # Check for error metadata from wire function
+            if name == "metadata" and decoded_data:
+                try:
+                    metadata = json.loads(decoded_data)
+                    if "error" in metadata:
+                        # LOUD failure - registry missing or other wire error
+                        raise RuntimeError(
+                            f"Wire function error: {metadata['error']}\n"
+                            f"Entrypoint: {metadata.get('entrypoint', 'unknown')}\n"
+                            f"Seed: {metadata.get('seed', 'unknown')}\n"
+                            f"This typically means the bundle is missing required files (e.g., registry.yaml)."
+                        )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass  # Not JSON metadata, continue
+
+            # Warn about empty outputs for key artifacts
+            if name == "table" and len(decoded_data) == 0:
+                logger.warning(f"Empty table output detected for task {task.params.param_id[:8]}-seed{task.seed}")
+
             checksum = hashlib.blake2b(decoded_data, digest_size=32).hexdigest()
 
             outputs[name] = TableArtifact(
@@ -244,6 +264,15 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         output_names = tuple(outputs.keys())
         tid_components = f"{param_id[:16]}-{seed_str}-{','.join(sorted(output_names))}"
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
+
+        # Final validation - ensure we have meaningful outputs
+        table_artifacts = [art for name, art in outputs.items() if isinstance(art, TableArtifact) and name != "metadata"]
+        if table_artifacts and all(art.size == 0 for art in table_artifacts):
+            raise RuntimeError(
+                f"All outputs are empty for task {task.params.param_id[:8]}-seed{task.seed}. "
+                f"Check wire function execution and model outputs. "
+                f"This often indicates the model registry could not be found or loaded."
+            )
 
         return SimReturn(
             task_id=tid,

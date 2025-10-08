@@ -47,7 +47,7 @@ BUILD_CONTEXT = ..
 
 # === Development Targets ===
 
-.PHONY: help install test lint workspace-up workspace-down workspace-status
+.PHONY: help install test lint workspace-up workspace-down workspace-status rebuild-deploy
 
 ## Display help
 help:

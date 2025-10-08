@@ -22,20 +22,29 @@ RUN pip install --no-cache-dir \
     "bokeh!=3.0.*,>=2.4.2" \
     uv
 
-# Copy local repositories (these must exist at build time)
-# Build context should be the parent directory containing all repos
+# Copy local repositories (all the packages we need)
 COPY modelops-contracts /tmp/modelops-contracts
 COPY calabaria /tmp/calabaria
-COPY modelops /tmp/modelops
 COPY modelops-bundle /tmp/modelops-bundle
+COPY modelops /tmp/modelops
 
-# Install modelops dependencies
-RUN pip install --no-cache-dir \
-    /tmp/modelops-contracts \
+# Install dependencies in correct order to avoid conflicts
+# 1. First install contracts (base dependency)
+RUN pip install --no-cache-dir /tmp/modelops-contracts
+
+# 2. Install oras-py from git (needed by modelops-bundle)
+RUN pip install --no-cache-dir "git+https://github.com/vsbuffalo/oras-py.git"
+
+# 3. Install modelops-bundle WITH its dependencies (it declares what it needs)
+RUN pip install --no-cache-dir /tmp/modelops-bundle
+
+# 4. Install other packages without dependencies to avoid conflicts
+RUN pip install --no-cache-dir --no-deps \
     /tmp/calabaria \
-    /tmp/modelops \
-    /tmp/modelops-bundle \
-    && rm -rf /tmp/modelops-contracts /tmp/calabaria /tmp/modelops /tmp/modelops-bundle
+    /tmp/modelops
+
+# 5. Clean up
+RUN rm -rf /tmp/modelops-contracts /tmp/calabaria /tmp/modelops /tmp/modelops-bundle
 
 # Switch to non-root user
 USER 1000

@@ -20,19 +20,7 @@ jobs:
         with:
           path: modelops
 
-      - name: Checkout modelops-contracts
-        uses: actions/checkout@v4
-        with:
-          repository: vsbuffalo/modelops-contracts
-          path: modelops-contracts
-          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
-
-      - name: Checkout modelops-bundle
-        uses: actions/checkout@v4
-        with:
-          repository: vsbuffalo/modelops-bundle
-          path: modelops-bundle
-          token: ${{ secrets.PAT || secrets.GITHUB_TOKEN }}
+      # Removed unnecessary checkouts - dependencies are fetched via git URLs in pyproject.toml
 
       - name: Set up uv with Python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v5
@@ -42,6 +30,10 @@ jobs:
           cache-dependency-glob: |
             **/pyproject.toml
             **/uv.lock
+
+      - name: Configure git to use PAT for private repos
+        run: |
+          git config --global url."https://${{ secrets.PAT }}@github.com/".insteadOf "https://github.com/"
 
       - name: Sync dependencies
         run: |
