@@ -17,7 +17,6 @@ cluster:
   username: vsb
   aks:
     name: modelops-aks
-    kubernetes_version: "1.30"
     node_pools:
       - name: system
         vm_size: Standard_B2s
