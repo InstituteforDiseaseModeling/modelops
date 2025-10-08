@@ -13,11 +13,21 @@ REGISTRY ?= ghcr.io
 ORG ?= institutefordiseasemodeling
 PROJECT ?= modelops
 
-# Automatic versioning from git
+# Automatic versioning from git with dirty detection
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
-VERSION ?= $(GIT_SHA)
+IS_DIRTY := $(shell git diff --quiet 2>/dev/null || echo "dirty")
+ifeq ($(IS_DIRTY),dirty)
+  VERSION := $(GIT_SHA)-$(shell date +%s)
+else
+  VERSION := $(GIT_SHA)
+endif
 TAG ?= latest
 PYTHON_VERSION ?= 3.11
+
+# Build directory for digest tracking
+BUILD_DIR := .build
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
 
 # === Azure Container Registry (Future/Private Use) ===
 # Uncomment below to use private ACR instead of GHCR
@@ -70,8 +80,11 @@ help:
 	@echo "  make build-worker     # Build worker image for K8s deployment (linux/amd64)"
 	@echo "  make build-scheduler  # Build scheduler image for K8s deployment (linux/amd64)"
 	@echo "  make build-runner     # Build runner image for K8s deployment (linux/amd64)"
-	@echo "  make deploy           # Build ALL images and rollout to cluster"
+	@echo "  make deploy           # Build ALL images, deploy by digest and verify"
 	@echo "  make deploy-worker    # Build worker and rollout to cluster"
+	@echo "  make show-build       # Show last built images and their digests"
+	@echo "  make verify-deploy    # Verify deployed images match built digests"
+	@echo "  make clean-build      # Clean build artifacts"
 	@echo ""
 	@echo "Local Testing Only:"
 	@echo "  make build-worker-local     # Build worker for Mac testing (ARM64)"
@@ -187,17 +200,25 @@ build-multiarch: build-multiarch-scheduler build-multiarch-worker build-multiarc
 	@echo "  $(RUNNER_IMAGE):$(VERSION)"
 
 ## Build scheduler for deployment (linux/amd64) - THIS IS WHAT YOU WANT
-build-scheduler: setup-buildx ghcr-login
-	@echo "Building scheduler for DEPLOYMENT (linux/amd64): $(SCHEDULER_IMAGE):$(TAG)"
+build-scheduler: setup-buildx ghcr-login | $(BUILD_DIR)
+	@echo "Building scheduler for DEPLOYMENT (linux/amd64): $(SCHEDULER_IMAGE):$(VERSION)"
 	@docker buildx build \
 		--no-cache \
+		--pull \
 		--platform linux/amd64 \
 		-f docker/Dockerfile.scheduler \
 		-t $(SCHEDULER_IMAGE):$(TAG) \
+		-t $(SCHEDULER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg GIT_SHA=$(GIT_SHA) \
 		--push \
+		--iidfile $(BUILD_DIR)/scheduler.iid \
 		$(BUILD_CONTEXT)
-	@echo "✓ Scheduler built and pushed for linux/amd64"
+	@echo "$$(cat $(BUILD_DIR)/scheduler.iid | sed 's/sha256://')" > $(BUILD_DIR)/scheduler.digest
+	@echo "$(SCHEDULER_IMAGE)" > $(BUILD_DIR)/scheduler.image
+	@echo "$(VERSION)" > $(BUILD_DIR)/scheduler.version
+	@echo "✓ Scheduler pushed: $(SCHEDULER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/scheduler.digest)"
+	@echo "  Version: $(VERSION)"
 
 ## Build scheduler for local Mac testing only
 build-scheduler-local:
@@ -210,17 +231,25 @@ build-scheduler-local:
 	@echo "✓ Local scheduler built (NOT pushed, use :local tag)"
 
 ## Build worker for deployment (linux/amd64) - THIS IS WHAT YOU WANT
-build-worker: setup-buildx ghcr-login
-	@echo "Building worker for DEPLOYMENT (linux/amd64): $(WORKER_IMAGE):$(TAG)"
+build-worker: setup-buildx ghcr-login | $(BUILD_DIR)
+	@echo "Building worker for DEPLOYMENT (linux/amd64): $(WORKER_IMAGE):$(VERSION)"
 	@docker buildx build \
 		--no-cache \
+		--pull \
 		--platform linux/amd64 \
 		-f docker/Dockerfile.worker \
 		-t $(WORKER_IMAGE):$(TAG) \
+		-t $(WORKER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg GIT_SHA=$(GIT_SHA) \
 		--push \
+		--iidfile $(BUILD_DIR)/worker.iid \
 		$(BUILD_CONTEXT)
-	@echo "✓ Worker built and pushed for linux/amd64"
+	@echo "$$(cat $(BUILD_DIR)/worker.iid | sed 's/sha256://')" > $(BUILD_DIR)/worker.digest
+	@echo "$(WORKER_IMAGE)" > $(BUILD_DIR)/worker.image
+	@echo "$(VERSION)" > $(BUILD_DIR)/worker.version
+	@echo "✓ Worker pushed: $(WORKER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/worker.digest)"
+	@echo "  Version: $(VERSION)"
 
 ## Build worker for local Mac testing only
 build-worker-local:
@@ -233,17 +262,25 @@ build-worker-local:
 	@echo "✓ Local worker built (NOT pushed, use :local tag)"
 
 ## Build runner for deployment (linux/amd64) - THIS IS WHAT YOU WANT
-build-runner: setup-buildx ghcr-login
-	@echo "Building runner for DEPLOYMENT (linux/amd64): $(RUNNER_IMAGE):$(TAG)"
+build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
+	@echo "Building runner for DEPLOYMENT (linux/amd64): $(RUNNER_IMAGE):$(VERSION)"
 	@docker buildx build \
 		--no-cache \
+		--pull \
 		--platform linux/amd64 \
 		-f docker/Dockerfile.runner \
 		-t $(RUNNER_IMAGE):$(TAG) \
+		-t $(RUNNER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg GIT_SHA=$(GIT_SHA) \
 		--push \
+		--iidfile $(BUILD_DIR)/runner.iid \
 		$(BUILD_CONTEXT)
-	@echo "✓ Runner built and pushed for linux/amd64"
+	@echo "$$(cat $(BUILD_DIR)/runner.iid | sed 's/sha256://')" > $(BUILD_DIR)/runner.digest
+	@echo "$(RUNNER_IMAGE)" > $(BUILD_DIR)/runner.image
+	@echo "$(VERSION)" > $(BUILD_DIR)/runner.version
+	@echo "✓ Runner pushed: $(RUNNER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/runner.digest)"
+	@echo "  Version: $(VERSION)"
 
 ## Build runner for local Mac testing only
 build-runner-local:
@@ -378,10 +415,112 @@ clean-images:
 	docker rmi $(SCHEDULER_IMAGE):$(TAG) $(WORKER_IMAGE):$(TAG) $(RUNNER_IMAGE):$(TAG) || true
 	docker rmi $(SCHEDULER_IMAGE):$(VERSION) $(WORKER_IMAGE):$(VERSION) $(RUNNER_IMAGE):$(VERSION) || true
 
+## Clean build artifacts
+clean-build:
+	rm -rf $(BUILD_DIR)
+
 ## Show current images in cluster
 show-images:
 	@echo "Current images in cluster (namespace: $(NAMESPACE)):"
 	@kubectl get deployment -n $(NAMESPACE) -o wide | grep dask || true
+
+## Show last built images and their digests
+show-build:
+	@if [ -d $(BUILD_DIR) ]; then \
+	  echo "Last built images:"; \
+	  echo ""; \
+	  if [ -f $(BUILD_DIR)/scheduler.version ]; then \
+	    echo "Scheduler:"; \
+	    echo "  Version: $$(cat $(BUILD_DIR)/scheduler.version)"; \
+	    echo "  Image:   $$(cat $(BUILD_DIR)/scheduler.image 2>/dev/null || echo 'N/A')"; \
+	    echo "  Digest:  sha256:$$(cat $(BUILD_DIR)/scheduler.digest)"; \
+	  fi; \
+	  if [ -f $(BUILD_DIR)/worker.version ]; then \
+	    echo "Worker:"; \
+	    echo "  Version: $$(cat $(BUILD_DIR)/worker.version)"; \
+	    echo "  Image:   $$(cat $(BUILD_DIR)/worker.image 2>/dev/null || echo 'N/A')"; \
+	    echo "  Digest:  sha256:$$(cat $(BUILD_DIR)/worker.digest)"; \
+	  fi; \
+	  if [ -f $(BUILD_DIR)/runner.version ]; then \
+	    echo "Runner:"; \
+	    echo "  Version: $$(cat $(BUILD_DIR)/runner.version)"; \
+	    echo "  Image:   $$(cat $(BUILD_DIR)/runner.image 2>/dev/null || echo 'N/A')"; \
+	    echo "  Digest:  sha256:$$(cat $(BUILD_DIR)/runner.digest)"; \
+	  fi; \
+	else \
+	  echo "No build artifacts found. Run 'make build' first."; \
+	fi
+
+# === Deterministic Deployment Targets ===
+
+# Deployment names and container names (adjust if your K8s deployments differ)
+SCHEDULER_DEPLOYMENT ?= dask-scheduler
+WORKER_DEPLOYMENT    ?= dask-workers
+SCHEDULER_CONTAINER  ?= scheduler
+WORKER_CONTAINER     ?= worker
+
+## Set images by digest instead of tag (deterministic)
+set-images-by-digest:
+	@if [ ! -d $(BUILD_DIR) ]; then \
+	  echo "❌ No build directory found. Run 'make build' first"; \
+	  exit 1; \
+	fi
+	@echo "Setting images by digest in namespace: $(NAMESPACE)"
+	@if [ -f $(BUILD_DIR)/scheduler.digest ]; then \
+	  DIGEST=$$(cat $(BUILD_DIR)/scheduler.digest); \
+	  echo "  Setting scheduler to sha256:$$DIGEST"; \
+	  kubectl -n $(NAMESPACE) set image deployment/$(SCHEDULER_DEPLOYMENT) \
+	    $(SCHEDULER_CONTAINER)=$(SCHEDULER_IMAGE)@sha256:$$DIGEST || \
+	  echo "  ⚠️  Warning: Failed to set scheduler image (deployment may not exist)"; \
+	else \
+	  echo "  ⚠️  No scheduler digest found - skipping"; \
+	fi
+	@if [ -f $(BUILD_DIR)/worker.digest ]; then \
+	  DIGEST=$$(cat $(BUILD_DIR)/worker.digest); \
+	  echo "  Setting worker to sha256:$$DIGEST"; \
+	  kubectl -n $(NAMESPACE) set image deployment/$(WORKER_DEPLOYMENT) \
+	    $(WORKER_CONTAINER)=$(WORKER_IMAGE)@sha256:$$DIGEST || \
+	  echo "  ⚠️  Warning: Failed to set worker image (deployment may not exist)"; \
+	else \
+	  echo "  ⚠️  No worker digest found - skipping"; \
+	fi
+	@echo "Waiting for rollouts..."
+	@kubectl rollout status deployment/$(SCHEDULER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || \
+	  echo "  ⚠️  Scheduler rollout check failed (deployment may not exist)"
+	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || \
+	  echo "  ⚠️  Worker rollout check failed (deployment may not exist)"
+
+## Verify deployed images match built digests
+verify-deploy:
+	@echo "Verifying deployed digests..."
+	@if [ -f $(BUILD_DIR)/worker.digest ]; then \
+	  WANT=$$(cat $(BUILD_DIR)/worker.digest); \
+	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app.kubernetes.io/component=worker \
+	    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null | sed 's|.*@sha256:||'); \
+	  echo "Worker want: sha256:$$WANT"; \
+	  echo "Worker got:  sha256:$$GOT"; \
+	  if [ "$$WANT" != "$$GOT" ]; then echo "❌ Worker digest mismatch"; exit 1; fi; \
+	fi
+	@if [ -f $(BUILD_DIR)/scheduler.digest ]; then \
+	  WANT=$$(cat $(BUILD_DIR)/scheduler.digest); \
+	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app.kubernetes.io/component=scheduler \
+	    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null | sed 's|.*@sha256:||'); \
+	  echo "Scheduler want: sha256:$$WANT"; \
+	  echo "Scheduler got:  sha256:$$GOT"; \
+	  if [ "$$WANT" != "$$GOT" ]; then echo "❌ Scheduler digest mismatch"; exit 1; fi; \
+	fi
+	@echo "✅ Digests match. Deployment is running the exact images you built."
+
+## Quick smoketest to verify new code is in worker image
+smoketest-worker:
+	@echo "Running worker image smoketest..."
+	@docker run --rm $(WORKER_IMAGE):$(TAG) python -c \
+	  "from modelops_calabaria.modelops_wire import wire_function; print('✓ Wire function imports')" || \
+	  (echo "❌ Smoketest failed - wire function not found"; exit 1)
+
+## Deploy only worker (useful for quick iterations)
+deploy-worker-digest: build-worker set-images-by-digest verify-deploy
+	@echo "✅ Worker deployed VERSION=$(VERSION) and verified"
 
 ## Test Docker images locally
 test-images:
@@ -391,13 +530,14 @@ test-images:
 
 # === Combined Workflows ===
 
-.PHONY: dev-setup dev-test dev-deploy deploy-worker
+.PHONY: dev-setup dev-test dev-deploy deploy deploy-worker
+
+## Deploy all images with digest verification - RECOMMENDED
+deploy: build set-images-by-digest verify-deploy
+	@echo "✅ Deployed VERSION=$(VERSION) with digest verification"
 
 ## Quick worker deployment (build + rollout) - MOST COMMON WORKFLOW
 deploy-worker: build-worker rollout-images
-
-## Deploy all images (build + rollout) - Full deployment workflow
-deploy: build rollout-images
 	@echo "✓ Worker deployed! Check with: kubectl -n $(NAMESPACE) get pods"
 
 ## Build and test everything
