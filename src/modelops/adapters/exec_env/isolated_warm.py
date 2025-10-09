@@ -6,7 +6,6 @@ TODO: we need to clean up / refactor run() and run_aggregation().
 
 import base64
 import hashlib
-import json
 import logging
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Tuple
@@ -346,7 +345,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         )
 
         # Store full error details as artifact (always inline for MVP)
-        error_details_data = json.dumps({
+        # Import json locally to avoid Python 3.13 scope issue
+        import json as json_module
+        error_details_data = json_module.dumps({
             "error": str(exception),
             "type": type(exception).__name__,
             "bundle_ref": bundle_ref,
