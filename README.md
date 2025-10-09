@@ -1,9 +1,21 @@
 # ModelOps
 
 [![Tests](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml)
+[![Docker Build](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml)
+[![Docker Images](https://img.shields.io/badge/ghcr.io-modelops-blue)](https://github.com/orgs/institutefordiseasemodeling/packages)
 
 Infrastructure orchestration for distributed machine learning experimentation
 and optimization.
+
+## Build Status & Quick Deploy
+
+```bash
+# Check build status: Look for green badge above or visit Actions tab
+# After successful build (usually ~5 mins), deploy:
+make pull-latest  # Pull CI-built images
+make deploy       # Deploy to cluster
+make verify-deploy # Verify deployment
+```
 
 ## Overview
 

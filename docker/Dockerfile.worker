@@ -1,8 +1,9 @@
 # MVP Dask Worker Image with ModelOps dependencies
 FROM python:3.13-slim
 
-# Build arguments for provenance
+# Build arguments for provenance and authentication
 ARG GIT_SHA=dev
+ARG GITHUB_TOKEN
 LABEL org.opencontainers.image.revision=$GIT_SHA
 ENV MODELOPS_IMAGE_GIT_SHA=$GIT_SHA
 
@@ -28,27 +29,22 @@ RUN pip install --no-cache-dir \
     "bokeh!=3.0.*,>=2.4.2" \
     uv
 
-# Copy local repositories (packages we need)
-# Note: calabaria is NOT needed in workers (science framework)
-COPY modelops-contracts /tmp/modelops-contracts
-COPY modelops-bundle /tmp/modelops-bundle
-COPY modelops /tmp/modelops
-
-# Install dependencies in correct order to avoid conflicts
+# Install dependencies from private GitHub repos using PAT
 # 1. First install contracts (base dependency)
-RUN pip install --no-cache-dir /tmp/modelops-contracts
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git
 
 # 2. Install oras-py from git (needed by modelops-bundle)
-RUN pip install --no-cache-dir "git+https://github.com/vsbuffalo/oras-py.git"
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/oras-py.git
 
-# 3. Install modelops-bundle WITH its dependencies (it declares what it needs)
-RUN pip install --no-cache-dir /tmp/modelops-bundle
+# 3. Install modelops-bundle WITH its dependencies
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-bundle.git
 
-# 4. Install modelops without dependencies to avoid conflicts
-RUN pip install --no-cache-dir --no-deps /tmp/modelops
+# 4. Copy and install modelops (this repository)
+COPY . /tmp/modelops
+RUN pip install --no-cache-dir /tmp/modelops
 
 # 5. Clean up
-RUN rm -rf /tmp/modelops-contracts /tmp/modelops-bundle /tmp/modelops
+RUN rm -rf /tmp/modelops
 
 # Switch to non-root user
 USER 1000

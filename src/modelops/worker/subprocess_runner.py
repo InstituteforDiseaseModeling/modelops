@@ -51,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -544,10 +545,13 @@ class SubprocessRunner:
             raise ValueError(f"Bundle digest mismatch: expected {self.bundle_digest}, got {bundle_digest}")
         
         logger.info("Executing aggregation %s with %d results", target_entrypoint, len(sim_returns))
-        
+        logger.info("Bundle path: %s", self.bundle_path)
+        logger.info("Current sys.path (first 3): %s", sys.path[:3])
+
         try:
             # Ensure bundle is in sys.path for imports
             if str(self.bundle_path) not in sys.path:
+                logger.info("Adding bundle path to sys.path")
                 sys.path.insert(0, str(self.bundle_path))
             
             # Parse target entrypoint to get import path and target name
@@ -561,13 +565,16 @@ class SubprocessRunner:
             
             # Import the target module - handle different formats
             parts = import_path.split(".")
-            
+            logger.info("Import path parts: %s", parts)
+
             # Special case: if first part is 'dummy', skip it (for contract validation workaround)
             if parts[0] == "dummy" and len(parts) > 1:
                 # Remove dummy prefix, use the rest
                 import_path = ".".join(parts[1:])
                 parts = parts[1:]
-            
+                logger.info("Removed dummy prefix, new import_path: %s", import_path)
+
+            logger.info("Attempting to import module: %s", import_path)
             if len(parts) == 1:
                 # Simple module like "targets"
                 module = __import__(import_path)
@@ -663,11 +670,15 @@ class SubprocessRunner:
             
         except Exception as e:
             logger.exception("Aggregation failed")
-            return {
+            # Match the error format from execute() method - must be base64 encoded
+            error_info = {
                 "error": str(e),
                 "type": type(e).__name__,
-                "target_entrypoint": target_entrypoint
+                "target_entrypoint": target_entrypoint,
+                "traceback": traceback.format_exc()  # Add full traceback for debugging
             }
+            err_json = json.dumps(error_info).encode("utf-8")
+            return {"error": base64.b64encode(err_json).decode("ascii")}
 
 # -----------------------------------------------------------------------------
 # Main loop

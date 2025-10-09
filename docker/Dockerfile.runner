@@ -1,10 +1,14 @@
 # Job Runner Image for executing SimJob/CalibrationJob
 FROM python:3.13-slim
 
+# Build arguments for authentication
+ARG GITHUB_TOKEN
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for running jobs
@@ -19,16 +23,12 @@ RUN pip install --no-cache-dir \
     azure-storage-blob \
     kubernetes
 
-# Copy local repositories (these must exist at build time)
-# Build context should be the parent directory containing all repos
-COPY modelops-contracts /tmp/modelops-contracts
-COPY modelops /tmp/modelops
+# Install dependencies from private GitHub repos using PAT
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git
 
-# Install modelops packages
-RUN pip install --no-cache-dir \
-    /tmp/modelops-contracts \
-    /tmp/modelops \
-    && rm -rf /tmp/modelops-contracts /tmp/modelops
+# Copy and install modelops (this repository)
+COPY . /tmp/modelops
+RUN pip install --no-cache-dir /tmp/modelops && rm -rf /tmp/modelops
 
 # Switch to non-root user
 USER 1000

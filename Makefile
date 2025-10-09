@@ -1,4 +1,12 @@
-# ModelOps Makefile - Development and Docker Image Management
+# ModelOps Makefile - Development and Deployment Management
+#
+# WORKFLOW:
+# 1. Push code to GitHub → CI automatically builds images
+# 2. Pull and deploy locally: make pull-latest && make deploy
+# 3. Verify deployment: make verify-deploy
+#
+# Images are built by GitHub Actions on every push to main.
+# Check the Actions tab for build status and image digests.
 
 # === Development Variables ===
 MOPS := uv run mops
@@ -13,14 +21,9 @@ REGISTRY ?= ghcr.io
 ORG ?= institutefordiseasemodeling
 PROJECT ?= modelops
 
-# Automatic versioning from git with dirty detection
+# Version is simply the git SHA for CI-built images
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
-IS_DIRTY := $(shell git diff --quiet 2>/dev/null || echo "dirty")
-ifeq ($(IS_DIRTY),dirty)
-  VERSION := $(GIT_SHA)-$(shell date +%s)
-else
-  VERSION := $(GIT_SHA)
-endif
+VERSION := $(GIT_SHA)
 TAG ?= latest
 PYTHON_VERSION ?= 3.11
 
@@ -61,7 +64,7 @@ BUILD_CONTEXT = ..
 
 ## Display help
 help:
-	@echo "ModelOps Development & Docker Management"
+	@echo "ModelOps Deployment Management (CI/CD Build)"
 	@echo ""
 	@echo "Development Commands:"
 	@echo "  make install           # Install dependencies with uv"
@@ -75,29 +78,26 @@ help:
 	@echo "  make test-e2e-fresh    # Run e2e tests with fresh venvs (debugging)"
 	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
 	@echo ""
-	@echo "Docker Commands (ALWAYS BUILDS FOR DEPLOYMENT):"
-	@echo "  make build            # Build ALL images for K8s deployment (linux/amd64)"
-	@echo "  make build-worker     # Build worker image for K8s deployment (linux/amd64)"
-	@echo "  make build-scheduler  # Build scheduler image for K8s deployment (linux/amd64)"
-	@echo "  make build-runner     # Build runner image for K8s deployment (linux/amd64)"
-	@echo "  make deploy           # Build ALL images, deploy by digest and verify"
-	@echo "  make deploy-worker    # Build worker and rollout to cluster"
-	@echo "  make show-build       # Show last built images and their digests"
-	@echo "  make verify-deploy    # Verify deployed images match built digests"
+	@echo "Deployment Commands (Uses CI-built images):"
+	@echo "  make pull-latest      # Pull latest CI-built images from GHCR"
+	@echo "  make deploy           # Deploy CI-built images by digest and verify"
+	@echo "  make deploy-version VERSION=abc123  # Deploy specific version"
+	@echo "  make verify-deploy    # Verify deployed images match expected"
+	@echo "  make rollback         # Rollback to previous deployment"
+	@echo "  make show-deployed    # Show currently deployed versions"
+	@echo ""
+	@echo "Manual Build Commands (Usually done by CI):"
+	@echo "  make build            # Build ALL images locally (requires internet)"
+	@echo "  make build-worker     # Build worker image locally"
+	@echo "  make build-scheduler  # Build scheduler image locally"
+	@echo "  make build-runner     # Build runner image locally"
+	@echo "  make show-build       # Show last locally built images"
 	@echo "  make clean-build      # Clean build artifacts"
 	@echo ""
-	@echo "Local Testing Only:"
-	@echo "  make build-worker-local     # Build worker for Mac testing (ARM64)"
-	@echo "  make build-scheduler-local  # Build scheduler for Mac testing (ARM64)"
-	@echo "  make build-runner-local     # Build runner for Mac testing (ARM64)"
-	@echo "  make setup-buildx     # Setup Docker buildx for multi-arch"
-	@echo "  make release          # Tag and push release version"
-	@echo "  make update-cluster   # Update cluster with new images"
-	@echo "  make test-images      # Test Docker images locally"
-	@echo ""
-	@echo "Prerequisites for Docker:"
-	@echo "  - ../modelops-contracts must exist"
-	@echo "  - ../calabaria must exist"
+	@echo "CI/CD Info:"
+	@echo "  - Images are automatically built by GitHub Actions on push"
+	@echo "  - Check Actions tab for build status and digests"
+	@echo "  - Images are tagged with git SHA and 'latest' for main branch"
 	@echo "  - Docker daemon must be running"
 	@echo ""
 	@echo "Configuration:"
@@ -220,15 +220,6 @@ build-scheduler: setup-buildx ghcr-login | $(BUILD_DIR)
 	@echo "✓ Scheduler pushed: $(SCHEDULER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/scheduler.digest)"
 	@echo "  Version: $(VERSION)"
 
-## Build scheduler for local Mac testing only
-build-scheduler-local:
-	@echo "Building scheduler for LOCAL MAC testing: $(SCHEDULER_IMAGE):local"
-	docker build \
-		-f docker/Dockerfile.scheduler \
-		-t $(SCHEDULER_IMAGE):local \
-		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
-		$(BUILD_CONTEXT)
-	@echo "✓ Local scheduler built (NOT pushed, use :local tag)"
 
 ## Build worker for deployment (linux/amd64) - THIS IS WHAT YOU WANT
 build-worker: setup-buildx ghcr-login | $(BUILD_DIR)
@@ -251,15 +242,6 @@ build-worker: setup-buildx ghcr-login | $(BUILD_DIR)
 	@echo "✓ Worker pushed: $(WORKER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/worker.digest)"
 	@echo "  Version: $(VERSION)"
 
-## Build worker for local Mac testing only
-build-worker-local:
-	@echo "Building worker for LOCAL MAC testing: $(WORKER_IMAGE):local"
-	docker build \
-		-f docker/Dockerfile.worker \
-		-t $(WORKER_IMAGE):local \
-		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
-		$(BUILD_CONTEXT)
-	@echo "✓ Local worker built (NOT pushed, use :local tag)"
 
 ## Build runner for deployment (linux/amd64) - THIS IS WHAT YOU WANT
 build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
@@ -282,16 +264,30 @@ build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
 	@echo "✓ Runner pushed: $(RUNNER_IMAGE)@sha256:$$(cat $(BUILD_DIR)/runner.digest)"
 	@echo "  Version: $(VERSION)"
 
-## Build runner for local Mac testing only
-build-runner-local:
-	@echo "Building runner for LOCAL MAC testing: $(RUNNER_IMAGE):local"
-	docker build \
-		-f docker/Dockerfile.runner \
-		-t $(RUNNER_IMAGE):local \
-		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
-		$(BUILD_CONTEXT)
-	@echo "✓ Local runner built (NOT pushed, use :local tag)"
 
+
+## Pull latest CI-built images from GHCR
+pull-latest:
+	@echo "Pulling latest CI-built images from GHCR..."
+	@echo "  Scheduler: $(SCHEDULER_IMAGE):$(VERSION)"
+	@docker pull $(SCHEDULER_IMAGE):$(VERSION) || docker pull $(SCHEDULER_IMAGE):latest
+	@echo "  Worker: $(WORKER_IMAGE):$(VERSION)"
+	@docker pull $(WORKER_IMAGE):$(VERSION) || docker pull $(WORKER_IMAGE):latest
+	@echo "  Runner: $(RUNNER_IMAGE):$(VERSION)"
+	@docker pull $(RUNNER_IMAGE):$(VERSION) || docker pull $(RUNNER_IMAGE):latest
+	@echo "✓ Images pulled successfully"
+
+## Pull specific version from GHCR
+pull-version:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Usage: make pull-version VERSION=abc123"; \
+		exit 1; \
+	fi
+	@echo "Pulling version $(VERSION) from GHCR..."
+	docker pull $(SCHEDULER_IMAGE):$(VERSION)
+	docker pull $(WORKER_IMAGE):$(VERSION)
+	docker pull $(RUNNER_IMAGE):$(VERSION)
+	@echo "✓ Version $(VERSION) pulled successfully"
 
 ## Login to GitHub Container Registry
 ghcr-login:
@@ -490,12 +486,29 @@ set-images-by-digest:
 	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || \
 	  echo "  ⚠️  Worker rollout check failed (deployment may not exist)"
 
-## Verify deployed images match built digests
+## Verify deployed images are the expected version
 verify-deploy:
+	@echo "Verifying deployed versions..."
+	@WANT_VERSION=$(VERSION); \
+	GOT_SCHEDULER=$$(kubectl -n $(NAMESPACE) get deployment $(SCHEDULER_DEPLOYMENT) \
+		-o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's|.*:||'); \
+	GOT_WORKER=$$(kubectl -n $(NAMESPACE) get deployment $(WORKER_DEPLOYMENT) \
+		-o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's|.*:||'); \
+	echo "Expected version: $$WANT_VERSION"; \
+	echo "Scheduler version: $$GOT_SCHEDULER"; \
+	echo "Worker version: $$GOT_WORKER"; \
+	if [ "$$GOT_SCHEDULER" = "$$WANT_VERSION" ] && [ "$$GOT_WORKER" = "$$WANT_VERSION" ]; then \
+		echo "✅ Deployment is running the expected version"; \
+	else \
+		echo "⚠️  Version mismatch detected"; \
+	fi
+
+## Verify deployed images match built digests (for local builds)
+verify-deploy-digest:
 	@echo "Verifying deployed digests..."
 	@if [ -f $(BUILD_DIR)/worker.digest ]; then \
 	  WANT=$$(cat $(BUILD_DIR)/worker.digest); \
-	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app.kubernetes.io/component=worker \
+	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app=dask-worker \
 	    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null | sed 's|.*@sha256:||'); \
 	  echo "Worker want: sha256:$$WANT"; \
 	  echo "Worker got:  sha256:$$GOT"; \
@@ -503,7 +516,7 @@ verify-deploy:
 	fi
 	@if [ -f $(BUILD_DIR)/scheduler.digest ]; then \
 	  WANT=$$(cat $(BUILD_DIR)/scheduler.digest); \
-	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app.kubernetes.io/component=scheduler \
+	  GOT=$$(kubectl -n $(NAMESPACE) get pods -l app=dask-scheduler \
 	    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null | sed 's|.*@sha256:||'); \
 	  echo "Scheduler want: sha256:$$WANT"; \
 	  echo "Scheduler got:  sha256:$$GOT"; \
@@ -518,9 +531,24 @@ smoketest-worker:
 	  "from modelops_calabaria.modelops_wire import wire_function; print('✓ Wire function imports')" || \
 	  (echo "❌ Smoketest failed - wire function not found"; exit 1)
 
-## Deploy only worker (useful for quick iterations)
-deploy-worker-digest: build-worker set-images-by-digest verify-deploy
-	@echo "✅ Worker deployed VERSION=$(VERSION) and verified"
+## Show currently deployed versions
+show-deployed:
+	@echo "Currently deployed images in namespace: $(NAMESPACE)"
+	@echo ""
+	@SCHEDULER_IMAGE=$$(kubectl -n $(NAMESPACE) get deployment $(SCHEDULER_DEPLOYMENT) -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null); \
+	if [ -n "$$SCHEDULER_IMAGE" ]; then \
+		echo "Scheduler: $$SCHEDULER_IMAGE"; \
+	else \
+		echo "Scheduler: not found"; \
+	fi
+	@WORKER_IMAGE=$$(kubectl -n $(NAMESPACE) get deployment $(WORKER_DEPLOYMENT) -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null); \
+	if [ -n "$$WORKER_IMAGE" ]; then \
+		echo "Worker: $$WORKER_IMAGE"; \
+	else \
+		echo "Worker: not found"; \
+	fi
+	@echo ""
+	@kubectl get pods -n $(NAMESPACE) | grep -E "dask-|NAME" || true
 
 ## Test Docker images locally
 test-images:
@@ -532,12 +560,43 @@ test-images:
 
 .PHONY: dev-setup dev-test dev-deploy deploy deploy-worker
 
-## Deploy all images with digest verification - RECOMMENDED
-deploy: build set-images-by-digest verify-deploy
-	@echo "✅ Deployed VERSION=$(VERSION) with digest verification"
+## Deploy CI-built images with verification - RECOMMENDED
+deploy: pull-latest deploy-by-tag verify-deploy
+	@echo "✅ Deployed VERSION=$(VERSION) with verification"
 
-## Quick worker deployment (build + rollout) - MOST COMMON WORKFLOW
-deploy-worker: build-worker rollout-images
+## Deploy specific version from CI
+deploy-version:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "Usage: make deploy-version VERSION=abc123"; \
+		exit 1; \
+	fi
+	@$(MAKE) pull-version VERSION=$(VERSION)
+	@$(MAKE) deploy-by-tag
+	@$(MAKE) verify-deploy
+	@echo "✅ Deployed VERSION=$(VERSION)"
+
+## Deploy pulled images by tag (used by deploy targets)
+deploy-by-tag:
+	@echo "Deploying images to namespace: $(NAMESPACE)"
+	@kubectl -n $(NAMESPACE) set image deployment/$(SCHEDULER_DEPLOYMENT) \
+		$(SCHEDULER_CONTAINER)=$(SCHEDULER_IMAGE):$(VERSION) || \
+		echo "  ⚠️  Warning: Failed to set scheduler image"
+	@kubectl -n $(NAMESPACE) set image deployment/$(WORKER_DEPLOYMENT) \
+		$(WORKER_CONTAINER)=$(WORKER_IMAGE):$(VERSION) || \
+		echo "  ⚠️  Warning: Failed to set worker image"
+	@echo "Waiting for rollouts..."
+	@kubectl rollout status deployment/$(SCHEDULER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || true
+	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || true
+
+## Deploy with local build (fallback when CI is unavailable)
+deploy-local: build set-images-by-digest verify-deploy
+	@echo "✅ Deployed locally-built VERSION=$(VERSION) with digest verification"
+
+## Quick worker deployment (CI-built)
+deploy-worker: pull-latest
+	@kubectl -n $(NAMESPACE) set image deployment/$(WORKER_DEPLOYMENT) \
+		$(WORKER_CONTAINER)=$(WORKER_IMAGE):$(VERSION)
+	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s
 	@echo "✓ Worker deployed! Check with: kubectl -n $(NAMESPACE) get pods"
 
 ## Build and test everything
