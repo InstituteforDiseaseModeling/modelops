@@ -43,7 +43,6 @@ import base64
 import contextlib
 import fcntl
 import hashlib
-import json
 import logging
 import math
 import os
@@ -122,15 +121,20 @@ class JSONRPCProtocol:
 
         body = self._read_exactly(length)
         try:
-            msg = json.loads(body.decode("utf-8"))
-        except json.JSONDecodeError as e:
+            # Import json locally to avoid Python 3.13 scope issue
+            import json as json_module
+            msg = json_module.loads(body.decode("utf-8"))
+        except ValueError as e:
+            # Note: Using ValueError to catch JSON decode errors in Python 3.13
             raise JSONRPCError(-32700, f"Invalid JSON: {e}")
         if not isinstance(msg, dict):
             raise JSONRPCError(-32600, "Message must be an object")
         return msg
 
     def _write(self, payload: Dict[str, Any]) -> None:
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        # Import json locally to avoid Python 3.13 scope issue
+        import json as json_module
+        body = json_module.dumps(payload, separators=(",", ":")).encode("utf-8")
         self._out.write(f"Content-Length: {len(body)}\r\n".encode("ascii"))
         self._out.write(b"\r\n")
         self._out.write(body)
@@ -421,7 +425,9 @@ class SubprocessRunner:
         manifest = self.bundle_path / ".modelops" / "manifest.json"
         if manifest.exists():
             try:
-                spec = json.loads(manifest.read_text()).get("wire")
+                # Import json locally to avoid Python 3.13 scope issue
+                import json as json_module
+                spec = json_module.loads(manifest.read_text()).get("wire")
             except Exception:
                 spec = None
 
@@ -512,12 +518,16 @@ class SubprocessRunner:
                     if isinstance(data, str):
                         data = data.encode("utf-8")
                     else:
-                        data = json.dumps(data).encode("utf-8")
+                        # Import json locally to avoid Python 3.13 scope issue
+                        import json as json_module
+                        data = json_module.dumps(data).encode("utf-8")
                 artifacts[name] = base64.b64encode(bytes(data)).decode("ascii")
             return artifacts
         except Exception as e:
             logger.exception("Execution failed")
-            err = json.dumps({"error": str(e), "type": type(e).__name__, "entrypoint": entrypoint}).encode("utf-8")
+            # Import json locally to avoid Python 3.13 scope issue
+            import json as json_module
+            err = json_module.dumps({"error": str(e), "type": type(e).__name__, "entrypoint": entrypoint}).encode("utf-8")
             return {"error": base64.b64encode(err).decode("ascii")}
 
     def aggregate(
@@ -677,7 +687,9 @@ class SubprocessRunner:
                 "target_entrypoint": target_entrypoint,
                 "traceback": traceback.format_exc()  # Add full traceback for debugging
             }
-            err_json = json.dumps(error_info).encode("utf-8")
+            # Import json locally to avoid Python 3.13 scope issue
+            import json as json_module
+            err_json = json_module.dumps(error_info).encode("utf-8")
             return {"error": base64.b64encode(err_json).decode("ascii")}
 
 # -----------------------------------------------------------------------------
