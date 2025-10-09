@@ -72,6 +72,7 @@ def submit(
             sampling_method=study_data["sampling_method"],
             n_replicates=study_data.get("n_replicates", 1),
             outputs=study_data.get("outputs"),
+            targets=study_data.get("targets"),  # Support targets in study
             metadata=study_data.get("metadata", {}),
         )
 
@@ -79,6 +80,8 @@ def submit(
         info(f"  Parameters: {study.parameter_count()} unique sets")
         info(f"  Replicates: {study.n_replicates} per parameter set")
         info(f"  Total simulations: {study.total_simulation_count()}")
+        if study.targets:
+            info(f"  Targets: {', '.join(study.targets)}")
 
     except Exception as e:
         error(f"Failed to load study file: {e}")

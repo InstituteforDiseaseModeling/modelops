@@ -551,7 +551,13 @@ class SubprocessRunner:
                 sys.path.insert(0, str(self.bundle_path))
             
             # Parse target entrypoint to get import path and target name
-            import_path, target_name = target_entrypoint.rsplit("/", 1)
+            # Support both ":" separator (new format) and "/" separator (old format)
+            if ":" in target_entrypoint:
+                # New format: "targets.prevalence:prevalence_target"
+                import_path, target_name = target_entrypoint.rsplit(":", 1)
+            else:
+                # Old format: "targets.covid/deaths"
+                import_path, target_name = target_entrypoint.rsplit("/", 1)
             
             # Import the target module - handle different formats
             parts = import_path.split(".")
@@ -606,12 +612,36 @@ class SubprocessRunner:
             
             # Redirect stdout to stderr during evaluation
             with contextlib.redirect_stdout(sys.stderr):
-                # Call the target evaluator
-                # It should return a dict with 'loss' and optionally 'diagnostics'
-                result = evaluator(sim_returns, target_data)
-            
+                # Check if this is a Calabaria-style target that returns a Target object
+                import inspect
+                sig = inspect.signature(evaluator)
+
+                if len(sig.parameters) == 0 or (len(sig.parameters) == 1 and 'data_paths' in sig.parameters):
+                    # This is a Calabaria target function decorated with @calibration_target
+                    # It returns a Target object that we need to evaluate
+                    logger.info("Detected Calabaria-style target function")
+                    target_obj = evaluator()  # Call with no args (decorator handles data paths)
+
+                    # Now we need to evaluate the target against sim_returns
+                    # Target objects have an evaluate() method that takes replicated sim outputs
+                    # Convert sim_returns to the format expected by Target.evaluate()
+
+                    # For now, return a dummy loss until we implement proper evaluation
+                    result = {
+                        "loss": 0.5,  # Placeholder
+                        "diagnostics": {
+                            "target_type": type(target_obj).__name__,
+                            "model_output": getattr(target_obj, 'model_output', 'unknown'),
+                            "n_sim_returns": len(sim_returns)
+                        }
+                    }
+                    logger.info("Target evaluation placeholder - proper implementation needed")
+                else:
+                    # Old-style evaluator that takes (sim_returns, target_data)
+                    result = evaluator(sim_returns, target_data)
+
             logger.info(f"Evaluator returned: {result}")
-            
+
             # Validate result structure
             if not isinstance(result, dict):
                 raise ValueError(f"Target evaluator must return dict, got {type(result)}")

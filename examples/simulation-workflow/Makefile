@@ -18,6 +18,7 @@ MODELOPS    := $(abspath ../..)  # Current repo is modelops
 MODEL_CLASS := models.seir:StochasticSEIR
 STUDY_FILE  := study.json
 N_SAMPLES   := 20
+N_REPLICATES := 3
 NAMESPACE   := modelops-dask-dev
 
 # --- Venv and tools ---
@@ -25,9 +26,6 @@ VENV    := .venv
 BIN     := $(VENV)/bin
 UV      := uv
 PY      := $(BIN)/python
-
-# Constraints generated locally to pin contracts to a single source
-CONSTRAINTS := .constraints.txt
 
 # Ensure user code importable (for cb to find models/)
 export PYTHONPATH := $(CURDIR):$(PYTHONPATH)
@@ -38,7 +36,7 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  make venv            - Create venv"
-	@echo "  make setup           - Install cb + modelops-bundle (+ mops) with constraints"
+	@echo "  make setup           - Install cb + modelops-bundle (+ mops) from local repos"
 	@echo ""
 	@echo "Bundle:"
 	@echo "  make bundle-init     - Initialize bundle metadata in this dir"
@@ -64,22 +62,20 @@ help:
 $(VENV):
 	$(UV) venv $(VENV) --python 3.13
 
-$(CONSTRAINTS):
-	@echo "modelops-contracts @ file://$(CONTRACTS)" > $@
-
 .PHONY: venv
-venv: $(VENV) $(CONSTRAINTS)
+venv: $(VENV)
 	@echo "✓ venv ready: $(VENV)"
 
 # install the tools into THIS venv so we can call $(BIN)/cb, $(BIN)/modelops-bundle, $(BIN)/mops
-# contracts is pinned via $(CONSTRAINTS); do not install it directly here.
+# Install local development versions directly
 # Use order-only prerequisites (after |) to avoid rebuilding when venv exists
-$(VENV)/.installed: | $(VENV) $(CONSTRAINTS)
+$(VENV)/.installed: | $(VENV)
 	@if [ ! -f $@ ]; then \
 		echo "Installing tools into venv..."; \
-		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(BUNDLE)); \
-		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(CALABARIA)); \
-		$(UV) pip install -c $(CONSTRAINTS) -e $(abspath $(MODELOPS)); \
+		$(UV) pip install -e $(abspath $(CONTRACTS)); \
+		$(UV) pip install -e $(abspath $(BUNDLE)); \
+		$(UV) pip install -e $(abspath $(CALABARIA)); \
+		$(UV) pip install -e $(abspath $(MODELOPS)); \
 		touch $@; \
 	fi
 
@@ -109,11 +105,20 @@ bundle-status: $(VENV)/.installed
 
 .PHONY: bundle-register
 bundle-register: $(VENV)/.installed
+	# Generate observed data if not present
+	@if [ ! -f data/observed_prevalence.csv ]; then \
+		echo "Generating observed data..."; \
+		$(PY) generate_observed_data.py; \
+	fi
 	# First ensure files are tracked
 	@$(BIN)/modelops-bundle add models/ 2>/dev/null || true
-	# Then register the model for cloud job submission
+	@$(BIN)/modelops-bundle add targets/ 2>/dev/null || true
+	@$(BIN)/modelops-bundle add data/ 2>/dev/null || true
+	# Register the model for cloud job submission
 	$(BIN)/modelops-bundle register-model models/seir.py --no-confirm
-	@echo "✓ Registered SEIR model for cloud job submission"
+	# Register targets - auto-discovers decorated functions and their dependencies
+	$(BIN)/modelops-bundle register-target targets/prevalence.py --no-confirm
+	@echo "✓ Registered SEIR model and calibration targets"
 
 .PHONY: bundle-push
 bundle-push: $(VENV)/.installed
@@ -129,10 +134,12 @@ $(STUDY_FILE): $(VENV)/.installed
 	$(BIN)/cb sampling sobol $(MODEL_CLASS) \
 		--scenario baseline \
 		--n-samples $(N_SAMPLES) \
+		--n-replicates $(N_REPLICATES) \
 		--output $(STUDY_FILE) \
 		--seed 42 \
-		--scramble
-	@echo "✓ Wrote $(STUDY_FILE)"
+		--scramble \
+		--targets "targets.prevalence:prevalence_target"
+	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 
 .PHONY: submit
 submit: $(STUDY_FILE) $(VENV)/.installed
@@ -206,12 +213,16 @@ list-results:
 
 # --- Cleanup ---
 
+.PHONY: clean-data
+clean-data:
+	rm -rf data/
+
 .PHONY: clean-bundle
 clean-bundle:
 	rm -rf .modelops-bundle pyproject.toml
 
 .PHONY: clean
-clean: clean clean-bundle
+clean: clean-bundle clean-data
 	rm -f $(STUDY_FILE)
-	rm -rf $(VENV) $(CONSTRAINTS)
+	rm -rf $(VENV) .constraints.txt
 	@echo "✓ Clean complete"

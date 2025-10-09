@@ -157,16 +157,67 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     # Create simulation service
     sim_service = DaskSimulationService(client)
 
-    # Submit all tasks
-    logger.info(f"Submitting {len(job.tasks)} tasks")
+    # Group tasks by parameter ID for replicate handling
+    task_groups = job.get_task_groups()
+    logger.info(f"Processing {len(task_groups)} parameter sets with replicates")
+
+    # Check if we have targets for aggregation
+    target_entrypoint = None
+    if job.target_spec and job.target_spec.data.get("target_entrypoints"):
+        # Use first target for now (could extend to multiple targets)
+        target_entrypoint = job.target_spec.data["target_entrypoints"][0]
+        logger.info(f"Will aggregate replicates using target: {target_entrypoint}")
+
+    # Submit replicate sets with aggregation if targets are present
+    from modelops_contracts import ReplicateSet
+
     futures = []
-    for task in job.tasks:
-        future = sim_service.submit(task)
-        futures.append(future)
+    for param_id, replicate_tasks in task_groups.items():
+        if len(replicate_tasks) > 1:
+            # Multiple replicates - use ReplicateSet for grouped submission
+            base_task = replicate_tasks[0]
+            replicate_set = ReplicateSet(
+                base_task=base_task,
+                n_replicates=len(replicate_tasks),
+                seed_offset=0  # Seeds already set in tasks
+            )
+            # Submit with or without target-based aggregation
+            future = sim_service.submit_replicate_set(replicate_set, target_entrypoint)
+            futures.append(future)
+            if target_entrypoint:
+                logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} with target aggregation")
+            else:
+                logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} as group")
+        else:
+            # Single task - no grouping needed
+            task = replicate_tasks[0]
+            future = sim_service.submit(task)
+            futures.append(future)
+            logger.info(f"  Submitted single task for param {param_id[:8]}")
 
     # Gather results
     results = sim_service.gather(futures)
     logger.info(f"Job complete: {len(results)} results")
+
+    # If we used aggregation, results are already AggregationReturn objects with loss
+    if target_entrypoint:
+        logger.info("Target evaluation completed during aggregation")
+        for i, result in enumerate(results[:3]):
+            if hasattr(result, 'loss'):
+                logger.info(f"  Param set {i} loss: {result.loss}")
+    elif job.target_spec:
+        # Fallback: evaluate targets on client side if not done on worker
+        logger.info("Evaluating targets on client side...")
+        try:
+            trial_results = evaluate_results(results, job.target_spec)
+            logger.info(f"Target evaluation complete: {len(trial_results)} trials evaluated")
+            for i, tr in enumerate(trial_results[:3]):
+                if hasattr(tr, 'loss'):
+                    logger.info(f"  Trial {i} loss: {tr.loss}")
+        except NotImplementedError:
+            logger.warning("Target evaluation not yet implemented")
+        except Exception as e:
+            logger.error(f"Target evaluation failed: {e}")
 
     # TODO: Upload results to blob storage
     # For now, just log success
