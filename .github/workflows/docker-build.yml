@@ -18,7 +18,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  ORG: institutefordiseasemodeling
+  ORG: vsbuffalo
   PROJECT: modelops
   PYTHON_VERSION: '3.11'
 
@@ -31,6 +31,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write  # Needed for OIDC/attestation
 
     steps:
       - name: Checkout repository
@@ -46,7 +47,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GH_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -92,7 +93,7 @@ jobs:
           build-args: |
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
             GIT_SHA=${{ github.sha }}
-            GITHUB_TOKEN=${{ secrets.PAT }}
+            GITHUB_TOKEN=${{ secrets.GH_TOKEN }}
           outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=${{ env.PROJECT }}-${{ matrix.component }}
 
       - name: Export digest
@@ -133,13 +134,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ -f scheduler.digest ]; then
-            echo "- **Scheduler:** \`ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler@$(cat scheduler.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Scheduler:** \`ghcr.io/vsbuffalo/modelops-dask-scheduler@$(cat scheduler.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f worker.digest ]; then
-            echo "- **Worker:** \`ghcr.io/institutefordiseasemodeling/modelops-dask-worker@$(cat worker.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Worker:** \`ghcr.io/vsbuffalo/modelops-dask-worker@$(cat worker.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f runner.digest ]; then
-            echo "- **Runner:** \`ghcr.io/institutefordiseasemodeling/modelops-job-runner@$(cat runner.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Runner:** \`ghcr.io/vsbuffalo/modelops-dask-runner@$(cat runner.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

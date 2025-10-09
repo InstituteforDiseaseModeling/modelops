@@ -1,8 +1,8 @@
 # ModelOps
 
 [![Tests](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml)
-[![Docker Build](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml)
-[![Docker Images](https://img.shields.io/badge/ghcr.io-modelops-blue)](https://github.com/orgs/institutefordiseasemodeling/packages)
+[![Docker Build](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml)
+[![Docker Images](https://img.shields.io/badge/ghcr.io-modelops-blue)](https://github.com/vsbuffalo?tab=packages)
 
 Infrastructure orchestration for distributed machine learning experimentation
 and optimization.
