@@ -4,7 +4,6 @@ Uses Content-Length framing like Language Server Protocol for robust
 message boundary detection over stdio pipes.
 """
 
-import json
 import logging
 import sys
 from typing import Any, BinaryIO, Dict, Optional
@@ -167,8 +166,11 @@ class JSONRPCProtocol:
         
         # Parse JSON from bytes
         try:
-            message = json.loads(body.decode('utf-8'))
-        except json.JSONDecodeError as e:
+            # Import json locally to avoid Python 3.13 scope issue
+            import json as json_module
+            message = json_module.loads(body.decode('utf-8'))
+        except ValueError as e:
+            # Note: Using ValueError to catch JSON decode errors in Python 3.13
             raise JSONRPCError(-32700, f"Invalid JSON: {e}")
         
         # Validate JSON-RPC structure
@@ -187,7 +189,9 @@ class JSONRPCProtocol:
             message: Message to send
         """
         # Serialize to JSON and encode to bytes
-        body = json.dumps(message, separators=(',', ':'))
+        # Import json locally to avoid Python 3.13 scope issue
+        import json as json_module
+        body = json_module.dumps(message, separators=(',', ':'))
         body_bytes = body.encode('utf-8')
         
         # Write Content-Length header (as bytes)
