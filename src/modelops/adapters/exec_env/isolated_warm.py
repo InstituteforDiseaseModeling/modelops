@@ -245,7 +245,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                             f"Seed: {metadata.get('seed', 'unknown')}\n"
                             f"This typically means the bundle is missing required files (e.g., registry.yaml)."
                         )
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                except (ValueError, UnicodeDecodeError):
+                    # Note: Using ValueError instead of json.JSONDecodeError
+                    # to avoid Python 3.13 local variable binding issue
                     pass  # Not JSON metadata, continue
 
             # Warn about empty outputs for key artifacts

@@ -46,6 +46,12 @@ RUN pip install --no-cache-dir /tmp/modelops
 # 5. Clean up
 RUN rm -rf /tmp/modelops
 
+# Create version file for verification (before switching user)
+RUN echo "GIT_SHA=$GIT_SHA" > /app/VERSION && \
+    echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> /app/VERSION && \
+    echo "PYTHON_VERSION=$(python --version)" >> /app/VERSION && \
+    chown 1000:1000 /app/VERSION
+
 # Switch to non-root user
 USER 1000
 

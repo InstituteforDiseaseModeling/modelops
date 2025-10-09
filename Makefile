@@ -17,8 +17,10 @@ NAMESPACE ?= modelops-dask-$(ENV)
 
 # === Docker Variables ===
 # Default to public GHCR for easy distribution
+# Development registry (vsbuffalo for dev, institutefordiseasemodeling for production)
 REGISTRY ?= ghcr.io
-ORG ?= institutefordiseasemodeling
+# ORG ?= institutefordiseasemodeling  # Production - uncomment when ready to deploy to IDM
+ORG ?= vsbuffalo  # Development - comment out when deploying to production
 PROJECT ?= modelops
 
 # Version is simply the git SHA for CI-built images
@@ -396,9 +398,15 @@ update-cluster:
 ## Rollout new images to running Dask deployments
 rollout-images:
 	@echo "Rolling out latest images to Dask deployments in namespace: $(NAMESPACE)"
-	@kubectl rollout restart deployment dask-scheduler -n $(NAMESPACE) 2>/dev/null || true
-	@kubectl rollout restart deployment dask-workers -n $(NAMESPACE) 2>/dev/null || true
-	@# Note: Job runners are one-shot K8s Jobs, not deployments - they pick up new images on next submission
+	@echo "Updating deployments to use latest images..."
+	@kubectl set image deployment/dask-scheduler scheduler=$(SCHEDULER_IMAGE):latest -n $(NAMESPACE) 2>/dev/null || true
+	@kubectl set image deployment/dask-workers worker=$(WORKER_IMAGE):latest -n $(NAMESPACE) 2>/dev/null || true
+	@echo "Setting imagePullPolicy to Always to ensure fresh pulls..."
+	@kubectl patch deployment dask-scheduler -n $(NAMESPACE) -p '{"spec":{"template":{"spec":{"containers":[{"name":"scheduler","imagePullPolicy":"Always"}]}}}}' 2>/dev/null || true
+	@kubectl patch deployment dask-workers -n $(NAMESPACE) -p '{"spec":{"template":{"spec":{"containers":[{"name":"worker","imagePullPolicy":"Always"}]}}}}' 2>/dev/null || true
+	@echo "Deleting pods to force image re-pull..."
+	@kubectl delete pods -l app=dask-scheduler -n $(NAMESPACE) --wait=false 2>/dev/null || true
+	@kubectl delete pods -l app=dask-worker -n $(NAMESPACE) --wait=false 2>/dev/null || true
 	@echo "Waiting for rollouts to complete..."
 	@kubectl rollout status deployment dask-scheduler -n $(NAMESPACE) --timeout=120s 2>/dev/null || true
 	@kubectl rollout status deployment dask-workers -n $(NAMESPACE) --timeout=120s 2>/dev/null || true
