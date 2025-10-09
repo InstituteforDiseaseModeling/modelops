@@ -216,7 +216,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         # Check for subprocess errors
         if len(raw_artifacts) == 1 and "error" in raw_artifacts:
             error_data = base64.b64decode(raw_artifacts["error"])
-            error_info = json.loads(error_data)
+            # Import json locally to avoid Python 3.13 scope issue
+            import json as json_module
+            error_info = json_module.loads(error_data)
             raise RuntimeError(
                 f"Subprocess execution failed: {error_info.get('error', 'Unknown error')} "
                 f"(type: {error_info.get('type', 'Unknown')})"
@@ -235,8 +237,10 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
             # Check for error metadata from wire function
             if name == "metadata" and decoded_data:
+                # Import json locally to avoid Python 3.13 scope issue
+                import json as json_module
                 try:
-                    metadata = json.loads(decoded_data)
+                    metadata = json_module.loads(decoded_data)
                     if "error" in metadata:
                         # LOUD failure - registry missing or other wire error
                         raise RuntimeError(
@@ -246,8 +250,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                             f"This typically means the bundle is missing required files (e.g., registry.yaml)."
                         )
                 except (ValueError, UnicodeDecodeError):
-                    # Note: Using ValueError instead of json.JSONDecodeError
-                    # to avoid Python 3.13 local variable binding issue
+                    # Note: Using ValueError to catch JSON decode errors
+                    # Local import avoids Python 3.13 scope issues
                     pass  # Not JSON metadata, continue
 
             # Warn about empty outputs for key artifacts

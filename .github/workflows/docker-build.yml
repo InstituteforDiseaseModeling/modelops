@@ -18,7 +18,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  ORG: vsbuffalo
+  # ORG: institutefordiseasemodeling  # Production - uncomment for IDM deployment
+  ORG: vsbuffalo  # Development - comment out for production
   PROJECT: modelops
   PYTHON_VERSION: '3.11'
 
