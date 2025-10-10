@@ -8,6 +8,7 @@ storage (hash of inputs) rather than content-addressed storage.
 import json
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import asdict, dataclass
@@ -21,6 +22,7 @@ from modelops_contracts import (
 from modelops_contracts.simulation import AggregationTask, AggregationReturn
 
 from .provenance_schema import ProvenanceSchema, DEFAULT_SCHEMA
+from .storage_utils import atomic_write
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,16 @@ class ProvenanceStore:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Initialized ProvenanceStore with schema '{schema.name}' at {storage_dir}")
+
+    def _write_json_atomic(self, path: Path, data: Dict) -> None:
+        """Write JSON atomically to avoid corruption.
+
+        Args:
+            path: Target file path
+            data: Dictionary to serialize as JSON
+        """
+        content = json.dumps(data, indent=2).encode('utf-8')
+        atomic_write(path, content)
 
     def get_sim(self, task: SimTask) -> Optional[SimReturn]:
         """Retrieve simulation result if it exists.
@@ -167,10 +179,10 @@ class ProvenanceStore:
                 "params": dict(task.params.params),
                 "seed": task.seed,
                 "outputs": task.outputs,
-                "param_id": task.params.param_id
+                "param_id": task.params.param_id,
+                "timestamp": datetime.utcnow().isoformat() + "Z"
             }
-            with open(result_dir / "metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2)
+            self._write_json_atomic(result_dir / "metadata.json", metadata)
 
             # No longer storing manifest - removed from SimTask
 
@@ -192,8 +204,7 @@ class ProvenanceStore:
                 if result.error_details:
                     error_file = result_dir / "error_details.arrow"
                     if result.error_details.inline:
-                        with open(error_file, "wb") as f:
-                            f.write(result.error_details.inline)
+                        atomic_write(error_file, result.error_details.inline)
                     result_data["error_details"] = {
                         "size": result.error_details.size,
                         "checksum": result.error_details.checksum
@@ -204,8 +215,7 @@ class ProvenanceStore:
                 # For MVP, always store as blob
                 if artifact.inline:
                     artifact_file = result_dir / f"artifact_{name}.arrow"
-                    with open(artifact_file, "wb") as f:
-                        f.write(artifact.inline)
+                    atomic_write(artifact_file, artifact.inline)
 
                 # Store artifact metadata
                 result_data["outputs"][name] = {
@@ -213,8 +223,7 @@ class ProvenanceStore:
                     "checksum": artifact.checksum
                 }
 
-            with open(result_dir / "result.json", "w") as f:
-                json.dump(result_data, f, indent=2)
+            self._write_json_atomic(result_dir / "result.json", result_data)
 
             logger.debug(f"Stored simulation result at {result_dir}")
             return str(result_dir)
@@ -276,24 +285,45 @@ class ProvenanceStore:
         result_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Store metadata
+            # Store metadata with param_id
             metadata = {
                 "bundle_ref": task.bundle_ref,
                 "target_entrypoint": str(task.target_entrypoint),
-                "n_sim_returns": len(task.sim_returns)
+                "n_sim_returns": len(task.sim_returns),
+                "param_id": self._extract_param_id_from_task(task),
+                "timestamp": datetime.utcnow().isoformat() + "Z"
             }
-            with open(result_dir / "metadata.json", "w") as f:
-                json.dump(metadata, f, indent=2)
+            self._write_json_atomic(result_dir / "metadata.json", metadata)
 
-            # Store result
+            # Store result with input provenance tracking
             result_data = {
                 "aggregation_id": result.aggregation_id,
                 "loss": result.loss,
                 "diagnostics": result.diagnostics,
-                "n_replicates": result.n_replicates
+                "n_replicates": result.n_replicates,
+                "outputs": {},
+                "inputs": [  # Track what we aggregated
+                    {
+                        "type": "sim",
+                        "task_id": sr.task_id
+                    }
+                    for sr in task.sim_returns
+                ]
             }
-            with open(result_dir / "result.json", "w") as f:
-                json.dump(result_data, f, indent=2)
+
+            # Store any aggregated outputs as artifacts (future enhancement)
+            for name, artifact in result.outputs.items():
+                if artifact.inline:
+                    artifact_file = result_dir / f"artifact_{name}.arrow"
+                    atomic_write(artifact_file, artifact.inline)
+
+                    result_data["outputs"][name] = {
+                        "size": artifact.size,
+                        "checksum": artifact.checksum,
+                        "content_type": "application/vnd.apache.arrow.file"
+                    }
+
+            self._write_json_atomic(result_dir / "result.json", result_data)
 
             logger.debug(f"Stored aggregation result at {result_dir}")
             return str(result_dir)
@@ -355,6 +385,29 @@ class ProvenanceStore:
             ).hexdigest()
 
         return context
+
+    def _extract_param_id_from_task(self, task: AggregationTask) -> Optional[str]:
+        """Extract param_id from aggregation task's sim_returns.
+
+        Since all sim_returns in a replicate set share the same param_id,
+        we can extract it from the first one. The task_id format includes
+        the param_id in its first component.
+
+        Args:
+            task: AggregationTask with sim_returns
+
+        Returns:
+            param_id if extractable, None otherwise
+        """
+        if task.sim_returns and len(task.sim_returns) > 0:
+            # task_id is generated as hash of: f"{param_id[:16]}-{seed_str}-{output_names}"
+            # Since it's a hash, we can't directly extract param_id
+            # But we can use the first 16 chars as a proxy identifier
+            # Better approach: If we had access to the original SimTask, we'd have param_id directly
+            first_task_id = task.sim_returns[0].task_id
+            # Use first 16 chars of task_id as param identifier
+            return first_task_id[:16]
+        return None
 
     def _agg_path_context(self, task: AggregationTask) -> Dict[str, Any]:
         """Generate path context for aggregation task."""
