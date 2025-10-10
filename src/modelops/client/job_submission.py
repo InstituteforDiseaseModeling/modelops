@@ -151,14 +151,16 @@ class JobSubmissionClient:
         blob_key = self._upload_job(job)
 
         # Determine runner image based on job type
-        # Use public registry for runner images (not user's ACR)
-        # This image is built once by ModelOps devs and published publicly
+        # Allow override via environment variable for development
+        runner_tag = os.environ.get("MODELOPS_RUNNER_TAG", "latest")
+        base_image = "ghcr.io/vsbuffalo/modelops-dask-runner"
+
         match job:
             case SimJob():
-                image = "ghcr.io/vsbuffalo/modelops-dask-runner:latest"
+                image = f"{base_image}:{runner_tag}"
             case CalibrationJob():
                 # For now, use same runner for both types
-                image = "ghcr.io/vsbuffalo/modelops-dask-runner:latest"
+                image = f"{base_image}:{runner_tag}"
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 

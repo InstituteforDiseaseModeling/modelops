@@ -24,9 +24,18 @@ RUN pip install --no-cache-dir \
     kubernetes
 
 # Install dependencies from private GitHub repos using PAT
-# Cache bust for modelops-contracts updates
-ARG CONTRACTS_VERSION=latest
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@main
+# CRITICAL: Pass actual commit SHA to bust cache and force reinstall
+ARG CONTRACTS_REF=main
+RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
+    pip uninstall -y modelops-contracts || true && \
+    pip install --no-cache-dir --force-reinstall \
+    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
+
+# Verify the fix is actually installed
+RUN python -c "from modelops_contracts.entrypoint import parse_entrypoint; \
+    result = parse_entrypoint('targets.prevalence:prevalence_target'); \
+    print(f'Parse test passed: {result}'); \
+    assert result == ('targets.prevalence', 'prevalence_target'), 'ENTRYPOINT FIX NOT INSTALLED!'"
 
 # Copy and install modelops (this repository)
 COPY . /tmp/modelops
