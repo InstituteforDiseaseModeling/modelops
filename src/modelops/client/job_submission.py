@@ -372,9 +372,19 @@ class JobSubmissionClient:
 
         # Add type-specific fields
         match job:
-            case SimJob(tasks=tasks, priority=priority, metadata=metadata):
+            case SimJob(tasks=tasks, priority=priority, metadata=metadata, target_spec=target_spec):
                 data["priority"] = priority
                 data["metadata"] = metadata
+
+                # Serialize target_spec if present
+                if target_spec:
+                    data["target_spec"] = {
+                        "data": target_spec.data,
+                        "loss_function": target_spec.loss_function,
+                        "weights": target_spec.weights,
+                        "metadata": target_spec.metadata,
+                    }
+
                 data["tasks"] = [
                     {
                         "entrypoint": str(task.entrypoint),

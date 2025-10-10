@@ -109,12 +109,23 @@ def deserialize_job(data: Dict[str, Any]) -> Job:
                     )
                     tasks.append(task)
 
+            # Deserialize target_spec if present (same as CalibrationJob)
+            target_spec = None
+            if "target_spec" in data:
+                target_spec = TargetSpec(
+                    data=data["target_spec"]["data"],
+                    loss_function=data["target_spec"]["loss_function"],
+                    weights=data["target_spec"].get("weights"),
+                    metadata=data["target_spec"].get("metadata", {}),
+                )
+
             return SimJob(
                 job_id=data["job_id"],
                 bundle_ref=data["bundle_ref"],
                 tasks=tasks,
                 priority=data.get("priority", 0),
                 metadata=data.get("metadata", {}),
+                target_spec=target_spec,
             )
 
         case "calibration":
