@@ -155,10 +155,10 @@ class JobSubmissionClient:
         # This image is built once by ModelOps devs and published publicly
         match job:
             case SimJob():
-                image = "ghcr.io/institutefordiseasemodeling/modelops-job-runner:latest"
+                image = "ghcr.io/vsbuffalo/modelops-dask-runner:latest"
             case CalibrationJob():
                 # For now, use same runner for both types
-                image = "ghcr.io/institutefordiseasemodeling/modelops-job-runner:latest"
+                image = "ghcr.io/vsbuffalo/modelops-dask-runner:latest"
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 
