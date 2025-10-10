@@ -20,12 +20,14 @@ NAMESPACE ?= modelops-dask-$(ENV)
 # Development registry (vsbuffalo for dev, institutefordiseasemodeling for production)
 REGISTRY ?= ghcr.io
 # ORG ?= institutefordiseasemodeling  # Production - uncomment when ready to deploy to IDM
-ORG ?= vsbuffalo  # Development - comment out when deploying to production
+ORG ?= vsbuffalo# Development - comment out when deploying to production
 PROJECT ?= modelops
 
-# Version is simply the git SHA for CI-built images
+# Version includes both modelops and contracts SHAs for immutable tags
 GIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
-VERSION := $(GIT_SHA)
+CONTRACTS_REF ?= $(shell git -C ../modelops-contracts rev-parse HEAD 2>/dev/null || echo main)
+CONTRACTS_SHORT := $(shell echo $(CONTRACTS_REF) | cut -c1-8)
+VERSION := $(GIT_SHA)-contracts-$(CONTRACTS_SHORT)
 TAG ?= latest
 PYTHON_VERSION ?= 3.11
 
@@ -44,9 +46,9 @@ $(BUILD_DIR):
 # endif
 
 # Image names
-SCHEDULER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
-WORKER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
-RUNNER_IMAGE = $(REGISTRY)/$(ORG)/$(PROJECT)-job-runner
+SCHEDULER_IMAGE=$(REGISTRY)/$(ORG)/$(PROJECT)-dask-scheduler
+WORKER_IMAGE=$(REGISTRY)/$(ORG)/$(PROJECT)-dask-worker
+RUNNER_IMAGE=$(REGISTRY)/$(ORG)/$(PROJECT)-dask-runner
 
 # GHCR Configuration
 GHCR_USER ?= $(shell git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' || echo "user")
@@ -58,7 +60,7 @@ BUILDX_BUILDER ?= modelops-multiarch
 
 # Build context is parent directory to access sibling repos, 
 # like ../modelops-contracts and ../calabaria (TODO/POST-MVP)
-BUILD_CONTEXT = ..
+BUILD_CONTEXT = .
 
 # === Development Targets ===
 
@@ -213,6 +215,8 @@ build-scheduler: setup-buildx ghcr-login | $(BUILD_DIR)
 		-t $(SCHEDULER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		--build-arg GIT_SHA=$(GIT_SHA) \
+		--build-arg CONTRACTS_REF=$(CONTRACTS_REF) \
+		--build-arg GITHUB_TOKEN=$(GITHUB_TOKEN) \
 		--push \
 		--iidfile $(BUILD_DIR)/scheduler.iid \
 		$(BUILD_CONTEXT)
@@ -235,6 +239,8 @@ build-worker: setup-buildx ghcr-login | $(BUILD_DIR)
 		-t $(WORKER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		--build-arg GIT_SHA=$(GIT_SHA) \
+		--build-arg CONTRACTS_REF=$(CONTRACTS_REF) \
+		--build-arg GITHUB_TOKEN=$(GITHUB_TOKEN) \
 		--push \
 		--iidfile $(BUILD_DIR)/worker.iid \
 		$(BUILD_CONTEXT)
@@ -257,6 +263,8 @@ build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
 		-t $(RUNNER_IMAGE):$(VERSION) \
 		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
 		--build-arg GIT_SHA=$(GIT_SHA) \
+		--build-arg CONTRACTS_REF=$(CONTRACTS_REF) \
+		--build-arg GITHUB_TOKEN=$(GITHUB_TOKEN) \
 		--push \
 		--iidfile $(BUILD_DIR)/runner.iid \
 		$(BUILD_CONTEXT)

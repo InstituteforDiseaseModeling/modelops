@@ -4,7 +4,9 @@ FROM python:3.13-slim
 # Build arguments for provenance and authentication
 ARG GIT_SHA=dev
 ARG GITHUB_TOKEN
+ARG CONTRACTS_REF=main
 LABEL org.opencontainers.image.revision=$GIT_SHA
+LABEL org.vsb.contracts.revision=${CONTRACTS_REF}
 ENV MODELOPS_IMAGE_GIT_SHA=$GIT_SHA
 
 # Install system dependencies
@@ -29,8 +31,13 @@ RUN pip install --no-cache-dir \
     uv
 
 # Install dependencies from private GitHub repos using PAT
-# 1. First install contracts (base dependency)
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git
+# 0. Install pydantic (required by modelops-contracts)
+RUN pip install --no-cache-dir pydantic
+
+# 1. Install exact contracts commit and make it stick
+RUN python -m pip uninstall -y modelops-contracts || true && \
+    python -m pip install --no-deps --force-reinstall --no-cache-dir \
+    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
 
 # 2. Install oras-py from git (needed by modelops-bundle)
 RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/oras-py.git
@@ -41,12 +48,20 @@ RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/
 # 4. Install calabaria from GitHub
 RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/calabaria.git
 
-# 5. Copy and install modelops (this repository)
+# 5. Copy and install modelops with --no-deps to prevent downgrading contracts
 COPY . /tmp/modelops
-RUN pip install --no-cache-dir /tmp/modelops
+RUN python -m pip install --no-deps --no-cache-dir /tmp/modelops
 
 # 6. Clean up
 RUN rm -rf /tmp/modelops
+
+# Final verification to catch any accidental downgrade
+RUN python - <<'PY'
+from modelops_contracts.entrypoint import parse_entrypoint
+import importlib.metadata as md
+assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
+print("✓ scheduler contracts OK:", md.version("modelops-contracts"))
+PY
 
 # Switch to non-root user
 USER 1000

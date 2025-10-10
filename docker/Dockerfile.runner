@@ -3,6 +3,8 @@ FROM python:3.13-slim
 
 # Build arguments for authentication
 ARG GITHUB_TOKEN
+ARG CONTRACTS_REF=main
+LABEL org.vsb.contracts.revision=${CONTRACTS_REF}
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -23,23 +25,33 @@ RUN pip install --no-cache-dir \
     azure-storage-blob \
     kubernetes
 
-# Install dependencies from private GitHub repos using PAT
-# CRITICAL: Pass actual commit SHA to bust cache and force reinstall
-ARG CONTRACTS_REF=main
+# Install pydantic (required by modelops-contracts)
+RUN pip install --no-cache-dir pydantic
+
+# Install modelops-contracts with --no-deps to prevent downgrades
 RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
-    pip uninstall -y modelops-contracts || true && \
-    pip install --no-cache-dir --force-reinstall \
+    python -m pip uninstall -y modelops-contracts || true && \
+    python -m pip install --no-deps --force-reinstall --no-cache-dir \
     "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
 
-# Verify the fix is actually installed
-RUN python -c "from modelops_contracts.entrypoint import parse_entrypoint; \
-    result = parse_entrypoint('targets.prevalence:prevalence_target'); \
-    print(f'Parse test passed: {result}'); \
-    assert result == ('targets.prevalence', 'prevalence_target'), 'ENTRYPOINT FIX NOT INSTALLED!'"
+# Verify contracts BEFORE installing modelops
+RUN python - <<'PY'
+from modelops_contracts.entrypoint import parse_entrypoint
+assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
+print("✓ contracts sanity check (pre-modelops)")
+PY
 
-# Copy and install modelops (this repository)
+# Copy and install modelops with --no-deps to prevent downgrading contracts
 COPY . /tmp/modelops
-RUN pip install --no-cache-dir /tmp/modelops && rm -rf /tmp/modelops
+RUN python -m pip install --no-deps --no-cache-dir /tmp/modelops && rm -rf /tmp/modelops
+
+# Re-verify AFTER installing modelops (guards against dependency downgrades)
+RUN python - <<'PY'
+from modelops_contracts.entrypoint import parse_entrypoint
+import importlib.metadata as md
+assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
+print("✓ contracts sanity check (post-modelops) version:", md.version("modelops-contracts"))
+PY
 
 # Switch to non-root user
 USER 1000
