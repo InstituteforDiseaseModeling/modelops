@@ -24,7 +24,9 @@ RUN pip install --no-cache-dir \
     kubernetes
 
 # Install dependencies from private GitHub repos using PAT
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git
+# Cache bust for modelops-contracts updates
+ARG CONTRACTS_VERSION=latest
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@main
 
 # Copy and install modelops (this repository)
 COPY . /tmp/modelops
