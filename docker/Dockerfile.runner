@@ -20,23 +20,23 @@ RUN useradd -m -u 1000 runner
 WORKDIR /app
 
 # Install Python dependencies
-RUN pip install --no-cache-dir \
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+RUN python -m pip install --upgrade pip wheel setuptools
+RUN python -m pip install \
     "dask[distributed]==2024.8.0" \
     azure-storage-blob \
     kubernetes
 
-# Install pydantic (required by modelops-contracts)
-RUN pip install --no-cache-dir pydantic
-
-# Install modelops-contracts with --no-deps to prevent downgrades
+# Install modelops-contracts WITH deps (so pydantic is pulled)
 RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
-    python -m pip uninstall -y modelops-contracts || true && \
-    python -m pip install --no-deps --force-reinstall --no-cache-dir \
+    python -m pip install --upgrade \
     "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
 
 # Verify contracts BEFORE installing modelops
 RUN python - <<'PY'
+import importlib.metadata as md, pydantic
 from modelops_contracts.entrypoint import parse_entrypoint
+print("contracts:", md.version("modelops-contracts"), "pydantic:", pydantic.__version__)
 assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
 print("✓ contracts sanity check (pre-modelops)")
 PY
@@ -47,10 +47,11 @@ RUN python -m pip install --no-deps --no-cache-dir /tmp/modelops && rm -rf /tmp/
 
 # Re-verify AFTER installing modelops (guards against dependency downgrades)
 RUN python - <<'PY'
-from modelops_contracts.entrypoint import parse_entrypoint
 import importlib.metadata as md
+from modelops_contracts.entrypoint import parse_entrypoint
+print("contracts(final):", md.version("modelops-contracts"))
 assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
-print("✓ contracts sanity check (post-modelops) version:", md.version("modelops-contracts"))
+print("✓ contracts sanity check (post-modelops) - no downgrade occurred")
 PY
 
 # Switch to non-root user

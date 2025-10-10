@@ -23,7 +23,9 @@ RUN useradd -m -u 1000 dask
 WORKDIR /app
 
 # Install Dask and distributed computing dependencies
-RUN pip install --no-cache-dir \
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+RUN python -m pip install --upgrade pip wheel setuptools
+RUN python -m pip install \
     "dask[distributed]==2024.8.0" \
     msgpack \
     lz4 \
@@ -31,12 +33,9 @@ RUN pip install --no-cache-dir \
     uv
 
 # Install dependencies from private GitHub repos using PAT
-# 0. Install pydantic (required by modelops-contracts)
-RUN pip install --no-cache-dir pydantic
-
-# 1. Install exact contracts commit and make it stick
-RUN python -m pip uninstall -y modelops-contracts || true && \
-    python -m pip install --no-deps --force-reinstall --no-cache-dir \
+# 1. Install modelops-contracts WITH deps (so pydantic is pulled)
+RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
+    python -m pip install --upgrade \
     "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
 
 # 2. Install oras-py from git (needed by modelops-bundle)
@@ -57,10 +56,11 @@ RUN rm -rf /tmp/modelops
 
 # Final verification to catch any accidental downgrade
 RUN python - <<'PY'
+import importlib.metadata as md, pydantic
 from modelops_contracts.entrypoint import parse_entrypoint
-import importlib.metadata as md
+print("scheduler contracts:", md.version("modelops-contracts"), "pydantic:", pydantic.__version__)
 assert parse_entrypoint("targets.prevalence:prevalence_target") == ("targets.prevalence", "prevalence_target")
-print("✓ scheduler contracts OK:", md.version("modelops-contracts"))
+print("✓ scheduler contracts OK - no downgrade occurred")
 PY
 
 # Switch to non-root user

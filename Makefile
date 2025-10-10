@@ -210,6 +210,7 @@ build-scheduler: setup-buildx ghcr-login | $(BUILD_DIR)
 		--no-cache \
 		--pull \
 		--platform linux/amd64 \
+		--progress=plain \
 		-f docker/Dockerfile.scheduler \
 		-t $(SCHEDULER_IMAGE):$(TAG) \
 		-t $(SCHEDULER_IMAGE):$(VERSION) \
@@ -234,6 +235,7 @@ build-worker: setup-buildx ghcr-login | $(BUILD_DIR)
 		--no-cache \
 		--pull \
 		--platform linux/amd64 \
+		--progress=plain \
 		-f docker/Dockerfile.worker \
 		-t $(WORKER_IMAGE):$(TAG) \
 		-t $(WORKER_IMAGE):$(VERSION) \
@@ -258,6 +260,7 @@ build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
 		--no-cache \
 		--pull \
 		--platform linux/amd64 \
+		--progress=plain \
 		-f docker/Dockerfile.runner \
 		-t $(RUNNER_IMAGE):$(TAG) \
 		-t $(RUNNER_IMAGE):$(VERSION) \
