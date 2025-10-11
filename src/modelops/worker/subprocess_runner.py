@@ -652,15 +652,18 @@ class SubprocessRunner:
                             if isinstance(table_artifact, dict):
                                 if 'data' in table_artifact:
                                     # Arrow IPC bytes in 'data' field
-                                    df = pl.read_ipc(table_artifact['data'])
+                                    import io
+                                    df = pl.read_ipc(io.BytesIO(table_artifact['data']))
                                 elif 'inline' in table_artifact:
                                     # Inline data for small artifacts
-                                    df = pl.read_ipc(table_artifact['inline'])
+                                    import io
+                                    df = pl.read_ipc(io.BytesIO(table_artifact['inline']))
                                 else:
                                     raise ValueError(f"TableArtifact missing data: {table_artifact.keys()}")
                             elif isinstance(table_artifact, bytes):
                                 # Direct bytes format
-                                df = pl.read_ipc(table_artifact)
+                                import io
+                                df = pl.read_ipc(io.BytesIO(table_artifact))
                             elif isinstance(table_artifact, pl.DataFrame):
                                 # Already deserialized
                                 df = table_artifact
