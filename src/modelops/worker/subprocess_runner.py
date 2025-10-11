@@ -700,10 +700,11 @@ class SubprocessRunner:
                     result = {
                         "loss": float(target_eval.loss),
                         "diagnostics": {
-                            **target_eval.diagnostics,
                             "target_type": type(target_obj).__name__,
                             "model_output": target_obj.model_output,
                             "n_sim_returns": len(sim_returns),
+                            "target_name": target_eval.name if hasattr(target_eval, 'name') else None,
+                            "weight": target_eval.weight if hasattr(target_eval, 'weight') else None,
                         },
                         "n_replicates": len(sim_returns),
                         "outputs": {}

@@ -71,7 +71,7 @@ class StochasticSEIR(BaseModel):
         # Simulation loop
         for t in times:
             if int(t) == t:  # Record daily
-                result_times.append(float(t))
+                result_times.append(int(t))  # Store as int for day column
                 result_I.append(I)
 
             # Rates
