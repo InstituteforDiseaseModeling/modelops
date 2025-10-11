@@ -213,7 +213,8 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     # If we used aggregation, results are already AggregationReturn objects with loss
     if target_entrypoint:
         logger.info("Target evaluation completed during aggregation")
-        for i, result in enumerate(results[:3]):
+        # Note: Storage happens on worker side in isolated_warm.py
+        for i, result in enumerate(results[:3]):  # Log first 3
             if hasattr(result, 'loss'):
                 logger.info(f"  Param set {i} loss: {result.loss}")
     elif job.target_spec:
