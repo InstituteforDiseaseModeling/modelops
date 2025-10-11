@@ -655,6 +655,11 @@ class SubprocessRunner:
                         outputs = sim_return.get('outputs', {})
 
                         for name, table_artifact in outputs.items():
+                            # Skip non-Arrow outputs (like 'metadata' which is JSON)
+                            if name == 'metadata':
+                                logger.debug(f"Skipping non-Arrow output: {name}")
+                                continue
+
                             # Extract Arrow bytes from various formats (embedded logic)
                             try:
                                 # Handle different artifact formats

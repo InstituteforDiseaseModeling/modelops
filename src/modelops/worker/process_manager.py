@@ -574,10 +574,8 @@ class WarmProcessManager:
             
             # Check for errors
             if 'error' in result:
-                raise RuntimeError(
-                    f"Aggregation failed: {result['error']} "
-                    f"(type: {result.get('type', 'Unknown')})"
-                )
+                from modelops.utils.error_utils import format_aggregation_error
+                raise RuntimeError(format_aggregation_error(result))
             
             return result
             

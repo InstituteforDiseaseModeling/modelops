@@ -151,9 +151,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
             # 4. Handle errors and return
             if 'error' in result:
-                error_msg = result['error']
-                error_type = result.get('type', 'Unknown')
-                raise RuntimeError(f"Aggregation failed in subprocess: {error_msg} (type: {error_type})")
+                from modelops.utils.error_utils import format_aggregation_error
+                raise RuntimeError(format_aggregation_error(result))
 
             agg_return = AggregationReturn(
                 aggregation_id=task.aggregation_id(),
