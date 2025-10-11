@@ -559,8 +559,8 @@ class SubprocessRunner:
         logger.info("Current sys.path (first 3): %s", sys.path[:3])
 
         try:
-            # Ensure bundle is in sys.path for imports
-            if str(self.bundle_path) not in sys.path:
+            # Ensure bundle is in sys.path for imports (only if it exists)
+            if self.bundle_path.exists() and str(self.bundle_path) not in sys.path:
                 logger.info("Adding bundle path to sys.path")
                 sys.path.insert(0, str(self.bundle_path))
             
@@ -606,8 +606,9 @@ class SubprocessRunner:
                     evaluator = getattr(target_class, target_name)
             else:
                 # Complex module path like "my.package.module"
-                # Import the full module path
-                module = __import__(import_path, fromlist=[""])
+                # Use importlib for better nested module handling
+                import importlib
+                module = importlib.import_module(import_path)
                 # Try to get the target function/class
                 if hasattr(module, target_name):
                     evaluator = getattr(module, target_name)
@@ -615,7 +616,7 @@ class SubprocessRunner:
                     # Maybe it's a class with the last part as class name
                     *module_parts, class_name = parts
                     module_path = ".".join(module_parts)
-                    module = __import__(module_path, fromlist=[class_name])
+                    module = importlib.import_module(module_path)
                     target_class = getattr(module, class_name)
                     evaluator = getattr(target_class, target_name)
             
