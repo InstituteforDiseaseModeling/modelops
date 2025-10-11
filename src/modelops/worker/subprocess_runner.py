@@ -646,7 +646,7 @@ class SubprocessRunner:
                     # Convert sim_returns (dicts) to SimOutputs (DataFrames) for Calabaria
                     import polars as pl
                     import io
-                    from modelops.worker.arrow_transport import extract_arrow_from_artifact
+                    import base64
 
                     sim_outputs = []
 
@@ -655,9 +655,25 @@ class SubprocessRunner:
                         outputs = sim_return.get('outputs', {})
 
                         for name, table_artifact in outputs.items():
-                            # Use clean extraction function
+                            # Extract Arrow bytes from various formats (embedded logic)
                             try:
-                                arrow_bytes = extract_arrow_from_artifact(table_artifact)
+                                # Handle different artifact formats
+                                if isinstance(table_artifact, bytes):
+                                    arrow_bytes = table_artifact
+                                elif isinstance(table_artifact, dict):
+                                    data = table_artifact.get('inline') or table_artifact.get('data')
+                                    if data is None:
+                                        raise ValueError(f"TableArtifact for '{name}' missing 'inline' or 'data' field")
+
+                                    # Handle base64 string (from JSON-RPC serialization)
+                                    if isinstance(data, str):
+                                        arrow_bytes = base64.b64decode(data)
+                                    else:
+                                        arrow_bytes = data
+                                else:
+                                    raise TypeError(f"Unexpected artifact type for '{name}': {type(table_artifact)}")
+
+                                # Convert to DataFrame
                                 df = pl.read_ipc(io.BytesIO(arrow_bytes))
                             except pl.exceptions.ComputeError as e:
                                 # Polars-specific error (invalid Arrow data)
