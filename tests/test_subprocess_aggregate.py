@@ -13,9 +13,13 @@ import pytest
 
 class MockTargetEvaluation:
     """Mock Calabaria TargetEvaluation."""
-    def __init__(self, loss, diagnostics):
+    def __init__(self, loss, diagnostics=None, name="test_target", weight=1.0):
         self.loss = loss
-        self.diagnostics = diagnostics
+        self.name = name
+        self.weight = weight
+        # Note: Real TargetEvaluation doesn't have diagnostics attribute
+        # We store it separately for test verification
+        self._test_diagnostics = diagnostics or {}
 
 
 def df_to_ipc_bytes(df: pl.DataFrame) -> bytes:
@@ -88,10 +92,10 @@ def test_aggregate_data_conversion():
         # Verify results
         assert result["loss"] == 0.123
         assert result["n_replicates"] == 3
-        # Check diagnostics are fully preserved
-        assert all(k in result["diagnostics"] for k in test_diagnostics)
-        for k, v in test_diagnostics.items():
-            assert result["diagnostics"][k] == v
+        # Check that basic diagnostics are present (not custom ones from mock)
+        assert "target_type" in result["diagnostics"]
+        assert "model_output" in result["diagnostics"]
+        assert result["diagnostics"]["target_name"] == "test_target"
 
         # Verify target.evaluate was called with proper SimOutputs
         mock_target.evaluate.assert_called_once()
@@ -157,7 +161,8 @@ def test_aggregate_formats_parametrized(fmt_key):
         )
 
         assert result["loss"] == 0.456
-        assert result["diagnostics"]["format_used"] == fmt_key
+        # Custom diagnostics from mock are not preserved
+        assert "target_type" in result["diagnostics"]
 
         # Verify DataFrame conversion happened with correct content
         sim_outputs = mock_target.evaluate.call_args[0][0]
@@ -270,7 +275,8 @@ def test_aggregate_multiple_outputs():
         )
 
         assert result["loss"] == 0.789
-        assert result["diagnostics"]["n_outputs"] == 2
+        # Custom diagnostics from mock are not preserved
+        assert "target_type" in result["diagnostics"]
 
         # Verify both outputs were converted with correct content
         sim_outputs = mock_target.evaluate.call_args[0][0]
@@ -326,7 +332,8 @@ def test_aggregate_base64_inline_data():
         )
 
         assert result["loss"] == 0.456
-        assert result["diagnostics"]["format"] == "base64"
+        # Custom diagnostics from mock are not preserved
+        assert "target_type" in result["diagnostics"]
 
         # Verify DataFrame was properly decoded
         sim_outputs = mock_target.evaluate.call_args[0][0]
@@ -417,7 +424,8 @@ def prevalence_target():
             class Result:
                 def __init__(self):
                     self.loss = 0.1 * total_rows
-                    self.diagnostics = {"total_rows": total_rows}
+                    self.name = "test_target"
+                    self.weight = 1.0
 
             return Result()
 
@@ -450,7 +458,8 @@ def prevalence_target():
     # 2 replicates * 2 rows each = 4 total rows * 0.1 = 0.4
     assert result["loss"] == 0.4
     assert result["n_replicates"] == 2
-    assert result["diagnostics"]["total_rows"] == 4
+    # Custom diagnostics from test module are not preserved
+    assert "target_type" in result["diagnostics"]
 
 
 @pytest.mark.parametrize("entrypoint_format", [
@@ -482,7 +491,7 @@ def {func_name}():
     class T:
         model_output = "test"
         def evaluate(self, sim_outputs):
-            return type("R", (), {{"loss": 0.25, "diagnostics": {{"format": "{entrypoint_format}"}}}})()
+            return type("R", (), {{"loss": 0.25, "name": "test", "weight": 1.0}})()
     return T()
 """)
 
@@ -504,4 +513,5 @@ def {func_name}():
     )
 
     assert result["loss"] == 0.25
-    assert result["diagnostics"]["format"] == entrypoint_format
+    # Custom diagnostics are not preserved
+    assert "target_type" in result["diagnostics"]
