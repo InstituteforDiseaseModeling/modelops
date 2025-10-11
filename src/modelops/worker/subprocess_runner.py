@@ -624,7 +624,7 @@ class SubprocessRunner:
             # The evaluator will need to handle the dict format
             
             # Debug logging
-            logger.info(f"Calling evaluator {evaluator.__name__} with {len(sim_returns)} returns")
+            logger.info(f"Calling evaluator with {len(sim_returns)} returns")
             logger.info(f"First SimReturn keys: {list(sim_returns[0].keys()) if sim_returns else 'None'}")
             
             # Redirect stdout to stderr during evaluation
@@ -639,44 +639,81 @@ class SubprocessRunner:
                     logger.info("Detected Calabaria-style target function")
                     target_obj = evaluator()  # Call with no args (decorator handles data paths)
 
-                    # Now we need to evaluate the target against sim_returns
-                    # Target objects have an evaluate() method that takes replicated sim outputs
-                    # Convert sim_returns to the format expected by Target.evaluate()
+                    # Convert sim_returns (dicts) to SimOutputs (DataFrames) for Calabaria
+                    import polars as pl
+                    sim_outputs = []
 
-                    # For now, return a dummy loss until we implement proper evaluation
+                    for sim_return in sim_returns:
+                        sim_output = {}
+                        outputs = sim_return.get('outputs', {})
+
+                        for name, table_artifact in outputs.items():
+                            # Handle different transport formats
+                            if isinstance(table_artifact, dict):
+                                if 'data' in table_artifact:
+                                    # Arrow IPC bytes in 'data' field
+                                    df = pl.read_ipc(table_artifact['data'])
+                                elif 'inline' in table_artifact:
+                                    # Inline data for small artifacts
+                                    df = pl.read_ipc(table_artifact['inline'])
+                                else:
+                                    raise ValueError(f"TableArtifact missing data: {table_artifact.keys()}")
+                            elif isinstance(table_artifact, bytes):
+                                # Direct bytes format
+                                df = pl.read_ipc(table_artifact)
+                            elif isinstance(table_artifact, pl.DataFrame):
+                                # Already deserialized
+                                df = table_artifact
+                            else:
+                                raise TypeError(f"Unknown artifact type: {type(table_artifact)}")
+
+                            sim_output[name] = df
+                        sim_outputs.append(sim_output)
+
+                    # Call actual target evaluation
+                    logger.info(f"Evaluating target with {len(sim_outputs)} simulation outputs")
+                    target_eval = target_obj.evaluate(sim_outputs)
+
+                    # Extract results from TargetEvaluation
                     result = {
-                        "loss": 0.5,  # Placeholder
+                        "loss": float(target_eval.loss),
                         "diagnostics": {
+                            **target_eval.diagnostics,
                             "target_type": type(target_obj).__name__,
-                            "model_output": getattr(target_obj, 'model_output', 'unknown'),
-                            "n_sim_returns": len(sim_returns)
-                        }
+                            "model_output": target_obj.model_output,
+                            "n_sim_returns": len(sim_returns),
+                        },
+                        "n_replicates": len(sim_returns),
+                        "outputs": {}
                     }
-                    logger.info("Target evaluation placeholder - proper implementation needed")
+
+                    logger.info(f"Target evaluation complete: loss={result['loss']}")
+                    return result
+
                 else:
                     # Old-style evaluator that takes (sim_returns, target_data)
                     result = evaluator(sim_returns, target_data)
 
-            logger.info(f"Evaluator returned: {result}")
+                    logger.info(f"Old-style evaluator returned: {result}")
 
-            # Validate result structure
-            if not isinstance(result, dict):
-                raise ValueError(f"Target evaluator must return dict, got {type(result)}")
-            if 'loss' not in result:
-                raise ValueError("Target evaluator must return 'loss' in result dict")
-            
-            # Ensure loss is finite
-            loss = float(result['loss'])
-            if not math.isfinite(loss):
-                raise ValueError(f"Loss must be finite, got {loss}")
-            
-            # Package result for JSON-RPC transport
-            return {
-                "loss": loss,
-                "diagnostics": result.get('diagnostics', {}),
-                "n_replicates": len(sim_returns),
-                "outputs": {}  # Could add aggregated outputs here if needed
-            }
+                    # Validate result structure
+                    if not isinstance(result, dict):
+                        raise ValueError(f"Target evaluator must return dict, got {type(result)}")
+                    if 'loss' not in result:
+                        raise ValueError("Target evaluator must return 'loss' in result dict")
+
+                    # Ensure loss is finite
+                    loss = float(result['loss'])
+                    if not math.isfinite(loss):
+                        raise ValueError(f"Loss must be finite, got {loss}")
+
+                    # Package result for JSON-RPC transport
+                    return {
+                        "loss": loss,
+                        "diagnostics": result.get('diagnostics', {}),
+                        "n_replicates": len(sim_returns),
+                        "outputs": {}
+                    }
             
         except Exception as e:
             logger.exception("Aggregation failed")
