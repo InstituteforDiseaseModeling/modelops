@@ -551,9 +551,12 @@ class SubprocessRunner:
         Returns:
             Aggregation result with loss and diagnostics
         """
+        # Import base64 at the top of the method to avoid scope issues
+        import base64
+
         if bundle_digest and bundle_digest != self.bundle_digest:
             raise ValueError(f"Bundle digest mismatch: expected {self.bundle_digest}, got {bundle_digest}")
-        
+
         logger.info("Executing aggregation %s with %d results", target_entrypoint, len(sim_returns))
         logger.info("Bundle path: %s", self.bundle_path)
         logger.info("Current sys.path (first 3): %s", sys.path[:3])
@@ -654,11 +657,20 @@ class SubprocessRunner:
                                 if 'data' in table_artifact:
                                     # Arrow IPC bytes in 'data' field
                                     import io
-                                    df = pl.read_ipc(io.BytesIO(table_artifact['data']))
+                                    data = table_artifact['data']
+                                    # Handle both bytes and base64-encoded strings
+                                    if isinstance(data, str):
+                                        data = base64.b64decode(data)
+                                    df = pl.read_ipc(io.BytesIO(data))
                                 elif 'inline' in table_artifact:
                                     # Inline data for small artifacts
                                     import io
-                                    df = pl.read_ipc(io.BytesIO(table_artifact['inline']))
+                                    inline_data = table_artifact['inline']
+                                    # Handle both bytes and base64-encoded strings
+                                    if isinstance(inline_data, str):
+                                        # Decode base64 if it's a string
+                                        inline_data = base64.b64decode(inline_data)
+                                    df = pl.read_ipc(io.BytesIO(inline_data))
                                 else:
                                     raise ValueError(f"TableArtifact missing data: {table_artifact.keys()}")
                             elif isinstance(table_artifact, bytes):

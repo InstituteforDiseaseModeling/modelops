@@ -285,6 +285,56 @@ def test_aggregate_multiple_outputs():
         sys.modules.pop(modname, None)
 
 
+def test_aggregate_base64_inline_data():
+    """Test that aggregate handles base64-encoded inline data correctly."""
+    from modelops.worker.subprocess_runner import SubprocessRunner
+    import base64
+
+    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+        runner = SubprocessRunner(
+            bundle_path=Path("/tmp/test"),
+            venv_path=Path("/tmp/venv"),
+            bundle_digest="test123"
+        )
+
+    # Create test data
+    df = pl.DataFrame({"day": [0, 1], "infected": [10, 20]})
+    arrow_bytes = df_to_ipc_bytes(df)
+
+    # Encode as base64 string (simulates what happens during serialization)
+    base64_str = base64.b64encode(arrow_bytes).decode('utf-8')
+
+    mock_target = Mock()
+    mock_target.model_output = "test"
+    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
+        loss=0.456,
+        diagnostics={"format": "base64"}
+    ))
+
+    # Test with base64-encoded string
+    sim_returns = [{"outputs": {"test": {"inline": base64_str}}}]
+
+    modname = "_test_targets_base64"
+    mock_module = MagicMock()
+    mock_module.target = lambda: mock_target
+    sys.modules[modname] = mock_module
+
+    try:
+        result = runner.aggregate(
+            target_entrypoint=f"{modname}:target",
+            sim_returns=sim_returns
+        )
+
+        assert result["loss"] == 0.456
+        assert result["diagnostics"]["format"] == "base64"
+
+        # Verify DataFrame was properly decoded
+        sim_outputs = mock_target.evaluate.call_args[0][0]
+        assert_frame_equal(sim_outputs[0]["test"], df)
+    finally:
+        sys.modules.pop(modname, None)
+
+
 def test_aggregate_replicate_independence():
     """Test that replicates are handled independently without aliasing."""
     from modelops.worker.subprocess_runner import SubprocessRunner
