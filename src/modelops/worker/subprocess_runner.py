@@ -645,6 +645,9 @@ class SubprocessRunner:
 
                     # Convert sim_returns (dicts) to SimOutputs (DataFrames) for Calabaria
                     import polars as pl
+                    import io
+                    from modelops.worker.arrow_transport import extract_arrow_from_artifact
+
                     sim_outputs = []
 
                     for sim_return in sim_returns:
@@ -652,80 +655,18 @@ class SubprocessRunner:
                         outputs = sim_return.get('outputs', {})
 
                         for name, table_artifact in outputs.items():
-                            # Handle different transport formats
-                            if isinstance(table_artifact, dict):
-                                if 'data' in table_artifact:
-                                    # Arrow IPC bytes in 'data' field
-                                    import io
-                                    data = table_artifact['data']
-                                    # Handle both bytes and base64-encoded strings
-                                    if isinstance(data, str):
-                                        # Check if it's a string representation of bytes (e.g., "b'...'")
-                                        if data.startswith("b'") and data.endswith("'"):
-                                            # This is a repr() string of bytes, need to eval it
-                                            import ast
-                                            data = ast.literal_eval(data)
-                                        elif data.startswith('b"') and data.endswith('"'):
-                                            # Double-quoted bytes representation
-                                            import ast
-                                            data = ast.literal_eval(data)
-                                        elif data.startswith("ARROW"):
-                                            # It's raw Arrow data as a string, encode it back to bytes
-                                            data = data.encode('latin-1')
-                                        else:
-                                            # Assume it's base64-encoded
-                                            try:
-                                                data = base64.b64decode(data)
-                                            except:
-                                                # Fallback to latin-1 encoding
-                                                data = data.encode('latin-1')
-                                    df = pl.read_ipc(io.BytesIO(data))
-                                elif 'inline' in table_artifact:
-                                    # Inline data for small artifacts
-                                    import io
-                                    inline_data = table_artifact['inline']
-                                    # Handle both bytes and base64-encoded strings
-                                    if isinstance(inline_data, str):
-                                        # Check if it's a string representation of bytes (e.g., "b'...'")
-                                        if inline_data.startswith("b'") and inline_data.endswith("'"):
-                                            # This is a repr() string of bytes, need to eval it (dangerous but necessary)
-                                            import ast
-                                            inline_data = ast.literal_eval(inline_data)
-                                        elif inline_data.startswith('b"') and inline_data.endswith('"'):
-                                            # Double-quoted bytes representation
-                                            import ast
-                                            inline_data = ast.literal_eval(inline_data)
-                                        elif inline_data.startswith("ARROW"):
-                                            # It's raw Arrow data as a string, encode it back to bytes
-                                            inline_data = inline_data.encode('latin-1')  # Use latin-1 to preserve byte values
-                                        else:
-                                            # Assume it's base64-encoded
-                                            try:
-                                                inline_data = base64.b64decode(inline_data)
-                                                # Verify it looks like Arrow data
-                                                if not inline_data.startswith(b'ARROW'):
-                                                    logger.warning("Decoded data doesn't start with ARROW magic bytes")
-                                            except Exception as e:
-                                                logger.error(f"Failed to decode inline data as base64: {e}")
-                                                logger.error(f"First 100 chars of inline: {repr(inline_data[:100])}")
-                                                # Try as latin-1 encoded string
-                                                try:
-                                                    inline_data = inline_data.encode('latin-1')
-                                                    logger.info("Fallback to latin-1 encoding succeeded")
-                                                except:
-                                                    raise
-                                    df = pl.read_ipc(io.BytesIO(inline_data))
-                                else:
-                                    raise ValueError(f"TableArtifact missing data: {table_artifact.keys()}")
-                            elif isinstance(table_artifact, bytes):
-                                # Direct bytes format
-                                import io
-                                df = pl.read_ipc(io.BytesIO(table_artifact))
-                            elif isinstance(table_artifact, pl.DataFrame):
-                                # Already deserialized
-                                df = table_artifact
-                            else:
-                                raise TypeError(f"Unknown artifact type: {type(table_artifact)}")
+                            # Use clean extraction function
+                            try:
+                                arrow_bytes = extract_arrow_from_artifact(table_artifact)
+                                df = pl.read_ipc(io.BytesIO(arrow_bytes))
+                            except pl.exceptions.ComputeError as e:
+                                # Polars-specific error (invalid Arrow data)
+                                logger.error(f"Invalid Arrow IPC data for output '{name}': {e}")
+                                raise ValueError(f"Output '{name}' contains invalid Arrow IPC data") from e
+                            except Exception as e:
+                                # Other extraction errors
+                                logger.error(f"Failed to extract Arrow data for output '{name}': {e}")
+                                raise
 
                             sim_output[name] = df
                         sim_outputs.append(sim_output)
