@@ -12,10 +12,64 @@ from typing import Optional
 from modelops_contracts import SimulationStudy, CalibrationSpec
 
 from ..client import JobSubmissionClient
+from ..services.storage.azure_versioned import AzureVersionedStore
+from ..services.job_registry import JobRegistry
+from ..services.job_state import JobStatus
 from .display import console, success, error, info, warning, section
 from .common_options import env_option
+from .formatting import format_timestamp, format_duration, get_timezone_info
 
 app = typer.Typer(help="Submit and manage simulation jobs")
+
+
+def _get_registry(env: str) -> Optional[JobRegistry]:
+    """Get JobRegistry instance, or None if unavailable.
+
+    Args:
+        env: Environment name
+
+    Returns:
+        JobRegistry instance or None
+    """
+    try:
+        # Get storage connection from environment or Pulumi
+        import os
+        from ..core import automation
+
+        # Try environment variable first
+        connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+
+        if not connection_string:
+            # Try to get from Pulumi storage stack (same as JobSubmissionClient)
+            try:
+                outputs = automation.outputs("storage", env, refresh=False)
+                if outputs and "connection_string" in outputs:
+                    connection_string = automation.get_output_value(outputs, "connection_string")
+            except Exception:
+                pass
+
+            # Also try infra stack as fallback
+            if not connection_string:
+                try:
+                    outputs = automation.outputs("infra", env, refresh=False)
+                    if outputs and "storage_connection_string" in outputs:
+                        connection_string = automation.get_output_value(outputs, "storage_connection_string")
+                except Exception:
+                    pass
+
+        if not connection_string:
+            return None
+
+        # Create versioned store and registry
+        store = AzureVersionedStore(
+            connection_string=connection_string,
+            container="job-registry"
+        )
+        return JobRegistry(store)
+
+    except Exception as e:
+        warning(f"Job registry unavailable: {e}")
+        return None
 
 
 @app.command()
@@ -253,15 +307,76 @@ def status(
 ):
     """Check the status of a submitted job.
 
-    This is a placeholder for future implementation that would
-    query the K8s API and blob storage for comprehensive status.
+    Queries the job registry for current status and progress information.
+    Falls back to kubectl if registry is unavailable.
     """
-    env = env or "dev"
+    from .utils import resolve_env
+    env = resolve_env(env)
 
-    warning("Status command not yet implemented")
-    info("\n💡 For now, use kubectl directly:")
-    info(f"  kubectl -n modelops-dask-dev get job job-{job_id}")
-    info(f"  kubectl -n modelops-dask-dev describe job job-{job_id}")
+    # Try to get status from registry
+    registry = _get_registry(env)
+    if not registry:
+        warning("Job registry unavailable, use kubectl:")
+        info(f"  kubectl -n modelops-dask-{env} get job job-{job_id}")
+        raise typer.Exit(1)
+
+    # Get job state
+    job_state = registry.get_job(job_id)
+    if not job_state:
+        error(f"Job {job_id} not found in registry")
+        info("\n💡 Try kubectl to check if it exists:")
+        info(f"  kubectl -n modelops-dask-{env} get job job-{job_id}")
+        raise typer.Exit(1)
+
+    # Display status
+    section(f"Job Status: {job_id}")
+
+    # Status with color coding
+    status_color = {
+        JobStatus.PENDING: "yellow",
+        JobStatus.SUBMITTING: "yellow",
+        JobStatus.SCHEDULED: "cyan",
+        JobStatus.RUNNING: "blue",
+        JobStatus.SUCCEEDED: "green",
+        JobStatus.FAILED: "red",
+        JobStatus.CANCELLED: "magenta",
+    }
+    color = status_color.get(job_state.status, "white")
+    info(f"  Status: [{color}]{job_state.status.value}[/]")
+
+    # Basic info with local timezone
+    info(f"  Created: {format_timestamp(job_state.created_at)}")
+    info(f"  Updated: {format_timestamp(job_state.updated_at)}")
+
+    # Show duration if job is running or completed
+    if job_state.status in [JobStatus.RUNNING, JobStatus.SUCCEEDED, JobStatus.FAILED]:
+        duration = format_duration(job_state.created_at, job_state.updated_at)
+        info(f"  Duration: {duration}")
+
+    # Kubernetes info if available
+    if job_state.k8s_name:
+        info(f"  K8s Job: {job_state.k8s_name}")
+    if job_state.k8s_namespace:
+        info(f"  Namespace: {job_state.k8s_namespace}")
+
+    # Progress if available
+    if job_state.tasks_total > 0:
+        progress = job_state.progress_percent or 0
+        info(f"  Progress: {job_state.tasks_completed}/{job_state.tasks_total} ({progress:.1f}%)")
+
+    # Results or errors
+    if job_state.results_path:
+        success(f"  Results: {job_state.results_path}")
+    if job_state.error_message:
+        error(f"  Error: {job_state.error_message}")
+    if job_state.error_code:
+        error(f"  Error Code: {job_state.error_code}")
+
+    # Metadata if present
+    if job_state.metadata:
+        info("\n📋 Metadata:")
+        for key, value in job_state.metadata.items():
+            info(f"    {key}: {value}")
 
 
 @app.command()
@@ -288,18 +403,200 @@ def logs(
 @app.command()
 def list(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of jobs to show"),
+    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
+    hours: int = typer.Option(24, "--hours", "-h", help="Show jobs from last N hours"),
     env: Optional[str] = env_option(),
 ):
     """List recent jobs.
 
-    This is a placeholder for future implementation that would
-    query blob storage for submitted jobs and their status.
+    Shows jobs from the registry with their current status and progress.
     """
-    env = env or "dev"
+    from datetime import datetime, timezone, timedelta
+    from .utils import resolve_env
 
-    warning("List command not yet implemented")
-    info("\n💡 For now, use kubectl directly:")
-    info("  kubectl -n modelops-dask-dev get jobs")
+    env = resolve_env(env)
+
+    # Get registry
+    registry = _get_registry(env)
+    if not registry:
+        warning("Job registry unavailable, use kubectl:")
+        info(f"  kubectl -n modelops-dask-{env} get jobs")
+        raise typer.Exit(1)
+
+    # Parse status filter if provided
+    status_filter = None
+    if status:
+        try:
+            status_filter = [JobStatus(status.lower())]
+        except ValueError:
+            error(f"Invalid status: {status}")
+            info("Valid statuses: pending, submitting, scheduled, running, succeeded, failed, cancelled")
+            raise typer.Exit(1)
+
+    # Get recent jobs
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    jobs = registry.list_jobs(limit=limit, status_filter=status_filter, since=since)
+
+    if not jobs:
+        info(f"No jobs found in the last {hours} hours")
+        return
+
+    # Display jobs in a table
+    from rich.table import Table
+
+    # Get timezone info for table title
+    tz_info = get_timezone_info()
+    table = Table(title=f"Recent Jobs (last {hours} hours, {tz_info})")
+    table.add_column("Job ID", style="cyan")
+    table.add_column("Status", style="bold")
+    table.add_column("Progress")
+    table.add_column("Created", style="dim")
+    table.add_column("Updated", style="dim")
+
+    for job in jobs:
+        # Color code status
+        status_style = {
+            JobStatus.PENDING: "yellow",
+            JobStatus.SUBMITTING: "yellow",
+            JobStatus.SCHEDULED: "cyan",
+            JobStatus.RUNNING: "blue",
+            JobStatus.SUCCEEDED: "green",
+            JobStatus.FAILED: "red",
+            JobStatus.CANCELLED: "magenta",
+        }
+        style = status_style.get(job.status, "white")
+        status_str = f"[{style}]{job.status.value}[/]"
+
+        # Format progress
+        if job.tasks_total > 0:
+            progress = f"{job.tasks_completed}/{job.tasks_total}"
+        else:
+            progress = "-"
+
+        # Format dates using the new formatter
+        created_str = format_timestamp(job.created_at)
+        updated_str = format_timestamp(job.updated_at)
+
+        table.add_row(job.job_id, status_str, progress, created_str, updated_str)
+
+    console.print(table)
+
+    # Show summary
+    info(f"\n📊 Showing {len(jobs)} of {limit} most recent jobs")
+
+    # Count by status
+    counts = registry.count_jobs_by_status()
+    active_count = sum(counts[s] for s in [JobStatus.PENDING, JobStatus.SUBMITTING,
+                                             JobStatus.SCHEDULED, JobStatus.RUNNING])
+    if active_count > 0:
+        info(f"  Active jobs: {active_count}")
+
+    info("\n💡 To see job details, use:")
+    info("  mops jobs status <job-id>")
+
+
+@app.command()
+def sync(
+    env: Optional[str] = env_option(),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be updated without making changes"),
+):
+    """Sync job status from Kubernetes to the registry.
+
+    Updates the registry to reflect actual Kubernetes job status.
+    Useful when jobs complete but the runner hasn't updated the registry.
+    """
+    from .utils import resolve_env
+    from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
+
+    env = resolve_env(env)
+
+    # Get registry
+    registry = _get_registry(env)
+    if not registry:
+        error("Job registry unavailable")
+        raise typer.Exit(1)
+
+    # Get Kubernetes client
+    try:
+        v1, apps_v1, temp_path = get_k8s_client(env)
+        from kubernetes import client as k8s_client
+        batch_v1 = k8s_client.BatchV1Api()
+    except Exception as e:
+        error(f"Failed to connect to Kubernetes: {e}")
+        raise typer.Exit(1)
+
+    try:
+        # Get active jobs from registry
+        active_jobs = registry.get_active_jobs()
+
+        if not active_jobs:
+            info("No active jobs to sync")
+            return
+
+        section(f"Syncing {len(active_jobs)} active jobs")
+
+        updated_count = 0
+        for job in active_jobs:
+            # Get Kubernetes job status
+            try:
+                k8s_job = batch_v1.read_namespaced_job(
+                    name=job.k8s_name,
+                    namespace=job.k8s_namespace or "modelops-dask-dev"
+                )
+
+                # Determine status based on Kubernetes job
+                k8s_status = None
+                if k8s_job.status.succeeded and k8s_job.status.succeeded > 0:
+                    k8s_status = JobStatus.SUCCEEDED
+                elif k8s_job.status.failed and k8s_job.status.failed > 0:
+                    k8s_status = JobStatus.FAILED
+                elif k8s_job.status.active and k8s_job.status.active > 0:
+                    k8s_status = JobStatus.RUNNING
+                else:
+                    # Still scheduled/pending
+                    continue
+
+                # Update if status changed
+                if k8s_status and k8s_status != job.status:
+                    if dry_run:
+                        info(f"  Would update {job.job_id}: {job.status.value} → {k8s_status.value}")
+                    else:
+                        try:
+                            # For terminal states, we may need to go through intermediate states
+                            if k8s_status in [JobStatus.SUCCEEDED, JobStatus.FAILED]:
+                                # If currently scheduled, move to running first
+                                if job.status == JobStatus.SCHEDULED:
+                                    registry.update_status(job.job_id, JobStatus.RUNNING)
+
+                                # Now finalize
+                                registry.finalize_job(
+                                    job.job_id,
+                                    k8s_status,
+                                    error_info={"message": "Job failed (sync from K8s)"} if k8s_status == JobStatus.FAILED else None
+                                )
+                            else:
+                                # Intermediate state update
+                                registry.update_status(job.job_id, k8s_status)
+                            success(f"  ✓ Updated {job.job_id}: {job.status.value} → {k8s_status.value}")
+                            updated_count += 1
+                        except Exception as e:
+                            warning(f"  Failed to update {job.job_id}: {e}")
+
+            except Exception as e:
+                # Kubernetes job not found or error
+                if "not found" in str(e).lower():
+                    warning(f"  {job.job_id}: K8s job not found (may have been deleted)")
+                else:
+                    warning(f"  {job.job_id}: Failed to get K8s status: {e}")
+
+        if updated_count > 0:
+            success(f"\n✓ Updated {updated_count} job{'s' if updated_count != 1 else ''}")
+        else:
+            info("\nNo updates needed")
+
+    finally:
+        if temp_path:
+            cleanup_temp_kubeconfig(temp_path)
 
 
 if __name__ == "__main__":

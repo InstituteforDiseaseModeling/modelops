@@ -24,6 +24,9 @@ from modelops_contracts import (
 )
 
 from ..services.storage.azure import AzureBlobBackend
+from ..services.storage.azure_versioned import AzureVersionedStore
+from ..services.job_registry import JobRegistry
+from ..services.job_state import JobStatus
 from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
 from ..core import automation
 
@@ -58,6 +61,19 @@ class JobSubmissionClient:
             container="jobs",
             connection_string=connection_string
         )
+
+        # Initialize job registry for state tracking
+        # Using the same connection string and a separate container
+        try:
+            versioned_store = AzureVersionedStore(
+                connection_string=connection_string,
+                container="job-registry"
+            )
+            self.registry = JobRegistry(versioned_store)
+        except Exception as e:
+            # Registry is optional - if it fails, jobs still submit
+            print(f"Warning: Job registry unavailable: {e}")
+            self.registry = None
 
     def _get_registry_url(self) -> str:
         """Get container registry URL from Pulumi stack or environment.
@@ -164,8 +180,35 @@ class JobSubmissionClient:
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 
+        # Register job in tracking system (non-blocking)
+        k8s_name = f"job-{job.job_id}"
+        if self.registry:
+            try:
+                self.registry.register_job(
+                    job_id=job.job_id,
+                    k8s_name=k8s_name,
+                    namespace=self.namespace,
+                    metadata={
+                        "type": type(job).__name__,
+                        "blob_key": blob_key,
+                        "image": image,
+                    }
+                )
+                # Update to SUBMITTING status
+                self.registry.update_status(job.job_id, JobStatus.SUBMITTING)
+            except Exception as e:
+                # Don't fail job submission if registry fails
+                print(f"Warning: Failed to register job in tracking system: {e}")
+
         # Create K8s Job
         self._create_k8s_job(job.job_id, blob_key, image)
+
+        # Update status to SCHEDULED if K8s creation succeeded
+        if self.registry:
+            try:
+                self.registry.update_status(job.job_id, JobStatus.SCHEDULED)
+            except Exception:
+                pass  # Non-critical
 
         return job.job_id
 
