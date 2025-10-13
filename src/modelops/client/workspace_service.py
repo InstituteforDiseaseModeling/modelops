@@ -50,12 +50,20 @@ class WorkspaceService(BaseService):
             import pulumi
 
             # Convert config to dict if provided
+            if config is None:
+                raise ValueError(
+                    "Workspace configuration is required. "
+                    "Use 'mops workspace up' which will use ~/.modelops/infrastructure.yaml by default, "
+                    "or provide explicit config with 'mops workspace up --config workspace.yaml'"
+                )
+
             if hasattr(config, 'to_pulumi_config'):
                 workspace_config = config.to_pulumi_config()
             elif isinstance(config, dict):
                 workspace_config = config
             else:
-                workspace_config = {}
+                raise ValueError(f"Invalid workspace configuration type: {type(config)}")
+
             workspace_config["environment"] = self.env
 
             # Centralized ref resolution - all paths use the same logic

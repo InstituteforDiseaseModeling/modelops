@@ -83,13 +83,10 @@ mops dev images print scheduler     # Single image
 mops dev images print --all         # All images
 mops dev images export-env          # Export as env vars
 
-# Switch profiles
-MOPS_IMAGE_PROFILE=dev mops dev images print scheduler
-
 # In Python code
 from modelops.images import get_image_config
 config = get_image_config()
-worker_image = config.worker_image()  # ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+worker_image = config.worker_image()  # ghcr.io/vsbuffalo/modelops-dask-worker:latest
 
 # In Makefile
 WORKER_IMAGE := $(shell uv run mops dev images print worker)

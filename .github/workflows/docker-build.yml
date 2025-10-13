@@ -17,13 +17,11 @@ on:
         type: boolean
 
 env:
-  # Default values - will be overridden by load-image-config step
+  # Default values for building images
   REGISTRY: ghcr.io
-  ORG: institutefordiseasemodeling
+  ORG: vsbuffalo
   PROJECT: modelops
   PYTHON_VERSION: '3.11'
-  # Set the image profile for CI builds (use dev for development branches)
-  MOPS_IMAGE_PROFILE: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
 
 jobs:
   build:
@@ -46,35 +44,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Load image configuration
-        run: |
-          # Install minimal dependencies
-          pip install pyyaml
-
-          # Create a simple Python script to read the config
-          cat > load_config.py << 'EOF'
-          import yaml
-          import os
-          import sys
-
-          profile = os.environ.get('MOPS_IMAGE_PROFILE', 'prod')
-
-          with open('modelops-images.yaml', 'r') as f:
-              config = yaml.safe_load(f)
-
-          # Get the profile config
-          if profile not in config['profiles']:
-              print(f"Error: Unknown profile {profile}", file=sys.stderr)
-              sys.exit(1)
-
-          prof = config['profiles'][profile]
-          print(f"REGISTRY={prof['registry']['host']}")
-          print(f"ORG={prof['registry']['org']}")
-          EOF
-
-          # Export to GITHUB_ENV
-          python load_config.py >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

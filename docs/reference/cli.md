@@ -313,7 +313,6 @@ These commands manage individual components. For most use cases, use `mops infra
 ## Environment Variables
 
 - `MODELOPS_ENV` - Default environment (dev, staging, prod)
-- `MOPS_IMAGE_PROFILE` - Docker image profile (prod, dev, local)
 - `PULUMI_CONFIG_PASSPHRASE_FILE` - Pulumi passphrase file location
 - `MODELOPS_BUNDLE_REGISTRY` - Bundle registry URL
 - `AZURE_SUBSCRIPTION_ID` - Azure subscription for resources
@@ -391,11 +390,8 @@ mops infra down --env dev --yes
 ### Development Workflow
 
 ```bash
-# Use dev profile for images
-export MOPS_IMAGE_PROFILE=dev
-
 # Check image configuration
-mops dev images print --all
+mops dev images print scheduler
 
 # Run smoke test
 mops dev smoke-test

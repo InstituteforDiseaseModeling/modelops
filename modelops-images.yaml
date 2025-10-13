@@ -1,46 +1,9 @@
 # ModelOps Image Configuration
 # Single source of truth for all container image references
 version: 1
-default_profile: dev
-
-profiles:
-  prod:
-    registry:
-      host: ghcr.io
-      org: institutefordiseasemodeling
-    default_tag: latest
-
-  dev:
-    registry:
-      host: ghcr.io
-      org: vsbuffalo
-    default_tag: dev
-
-  local:
-    registry:
-      host: localhost:5000
-      org: modelops
-    default_tag: local
 
 images:
-  scheduler:
-    name: modelops-dask-scheduler
-    # tag inherited from profile's default_tag
-
-  worker:
-    name: modelops-dask-worker
-    # tag inherited from profile's default_tag
-
-  runner:
-    name: modelops-dask-runner
-    # tag inherited from profile's default_tag
-
-  # Legacy adaptive worker - to be migrated
-  adaptive-worker:
-    name: modelops-adaptive-worker
-    tag: "0.1.0"  # Pinned version
-
-# Future: support for digest pinning
-# runner:
-#   name: modelops-dask-runner
-#   digest: "sha256:abc123..."
+  scheduler: ghcr.io/vsbuffalo/modelops-dask-scheduler:latest
+  worker: ghcr.io/vsbuffalo/modelops-dask-worker:latest
+  runner: ghcr.io/vsbuffalo/modelops-dask-runner:latest
+  adaptive-worker: ghcr.io/vsbuffalo/modelops-adaptive-worker:latest

@@ -6,7 +6,9 @@ from typing import Optional, Dict, Any
 from ..client import WorkspaceService
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
+from ..core.paths import INFRASTRUCTURE_FILE
 from ..components import WorkspaceConfig
+from ..components.specs.infra import UnifiedInfraSpec
 from .utils import resolve_env, handle_pulumi_error
 from .display import (
     console, success, warning, error, info, section, info_dict,
@@ -37,19 +39,43 @@ def up(
     the kubeconfig and deploy Dask scheduler and workers.
 
     Example:
+        mops workspace up                  # Uses ~/.modelops/infrastructure.yaml
         mops workspace up --env dev
         mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
     env = resolve_env(env)
 
-    # Validate config file exists if provided
-    if config and not config.exists():
-        error(f"Configuration file not found: {config}")
-        info("Please provide a valid workspace configuration file")
-        raise typer.Exit(1)
+    # Smart default: look for infrastructure.yaml when no config provided
+    validated_config = None
 
-    # Load and validate configuration if provided
-    validated_config = WorkspaceConfig.from_yaml_optional(config)
+    if config:
+        # Explicit config provided
+        if not config.exists():
+            error(f"Configuration file not found: {config}")
+            info("Please provide a valid workspace configuration file")
+            raise typer.Exit(1)
+        validated_config = WorkspaceConfig.from_yaml(config)
+    else:
+        # No config provided, check for infrastructure.yaml
+        if INFRASTRUCTURE_FILE.exists():
+            info(f"Using workspace config from: {INFRASTRUCTURE_FILE}")
+            try:
+                # Load unified spec and extract workspace section
+                unified_spec = UnifiedInfraSpec.from_yaml(str(INFRASTRUCTURE_FILE))
+                if unified_spec.workspace:
+                    validated_config = unified_spec.workspace
+                else:
+                    warning("No workspace section found in infrastructure.yaml")
+                    info("Add a 'workspace:' section to infrastructure.yaml or use --config")
+                    raise typer.Exit(1)
+            except Exception as e:
+                error(f"Failed to load workspace config from infrastructure.yaml: {e}")
+                raise typer.Exit(1)
+        else:
+            error("No configuration specified and no infrastructure.yaml found")
+            error("Run 'mops infra init' to generate infrastructure.yaml")
+            error("Or specify config: mops workspace up --config <workspace.yaml>")
+            raise typer.Exit(1)
 
     # Validate dependencies before attempting to provision
     try:

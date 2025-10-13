@@ -110,10 +110,6 @@ bundle-register: $(VENV)/.installed
 		echo "Generating observed data..."; \
 		$(PY) generate_observed_data.py; \
 	fi
-	# First ensure files are tracked
-	@$(BIN)/modelops-bundle add models/ 2>/dev/null || true
-	@$(BIN)/modelops-bundle add targets/ 2>/dev/null || true
-	@$(BIN)/modelops-bundle add data/ 2>/dev/null || true
 	# Register the model for cloud job submission
 	$(BIN)/modelops-bundle register-model models/seir.py --no-confirm
 	# Register targets - auto-discovers decorated functions and their dependencies

@@ -12,6 +12,7 @@ from typing import Optional, List, Dict
 from datetime import datetime
 
 from ..client import InfrastructureService
+from ..core.paths import INFRASTRUCTURE_FILE
 from ..components.specs.infra import UnifiedInfraSpec
 from .display import console, success, error, info, section, warning
 from .common_options import env_option, yes_option
@@ -36,9 +37,9 @@ def init(
         mops infra init --non-interactive  # Use defaults
         mops infra init --output custom.yaml  # Custom location
     """
-    # Default to ~/.modelops/infrastructure.yaml
+    # Default to INFRASTRUCTURE_FILE constant
     if output is None:
-        output = Path.home() / ".modelops" / "infrastructure.yaml"
+        output = INFRASTRUCTURE_FILE
         output.parent.mkdir(parents=True, exist_ok=True)
     else:
         output = Path(output)
@@ -156,11 +157,10 @@ def up(
 
     env = resolve_env(env)
 
-    # Smart default: look for ~/.modelops/infrastructure.yaml
+    # Smart default: look for infrastructure.yaml using constant
     if config is None:
-        default_path = Path.home() / ".modelops" / "infrastructure.yaml"
-        if default_path.exists():
-            config = default_path
+        if INFRASTRUCTURE_FILE.exists():
+            config = INFRASTRUCTURE_FILE
             info(f"Using default config: {config}")
         else:
             error("No configuration specified and no default found")

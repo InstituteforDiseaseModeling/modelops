@@ -176,16 +176,19 @@ class JobSubmissionClient:
             case SimJob():
                 # Use runner image from config, with optional tag override
                 if runner_tag:
-                    # Override just the tag, keeping registry/org from config
-                    profile = img_config.get_profile()
-                    image = f"{profile.registry.host}/{profile.registry.org}/modelops-dask-runner:{runner_tag}"
+                    # Override just the tag, extract registry/org from existing image
+                    base_image = img_config.runner_image()
+                    # Split off the tag and replace with custom one
+                    image_parts = base_image.rsplit(':', 1)[0]
+                    image = f"{image_parts}:{runner_tag}"
                 else:
                     image = img_config.runner_image()
             case CalibrationJob():
                 # For now, use same runner for both types
                 if runner_tag:
-                    profile = img_config.get_profile()
-                    image = f"{profile.registry.host}/{profile.registry.org}/modelops-dask-runner:{runner_tag}"
+                    base_image = img_config.runner_image()
+                    image_parts = base_image.rsplit(':', 1)[0]
+                    image = f"{image_parts}:{runner_tag}"
                 else:
                     image = img_config.runner_image()
             case _:

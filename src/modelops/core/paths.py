@@ -9,6 +9,9 @@ from pathlib import Path
 # Configuration file
 CONFIG_FILE = Path.home() / ".modelops" / "config.yaml"
 
+# Infrastructure configuration file (unified spec)
+INFRASTRUCTURE_FILE = Path.home() / ".modelops" / "infrastructure.yaml"
+
 # Base directories
 MODELOPS_HOME = Path.home() / ".modelops"
 PULUMI_HOME = MODELOPS_HOME / "pulumi"

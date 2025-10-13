@@ -1051,73 +1051,62 @@ def quick_sim(
 @app.command()
 def images(
     action: str = typer.Argument(..., help="Action: print|export-env"),
-    key: Optional[str] = typer.Argument(None, help="For 'print': registry_host|registry_org|scheduler|worker|runner|adaptive-worker"),
-    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Image profile (prod|dev|local)"),
+    key: Optional[str] = typer.Argument(None, help="For 'print': scheduler|worker|runner|adaptive-worker"),
     config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to modelops-images.yaml"),
 ):
     """Manage Docker image references.
 
     This command provides access to the centralized image configuration,
-    allowing you to query and export image references for different profiles.
+    allowing you to query and export image references.
 
     Examples:
-        # Print the registry host
-        mops dev images print registry_host
-
         # Print the full scheduler image reference
         mops dev images print scheduler
 
-        # Print worker image for dev profile
-        mops dev images print worker --profile dev
+        # Print worker image
+        mops dev images print worker
 
         # Export all image environment variables
         mops dev images export-env
-
-        # Export for CI with dev profile
-        mops dev images export-env --profile dev
     """
     try:
         # Load configuration
         config_path = config or Path("modelops-images.yaml")
-        img_config = get_image_config()
-
-        # Override profile if specified
-        if profile:
-            os.environ["MOPS_IMAGE_PROFILE"] = profile
-            # Force reload with new profile
-            from ..images import ImageConfig
-            img_config = ImageConfig.from_yaml(config_path, profile)
+        from ..images import ImageConfig
+        img_config = ImageConfig.from_yaml(config_path) if config else get_image_config()
 
         if action == "print":
             if not key:
                 error("Key required for 'print' action")
-                info("Available keys: registry_host, registry_org, scheduler, worker, runner, adaptive-worker")
+                info("Available keys: scheduler, worker, runner, adaptive-worker")
                 raise typer.Exit(1)
 
-            # Get the active profile
-            active_profile = img_config.get_profile(profile)
-
-            # Handle special keys
-            if key == "registry_host":
-                print(active_profile.registry.host)
-            elif key == "registry_org":
-                print(active_profile.registry.org)
-            elif key in ["scheduler", "worker", "runner", "adaptive-worker"]:
-                print(img_config.ref(key, profile))
+            # Print the requested image
+            if key in ["scheduler", "worker", "runner", "adaptive-worker"]:
+                print(img_config.get(key))
             else:
                 error(f"Unknown key: {key}")
-                info("Available keys: registry_host, registry_org, scheduler, worker, runner, adaptive-worker")
+                info("Available keys: scheduler, worker, runner, adaptive-worker")
                 raise typer.Exit(1)
 
         elif action == "export-env":
             # Export environment variables for shell/CI
-            active_profile = img_config.get_profile(profile)
-            print(f"REGISTRY={active_profile.registry.host}")
-            print(f"ORG={active_profile.registry.org}")
-            print(f"SCHEDULER_IMAGE={img_config.scheduler_image(profile)}")
-            print(f"WORKER_IMAGE={img_config.worker_image(profile)}")
-            print(f"RUNNER_IMAGE={img_config.runner_image(profile)}")
-            print(f"ADAPTIVE_WORKER_IMAGE={img_config.adaptive_worker_image(profile)}")
+            # Extract registry and org from first image URL
+            scheduler = img_config.get("scheduler")
+            parts = scheduler.split("/")
+            if len(parts) >= 3:
+                registry = parts[0]
+                org = parts[1]
+            else:
+                registry = "ghcr.io"
+                org = "vsbuffalo"
+
+            print(f"REGISTRY={registry}")
+            print(f"ORG={org}")
+            print(f"SCHEDULER_IMAGE={img_config.scheduler_image()}")
+            print(f"WORKER_IMAGE={img_config.worker_image()}")
+            print(f"RUNNER_IMAGE={img_config.runner_image()}")
+            print(f"ADAPTIVE_WORKER_IMAGE={img_config.adaptive_worker_image()}")
 
         else:
             error(f"Unknown action: {action}")
