@@ -7,7 +7,7 @@ the data structure for tracking job state.
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, Set, Dict, Any
+from typing import Optional, Set, Dict, Any, List
 import json
 
 
@@ -25,10 +25,12 @@ class JobStatus(str, Enum):
     # Running states
     SCHEDULED = "scheduled"      # K8s Job created, waiting for pod
     RUNNING = "running"          # Pod running, executing tasks
+    VALIDATING = "validating"    # K8s complete, checking outputs exist
 
     # Terminal states (no transitions out)
-    SUCCEEDED = "succeeded"      # Completed successfully
-    FAILED = "failed"           # Failed with error
+    SUCCEEDED = "succeeded"      # All outputs verified present
+    PARTIAL_SUCCESS = "partial"  # Some outputs missing (resumable)
+    FAILED = "failed"           # Infrastructure or execution failure
     CANCELLED = "cancelled"     # User-cancelled or SIGTERM
 
 
@@ -37,10 +39,12 @@ TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     JobStatus.PENDING: {JobStatus.SUBMITTING, JobStatus.CANCELLED},
     JobStatus.SUBMITTING: {JobStatus.SCHEDULED, JobStatus.FAILED},
     JobStatus.SCHEDULED: {JobStatus.RUNNING, JobStatus.FAILED, JobStatus.CANCELLED},
-    JobStatus.RUNNING: {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED},
+    JobStatus.RUNNING: {JobStatus.VALIDATING, JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED},  # SUCCEEDED for backward compat
+    JobStatus.VALIDATING: {JobStatus.SUCCEEDED, JobStatus.PARTIAL_SUCCESS, JobStatus.FAILED},
 
     # Terminal states - no outbound transitions
     JobStatus.SUCCEEDED: set(),
+    JobStatus.PARTIAL_SUCCESS: set(),
     JobStatus.FAILED: set(),
     JobStatus.CANCELLED: set(),
 }
@@ -48,7 +52,7 @@ TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
 
 def is_terminal(status: JobStatus) -> bool:
     """Check if a status is terminal (no transitions out)."""
-    return status in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}
+    return status in {JobStatus.SUCCEEDED, JobStatus.PARTIAL_SUCCESS, JobStatus.FAILED, JobStatus.CANCELLED}
 
 
 def validate_transition(from_status: JobStatus, to_status: JobStatus) -> bool:
@@ -98,6 +102,16 @@ class JobState:
 
     # Results
     results_path: Optional[str] = None
+
+    # Validation tracking
+    expected_outputs: List[Dict] = field(default_factory=list)  # OutputSpec dicts
+    verified_outputs: List[str] = field(default_factory=list)   # Paths that exist
+    missing_outputs: List[str] = field(default_factory=list)    # Paths not found
+    tasks_verified: int = 0                                     # Count of verified tasks
+    validation_started_at: Optional[str] = None                 # When validation began
+    validation_completed_at: Optional[str] = None               # When validation finished
+    validation_attempts: int = 0                                # Number of validation attempts
+    last_validation_error: Optional[str] = None                 # Last validation error
 
     # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)

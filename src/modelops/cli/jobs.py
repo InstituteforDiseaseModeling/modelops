@@ -6,6 +6,7 @@ for submitting simulation and calibration jobs to the cluster.
 
 import json
 import typer
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -498,12 +499,13 @@ def list(
 @app.command()
 def sync(
     env: Optional[str] = env_option(),
+    validate: bool = typer.Option(True, "--validate/--no-validate", help="Validate outputs after sync"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be updated without making changes"),
 ):
     """Sync job status from Kubernetes to the registry.
 
     Updates the registry to reflect actual Kubernetes job status.
-    Useful when jobs complete but the runner hasn't updated the registry.
+    Optionally validates outputs when jobs complete to ensure all expected files exist.
     """
     from .utils import resolve_env
     from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
@@ -562,23 +564,67 @@ def sync(
                         info(f"  Would update {job.job_id}: {job.status.value} → {k8s_status.value}")
                     else:
                         try:
-                            # For terminal states, we may need to go through intermediate states
-                            if k8s_status in [JobStatus.SUCCEEDED, JobStatus.FAILED]:
+                            # Handle K8s job success with validation
+                            if k8s_status == JobStatus.SUCCEEDED and validate:
+                                # Transition to VALIDATING if currently RUNNING
+                                if job.status == JobStatus.RUNNING:
+                                    registry.transition_to_validating(job.job_id)
+                                    info(f"  ↻ Validating outputs for {job.job_id}...")
+
+                                    # Perform validation
+                                    validation_result = registry.validate_outputs(job.job_id)
+
+                                    # Finalize based on validation
+                                    registry.finalize_with_validation(job.job_id, validation_result)
+
+                                    # Report result
+                                    if validation_result.status == "complete":
+                                        success(f"  ✓ {job.job_id}: All outputs verified ({validation_result.verified_count} files)")
+                                    elif validation_result.status == "partial":
+                                        warning(f"  ⚠ {job.job_id}: Partial success ({validation_result.verified_count} verified, {validation_result.missing_count} missing)")
+                                    else:
+                                        error(f"  ✗ {job.job_id}: Validation failed ({validation_result.missing_count} outputs missing)")
+
+                                    updated_count += 1
+                                elif job.status == JobStatus.SCHEDULED:
+                                    # Move through intermediate states first
+                                    registry.update_status(job.job_id, JobStatus.RUNNING)
+                                    registry.transition_to_validating(job.job_id)
+                                    validation_result = registry.validate_outputs(job.job_id)
+                                    registry.finalize_with_validation(job.job_id, validation_result)
+                                    updated_count += 1
+
+                            # Handle K8s job failure
+                            elif k8s_status == JobStatus.FAILED:
                                 # If currently scheduled, move to running first
                                 if job.status == JobStatus.SCHEDULED:
                                     registry.update_status(job.job_id, JobStatus.RUNNING)
 
-                                # Now finalize
+                                # Now finalize as failed
                                 registry.finalize_job(
                                     job.job_id,
-                                    k8s_status,
-                                    error_info={"message": "Job failed (sync from K8s)"} if k8s_status == JobStatus.FAILED else None
+                                    JobStatus.FAILED,
+                                    error_info={"message": "Job failed (sync from K8s)"}
                                 )
+                                error(f"  ✗ {job.job_id}: Job failed")
+                                updated_count += 1
+
+                            # Handle K8s job success without validation
+                            elif k8s_status == JobStatus.SUCCEEDED and not validate:
+                                # Traditional finalization without validation
+                                if job.status == JobStatus.SCHEDULED:
+                                    registry.update_status(job.job_id, JobStatus.RUNNING)
+
+                                registry.finalize_job(job.job_id, JobStatus.SUCCEEDED)
+                                success(f"  ✓ {job.job_id}: Marked as succeeded (no validation)")
+                                updated_count += 1
+
                             else:
-                                # Intermediate state update
+                                # Intermediate state update (e.g., SCHEDULED → RUNNING)
                                 registry.update_status(job.job_id, k8s_status)
-                            success(f"  ✓ Updated {job.job_id}: {job.status.value} → {k8s_status.value}")
-                            updated_count += 1
+                                info(f"  Updated {job.job_id}: {job.status.value} → {k8s_status.value}")
+                                updated_count += 1
+
                         except Exception as e:
                             warning(f"  Failed to update {job.job_id}: {e}")
 
@@ -597,6 +643,197 @@ def sync(
     finally:
         if temp_path:
             cleanup_temp_kubeconfig(temp_path)
+
+
+@app.command()
+def resume(
+    job_id: str = typer.Argument(..., help="Job ID to resume"),
+    env: Optional[str] = env_option(),
+    bundle: Optional[str] = typer.Option(None, help="Override bundle reference"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be submitted without actually doing it"),
+):
+    """Resume a partially completed job.
+
+    Resubmits only the missing tasks from a job that completed with PARTIAL_SUCCESS status.
+    This allows recovery from transient failures without re-running successful tasks.
+    """
+    from .utils import resolve_env
+    from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
+    from ..client.job_submission import JobSubmissionClient
+    from modelops_contracts import SimJob, UniqueParameterSet
+
+    env = resolve_env(env)
+
+    # Get registry
+    registry = _get_registry(env)
+    if not registry:
+        error("Job registry unavailable")
+        raise typer.Exit(1)
+
+    # Get job state
+    job_state = registry.get_job(job_id)
+    if not job_state:
+        error(f"Job {job_id} not found")
+        raise typer.Exit(1)
+
+    # Check if job is resumable
+    if job_state.status != JobStatus.PARTIAL_SUCCESS:
+        error(f"Job {job_id} is not in PARTIAL_SUCCESS state (current: {job_state.status.value})")
+        info("\n💡 Only jobs with partial success can be resumed")
+        raise typer.Exit(1)
+
+    # Get resumable tasks
+    resumable_tasks = registry.get_resumable_tasks(job_id)
+    if not resumable_tasks:
+        warning(f"No resumable tasks found for job {job_id}")
+        raise typer.Exit(0)
+
+    section(f"Resuming job {job_id}")
+    info(f"Found {len(resumable_tasks)} tasks to resume")
+
+    if dry_run:
+        info("\n[Dry run mode - no actual submission]")
+        info(f"\nWould submit {len(resumable_tasks)} tasks:")
+        for i, task in enumerate(resumable_tasks[:5]):
+            info(f"  • param_id={task.param_id[:8]}... seed={task.seed}")
+        if len(resumable_tasks) > 5:
+            info(f"  ... and {len(resumable_tasks) - 5} more")
+        return
+
+    # Create a new job spec with only the missing tasks
+    # Group tasks by param_id to reconstruct parameter sets
+    tasks_by_param = {}
+    for task in resumable_tasks:
+        if task.param_id not in tasks_by_param:
+            tasks_by_param[task.param_id] = {
+                'params': task.params,
+                'seeds': []
+            }
+        tasks_by_param[task.param_id]['seeds'].append(task.seed)
+
+    # Create parameter sets for the resume job
+    parameter_sets = []
+    for param_id, data in tasks_by_param.items():
+        param_set = UniqueParameterSet(
+            param_id=param_id,
+            params=data['params'],
+            replicate_count=len(data['seeds'])
+        )
+        parameter_sets.append(param_set)
+
+    # Create resume job specification
+    resume_job = SimJob(
+        job_id=f"{job_id}-resume-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+        parameter_sets=parameter_sets,
+        metadata={
+            'original_job_id': job_id,
+            'bundle_digest': bundle or job_state.metadata.get('bundle_digest', 'unknown'),
+            'resume_attempt': job_state.metadata.get('resume_attempt', 0) + 1
+        }
+    )
+
+    # Submit the resume job
+    info("\n🚀 Submitting resume job...")
+    try:
+        client = JobSubmissionClient(env=env)
+
+        # Use bundle from command line or original job
+        bundle_ref = bundle or job_state.metadata.get('bundle_ref')
+        if not bundle_ref:
+            error("Bundle reference not found. Please specify with --bundle")
+            raise typer.Exit(1)
+
+        new_job_id = client.submit_job(
+            resume_job,
+            bundle_ref=bundle_ref
+        )
+
+        success(f"\n✓ Resume job submitted: {new_job_id}")
+        info(f"\nResuming {len(resumable_tasks)} tasks from job {job_id}")
+        info("\n💡 Track progress with:")
+        info(f"  mops jobs status {new_job_id}")
+
+    except Exception as e:
+        error(f"Failed to submit resume job: {e}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def validate(
+    job_id: str = typer.Argument(..., help="Job ID to validate"),
+    env: Optional[str] = env_option(),
+    force: bool = typer.Option(False, "--force", help="Force re-validation even if already validated"),
+):
+    """Manually validate job outputs.
+
+    Checks ProvenanceStore to verify all expected outputs exist.
+    Useful for re-validating jobs or checking jobs that completed without validation.
+    """
+    from .utils import resolve_env
+
+    env = resolve_env(env)
+
+    # Get registry
+    registry = _get_registry(env)
+    if not registry:
+        error("Job registry unavailable")
+        raise typer.Exit(1)
+
+    # Get job state
+    job_state = registry.get_job(job_id)
+    if not job_state:
+        error(f"Job {job_id} not found")
+        raise typer.Exit(1)
+
+    # Check if already validated (unless forced)
+    if not force and job_state.validation_completed_at:
+        info(f"Job {job_id} was already validated at {job_state.validation_completed_at}")
+        info(f"Status: {job_state.status.value}")
+        info(f"Verified: {job_state.tasks_verified} outputs")
+        if job_state.missing_outputs:
+            info(f"Missing: {len(job_state.missing_outputs)} outputs")
+        info("\n💡 Use --force to re-validate")
+        return
+
+    section(f"Validating job {job_id}")
+
+    # Perform validation
+    info("Checking outputs in ProvenanceStore...")
+    validation_result = registry.validate_outputs(job_id)
+
+    # Display results
+    if validation_result.status == "unavailable":
+        warning(f"Validation unavailable: {validation_result.error}")
+        raise typer.Exit(1)
+
+    info(f"\n📊 Validation Results:")
+    info(f"  Status: {validation_result.status.upper()}")
+    info(f"  Verified: {validation_result.verified_count} outputs")
+    info(f"  Missing: {validation_result.missing_count} outputs")
+
+    # Show sample of missing outputs if any
+    if validation_result.missing_outputs and len(validation_result.missing_outputs) > 0:
+        info("\n❌ Missing outputs (first 5):")
+        for path in validation_result.missing_outputs[:5]:
+            info(f"  • {path}")
+        if len(validation_result.missing_outputs) > 5:
+            info(f"  ... and {len(validation_result.missing_outputs) - 5} more")
+
+    # Update job state if needed
+    if job_state.status in [JobStatus.RUNNING, JobStatus.SUCCEEDED, JobStatus.FAILED]:
+        info("\n📝 Updating job state based on validation...")
+
+        # Transition to validating first if not already
+        if job_state.status != JobStatus.VALIDATING:
+            registry.transition_to_validating(job_id)
+
+        # Finalize with validation results
+        updated_state = registry.finalize_with_validation(job_id, validation_result)
+        success(f"\n✓ Job updated to {updated_state.status.value}")
+
+        if updated_state.status == JobStatus.PARTIAL_SUCCESS:
+            info("\n💡 This job can be resumed with:")
+            info(f"  mops jobs resume {job_id}")
 
 
 if __name__ == "__main__":

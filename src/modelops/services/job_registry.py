@@ -5,8 +5,12 @@ built on top of the VersionedStore for cloud-agnostic storage.
 """
 
 import logging
+from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
+
+from modelops_contracts import SimJob, SimTask, UniqueParameterSet
 
 from .storage.versioned import VersionedStore
 from .storage.retry import update_with_retry, create_with_retry, get_json
@@ -20,8 +24,26 @@ from .job_state import (
     TerminalStateError,
     JobExistsError
 )
+from .output_manifest import OutputSpec, generate_output_manifest, reconstruct_task_from_spec
+from .provenance_store import ProvenanceStore
+from .provenance_schema import ProvenanceSchema
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ValidationResult:
+    """Result of output validation for a job.
+
+    Tracks which outputs exist and which are missing,
+    along with overall completion status.
+    """
+    status: str  # "complete", "partial", "failed", "unavailable"
+    verified_count: int = 0
+    missing_count: int = 0
+    verified_outputs: Optional[List[str]] = None
+    missing_outputs: Optional[List[str]] = None
+    error: Optional[str] = None
 
 
 class JobRegistry:
@@ -31,15 +53,25 @@ class JobRegistry:
     Enforces state machine transitions and provides query operations.
     """
 
-    def __init__(self, store: VersionedStore, prefix: str = "jobs"):
+    def __init__(
+        self,
+        store: VersionedStore,
+        prefix: str = "jobs",
+        provenance_store: Optional[ProvenanceStore] = None,
+        provenance_schema: Optional[ProvenanceSchema] = None
+    ):
         """Initialize registry.
 
         Args:
             store: VersionedStore implementation (Azure, GCS, etc.)
             prefix: Key prefix for job state (default: "jobs")
+            provenance_store: ProvenanceStore for output validation
+            provenance_schema: Schema for generating paths
         """
         self.store = store
         self.prefix = prefix
+        self.provenance = provenance_store
+        self.provenance_schema = provenance_schema
 
     def _make_key(self, job_id: str) -> str:
         """Construct storage key for a job."""
@@ -50,6 +82,7 @@ class JobRegistry:
         job_id: str,
         k8s_name: str,
         namespace: str,
+        job_spec: Optional[SimJob] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> JobState:
         """Register a new job with pending status.
@@ -58,6 +91,7 @@ class JobRegistry:
             job_id: Unique job identifier
             k8s_name: Kubernetes job name
             namespace: Kubernetes namespace
+            job_spec: Optional job specification for manifest generation
             metadata: Optional additional metadata
 
         Returns:
@@ -66,6 +100,15 @@ class JobRegistry:
         Raises:
             JobExistsError: If job already registered
         """
+        # Generate output manifest if job spec provided
+        expected_outputs = []
+        if job_spec and self.provenance_schema:
+            try:
+                output_specs = generate_output_manifest(job_spec, self.provenance_schema)
+                expected_outputs = [asdict(spec) for spec in output_specs]
+            except Exception as e:
+                logger.warning(f"Failed to generate manifest for job {job_id}: {e}")
+
         state = JobState(
             job_id=job_id,
             status=JobStatus.PENDING,
@@ -73,6 +116,8 @@ class JobRegistry:
             updated_at=now_iso(),
             k8s_name=k8s_name,
             k8s_namespace=namespace,
+            expected_outputs=expected_outputs,
+            tasks_total=len(expected_outputs),
             metadata=metadata or {}
         )
 
@@ -80,7 +125,7 @@ class JobRegistry:
         if not create_with_retry(self.store, key, state.to_dict()):
             raise JobExistsError(f"Job {job_id} already registered")
 
-        logger.info(f"Registered job {job_id} in namespace {namespace}")
+        logger.info(f"Registered job {job_id} in namespace {namespace} with {len(expected_outputs)} expected outputs")
         return state
 
     def update_status(
@@ -132,7 +177,10 @@ class JobRegistry:
             # Add any additional fields
             for key, value in kwargs.items():
                 if key in {'error_message', 'error_code', 'results_path',
-                          'tasks_completed', 'tasks_total', 'k8s_uid'}:
+                          'tasks_completed', 'tasks_total', 'k8s_uid',
+                          'validation_started_at', 'validation_completed_at',
+                          'validation_attempts', 'last_validation_error',
+                          'tasks_verified', 'verified_outputs', 'missing_outputs'}:
                     updates[key] = value
                 elif key == 'metadata' and isinstance(value, dict):
                     # Merge metadata
@@ -330,7 +378,8 @@ class JobRegistry:
             JobStatus.PENDING,
             JobStatus.SUBMITTING,
             JobStatus.SCHEDULED,
-            JobStatus.RUNNING
+            JobStatus.RUNNING,
+            JobStatus.VALIDATING
         ]
         return self.list_jobs(status_filter=active_statuses)
 
@@ -345,3 +394,174 @@ class JobRegistry:
         """
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         return self.list_jobs(since=since)
+
+    def validate_outputs(self, job_id: str) -> ValidationResult:
+        """Check if all expected outputs exist in ProvenanceStore.
+
+        Args:
+            job_id: Job identifier to validate
+
+        Returns:
+            ValidationResult with status and details
+        """
+        # Check if we have ProvenanceStore configured
+        if not self.provenance:
+            logger.warning(f"ProvenanceStore not configured for job {job_id} validation")
+            return ValidationResult(
+                status="unavailable",
+                error="ProvenanceStore not configured"
+            )
+
+        # Get job state
+        job_state = self.get_job(job_id)
+        if not job_state:
+            return ValidationResult(
+                status="failed",
+                error=f"Job {job_id} not found"
+            )
+
+        # Check if we have expected outputs
+        if not job_state.expected_outputs:
+            logger.info(f"Job {job_id} has no expected outputs, skipping validation")
+            return ValidationResult(
+                status="unavailable",
+                error="No expected outputs defined"
+            )
+
+        # Check each expected output
+        verified_outputs = []
+        missing_outputs = []
+
+        for output_dict in job_state.expected_outputs:
+            try:
+                output_spec = OutputSpec(**output_dict)
+                path = self.provenance.storage_dir / output_spec.provenance_path
+
+                if path.exists():
+                    verified_outputs.append(output_spec.provenance_path)
+                else:
+                    missing_outputs.append(output_spec.provenance_path)
+
+            except Exception as e:
+                logger.warning(f"Error checking output: {e}")
+                missing_outputs.append(output_dict.get('provenance_path', 'unknown'))
+
+        # Determine overall status
+        if len(missing_outputs) == 0:
+            status = "complete"
+        elif len(verified_outputs) > 0:
+            status = "partial"
+        else:
+            status = "failed"
+
+        return ValidationResult(
+            status=status,
+            verified_count=len(verified_outputs),
+            missing_count=len(missing_outputs),
+            verified_outputs=verified_outputs,
+            missing_outputs=missing_outputs
+        )
+
+    def transition_to_validating(self, job_id: str) -> JobState:
+        """Transition job to VALIDATING state when K8s completes.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            Updated JobState
+
+        Raises:
+            InvalidTransitionError: If transition is not allowed
+        """
+        # Update status and mark validation started
+        return self.update_status(
+            job_id,
+            JobStatus.VALIDATING,
+            validation_started_at=now_iso(),
+            validation_attempts=1
+        )
+
+    def finalize_with_validation(self, job_id: str, validation_result: ValidationResult) -> JobState:
+        """Finalize job based on validation results.
+
+        Args:
+            job_id: Job identifier
+            validation_result: Results from validate_outputs
+
+        Returns:
+            Updated JobState with final status
+        """
+        # Determine final status based on validation
+        if validation_result.status == "complete":
+            final_status = JobStatus.SUCCEEDED
+        elif validation_result.status == "partial":
+            final_status = JobStatus.PARTIAL_SUCCESS
+        else:
+            final_status = JobStatus.FAILED
+
+        # Update job with validation results
+        key = self._make_key(job_id)
+
+        def update_fn(state_dict: dict) -> dict:
+            state = JobState.from_dict(state_dict)
+
+            # Only update if in VALIDATING state
+            if state.status != JobStatus.VALIDATING:
+                logger.warning(f"Job {job_id} not in VALIDATING state, skipping finalization")
+                return state_dict
+
+            # Apply updates
+            state_dict['status'] = final_status.value
+            state_dict['updated_at'] = now_iso()
+            state_dict['validation_completed_at'] = now_iso()
+            state_dict['tasks_verified'] = validation_result.verified_count
+            state_dict['verified_outputs'] = validation_result.verified_outputs or []
+            state_dict['missing_outputs'] = validation_result.missing_outputs or []
+
+            if validation_result.error:
+                state_dict['last_validation_error'] = validation_result.error
+
+            return state_dict
+
+        updated = update_with_retry(self.store, key, update_fn)
+        logger.info(
+            f"Finalized job {job_id} with status {final_status.value} "
+            f"({validation_result.verified_count} verified, {validation_result.missing_count} missing)"
+        )
+        return JobState.from_dict(updated)
+
+    def get_resumable_tasks(self, job_id: str) -> List[SimTask]:
+        """Get list of tasks that need to be re-run.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            List of SimTask objects for missing outputs
+        """
+        job_state = self.get_job(job_id)
+        if not job_state:
+            return []
+
+        # Only resume partial success jobs
+        if job_state.status != JobStatus.PARTIAL_SUCCESS:
+            logger.warning(f"Job {job_id} is not in PARTIAL_SUCCESS state, cannot get resumable tasks")
+            return []
+
+        resumable_tasks = []
+
+        # Parse missing outputs to reconstruct tasks
+        for output_path in job_state.missing_outputs:
+            # Find the corresponding OutputSpec
+            for output_dict in job_state.expected_outputs:
+                output_spec = OutputSpec(**output_dict)
+                if output_spec.provenance_path == output_path:
+                    # Reconstruct the task
+                    task = reconstruct_task_from_spec(output_spec)
+                    if task:
+                        resumable_tasks.append(task)
+                    break
+
+        logger.info(f"Found {len(resumable_tasks)} resumable tasks for job {job_id}")
+        return resumable_tasks

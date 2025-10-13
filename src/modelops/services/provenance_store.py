@@ -8,7 +8,7 @@ storage (hash of inputs) rather than content-addressed storage.
 import json
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import asdict, dataclass
@@ -180,7 +180,7 @@ class ProvenanceStore:
                 "seed": task.seed,
                 "outputs": task.outputs,
                 "param_id": task.params.param_id,
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             self._write_json_atomic(result_dir / "metadata.json", metadata)
 
@@ -291,7 +291,7 @@ class ProvenanceStore:
                 "target_entrypoint": str(task.target_entrypoint),
                 "n_sim_returns": len(task.sim_returns),
                 "param_id": self._extract_param_id_from_task(task),
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             self._write_json_atomic(result_dir / "metadata.json", metadata)
 
