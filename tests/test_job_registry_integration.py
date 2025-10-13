@@ -129,8 +129,9 @@ def test_cli_status_command():
     registry.update_status("test-123", JobStatus.RUNNING)
     registry.update_progress("test-123", tasks_completed=5, tasks_total=10)
 
-    # Mock _get_registry to return our test registry
-    with patch("modelops.cli.jobs._get_registry") as mock_get_registry:
+    # Mock both resolve_env and _get_registry
+    with patch("modelops.cli.jobs.resolve_env", return_value="dev"), \
+         patch("modelops.cli.jobs._get_registry") as mock_get_registry:
         mock_get_registry.return_value = registry
 
         # Run the status command
@@ -181,8 +182,9 @@ def test_cli_list_command():
             # Can go directly from SUBMITTING to FAILED
             registry.update_status(job_id, JobStatus.FAILED)
 
-    # Mock _get_registry
-    with patch("modelops.cli.jobs._get_registry") as mock_get_registry:
+    # Mock both resolve_env and _get_registry
+    with patch("modelops.cli.jobs.resolve_env", return_value="dev"), \
+         patch("modelops.cli.jobs._get_registry") as mock_get_registry:
         mock_get_registry.return_value = registry
 
         # Run the list command

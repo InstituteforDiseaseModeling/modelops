@@ -236,9 +236,10 @@ class TestValidateComponentDependencies:
 class TestCLIIntegration:
     """Test that CLIs properly use dependency validation."""
 
+    @patch('modelops.cli.workspace.resolve_env', return_value='dev')
     @patch('modelops.client.utils.validate_component_dependencies')
     @patch('modelops.cli.workspace.WorkspaceService')
-    def test_workspace_cli_validates(self, mock_service, mock_validate):
+    def test_workspace_cli_validates(self, mock_service, mock_validate, mock_resolve_env):
         """Test workspace CLI validates dependencies."""
         from typer.testing import CliRunner
         from modelops.cli.workspace import app
@@ -276,8 +277,9 @@ spec:
             import os
             os.unlink(config_path)
 
+    @patch('modelops.cli.workspace.resolve_env', return_value='dev')
     @patch('modelops.client.utils.validate_component_dependencies')
-    def test_workspace_cli_fails_on_validation_error(self, mock_validate):
+    def test_workspace_cli_fails_on_validation_error(self, mock_validate, mock_resolve_env):
         """Test workspace CLI exits when validation fails."""
         from typer.testing import CliRunner
         from modelops.cli.workspace import app
