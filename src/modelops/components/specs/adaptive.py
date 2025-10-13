@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from ..config_base import ConfigModel
 from .common import ResourceRequirements
+from ...images import get_image_config
 
 
 class PersistenceConfig(BaseModel):
@@ -71,7 +72,9 @@ class WorkerResourceConfig(BaseModel):
 
 class WorkersConfig(BaseModel):
     """Worker configuration for adaptive infrastructure."""
-    image: str = Field("ghcr.io/modelops/adaptive-worker:latest")
+    # Use centralized image configuration as default
+    _img_config = get_image_config()
+    image: str = Field(default_factory=lambda: WorkersConfig._img_config.adaptive_worker_image())
     replicas: int = Field(2, ge=1, le=100)
     resources: WorkerResourceConfig = Field(default_factory=WorkerResourceConfig)
     command: Optional[List[str]] = None

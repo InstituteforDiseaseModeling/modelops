@@ -17,11 +17,13 @@ on:
         type: boolean
 
 env:
+  # Default values - will be overridden by load-image-config step
   REGISTRY: ghcr.io
-  # ORG: institutefordiseasemodeling  # Production - uncomment for IDM deployment
-  ORG: vsbuffalo  # Development - comment out for production
+  ORG: institutefordiseasemodeling
   PROJECT: modelops
   PYTHON_VERSION: '3.11'
+  # Set the image profile for CI builds (use dev for development branches)
+  MOPS_IMAGE_PROFILE: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
 
 jobs:
   build:
@@ -39,6 +41,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Load image configuration
+        run: |
+          # Install minimal dependencies
+          pip install pyyaml
+
+          # Create a simple Python script to read the config
+          cat > load_config.py << 'EOF'
+          import yaml
+          import os
+          import sys
+
+          profile = os.environ.get('MOPS_IMAGE_PROFILE', 'prod')
+
+          with open('modelops-images.yaml', 'r') as f:
+              config = yaml.safe_load(f)
+
+          # Get the profile config
+          if profile not in config['profiles']:
+              print(f"Error: Unknown profile {profile}", file=sys.stderr)
+              sys.exit(1)
+
+          prof = config['profiles'][profile]
+          print(f"REGISTRY={prof['registry']['host']}")
+          print(f"ORG={prof['registry']['org']}")
+          EOF
+
+          # Export to GITHUB_ENV
+          python load_config.py >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -135,13 +171,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ -f scheduler.digest ]; then
-            echo "- **Scheduler:** \`ghcr.io/vsbuffalo/modelops-dask-scheduler@$(cat scheduler.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Scheduler:** \`${{ env.REGISTRY }}/${{ env.ORG }}/modelops-dask-scheduler@$(cat scheduler.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f worker.digest ]; then
-            echo "- **Worker:** \`ghcr.io/vsbuffalo/modelops-dask-worker@$(cat worker.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Worker:** \`${{ env.REGISTRY }}/${{ env.ORG }}/modelops-dask-worker@$(cat worker.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
           if [ -f runner.digest ]; then
-            echo "- **Runner:** \`ghcr.io/vsbuffalo/modelops-dask-runner@$(cat runner.digest)\`" >> $GITHUB_STEP_SUMMARY
+            echo "- **Runner:** \`${{ env.REGISTRY }}/${{ env.ORG }}/modelops-dask-runner@$(cat runner.digest)\`" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY

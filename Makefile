@@ -16,11 +16,10 @@ ENV ?= dev
 NAMESPACE ?= modelops-dask-$(ENV)
 
 # === Docker Variables ===
-# Default to public GHCR for easy distribution
-# Development registry (vsbuffalo for dev, institutefordiseasemodeling for production)
-REGISTRY ?= ghcr.io
-# ORG ?= institutefordiseasemodeling  # Production - uncomment when ready to deploy to IDM
-ORG ?= vsbuffalo# Development - comment out when deploying to production
+# Load from centralized image configuration (modelops-images.yaml)
+# These can still be overridden via environment variables or command line
+REGISTRY ?= $(shell uv run mops dev images print registry_host 2>/dev/null || echo ghcr.io)
+ORG ?= $(shell uv run mops dev images print registry_org 2>/dev/null || echo institutefordiseasemodeling)
 PROJECT ?= modelops
 
 # Version includes both modelops and contracts SHAs for immutable tags
@@ -118,9 +117,14 @@ install:
 test:
 	uv run pytest tests/
 
-## Run integration tests (requires more resources)
+## Run integration tests (creates its own LocalCluster by default)
 test-integration:
-	uv run pytest tests/ -m integration -v
+	CI='true' uv run pytest tests/ -m integration -v --timeout=60
+
+## Run integration tests with external Dask scheduler (after `make dask-local`)
+test-integration-external:
+	CI='true' uv run pytest tests/ -m integration -v --timeout=60 \
+		--dask-address=$${DASK_ADDRESS:-tcp://localhost:8786}
 
 ## Run all tests (unit + integration)
 test-all:

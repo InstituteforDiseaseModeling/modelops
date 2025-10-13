@@ -11,6 +11,7 @@ import pulumi_kubernetes as k8s
 from typing import Dict, Any, Optional
 from ...core import StackNaming
 from ...versions import POSTGRES_IMAGE
+from ...images import get_image_config
 from .smoke_test import SmokeTest
 
 
@@ -140,7 +141,9 @@ class AdaptiveInfra(pulumi.ComponentResource):
         # Create adaptive worker Deployment
         workers_config = config.get("workers", {})
         worker_replicas = workers_config.get("replicas", 2)
-        worker_image = workers_config.get("image", "ghcr.io/modelops/adaptive-worker:latest")
+        # Use centralized image configuration
+        img_config = get_image_config()
+        worker_image = workers_config.get("image", img_config.adaptive_worker_image())
         worker_resources = workers_config.get("resources", {})
         
         workers = k8s.apps.v1.Deployment(

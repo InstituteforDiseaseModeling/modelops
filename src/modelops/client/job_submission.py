@@ -28,6 +28,7 @@ from ..services.storage.azure_versioned import AzureVersionedStore
 from ..services.job_registry import JobRegistry
 from ..services.job_state import JobStatus
 from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
+from ..images import get_image_config
 from ..core import automation
 
 
@@ -167,16 +168,26 @@ class JobSubmissionClient:
         blob_key = self._upload_job(job)
 
         # Determine runner image based on job type
-        # Allow override via environment variable for development
-        runner_tag = os.environ.get("MODELOPS_RUNNER_TAG", "latest")
-        base_image = "ghcr.io/vsbuffalo/modelops-dask-runner"
+        # Use centralized image configuration
+        img_config = get_image_config()
+        runner_tag = os.environ.get("MODELOPS_RUNNER_TAG")  # Allow tag override
 
         match job:
             case SimJob():
-                image = f"{base_image}:{runner_tag}"
+                # Use runner image from config, with optional tag override
+                if runner_tag:
+                    # Override just the tag, keeping registry/org from config
+                    profile = img_config.get_profile()
+                    image = f"{profile.registry.host}/{profile.registry.org}/modelops-dask-runner:{runner_tag}"
+                else:
+                    image = img_config.runner_image()
             case CalibrationJob():
                 # For now, use same runner for both types
-                image = f"{base_image}:{runner_tag}"
+                if runner_tag:
+                    profile = img_config.get_profile()
+                    image = f"{profile.registry.host}/{profile.registry.org}/modelops-dask-runner:{runner_tag}"
+                else:
+                    image = img_config.runner_image()
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 

@@ -10,11 +10,15 @@ PYTHON_VERSION = "3.11"
 POSTGRES_VERSION = "14"
 
 # Container images (ISSUE-11, ISSUE-20 fix: pinned versions, no 'latest')
+# Use centralized image configuration for modelops images
+from .images import get_image_config
+_img_config = get_image_config()
+
 DASK_IMAGE = f"ghcr.io/dask/dask:{DASK_VERSION}-py{PYTHON_VERSION}"
 POSTGRES_IMAGE = f"postgres:{POSTGRES_VERSION}-alpine"
 PYTHON_IMAGE = f"python:{PYTHON_VERSION}-slim"
-# Placeholder for adaptive worker image - will be built and versioned
-ADAPTIVE_WORKER_IMAGE = f"ghcr.io/modelops/adaptive-worker:0.1.0"
+# Use adaptive worker from centralized config
+ADAPTIVE_WORKER_IMAGE = _img_config.adaptive_worker_image()
 
 # For pyproject.toml validation
 DASK_REQUIREMENT = f"dask[distributed]=={DASK_VERSION}"

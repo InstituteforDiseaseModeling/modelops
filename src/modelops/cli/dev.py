@@ -14,6 +14,7 @@ from ..services.dask_simulation import DaskSimulationService
 from ..worker.config import RuntimeConfig
 from ..core import automation
 from .display import console, success, error, info, warning
+from ..images import get_image_config
 
 app = typer.Typer(help="🧪 Developer tools and testing utilities")
 
@@ -1045,6 +1046,94 @@ def quick_sim(
     finally:
         if client:
             client.close()
+
+
+@app.command()
+def images(
+    action: str = typer.Argument(..., help="Action: print|export-env"),
+    key: Optional[str] = typer.Argument(None, help="For 'print': registry_host|registry_org|scheduler|worker|runner|adaptive-worker"),
+    profile: Optional[str] = typer.Option(None, "--profile", "-p", help="Image profile (prod|dev|local)"),
+    config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to modelops-images.yaml"),
+):
+    """Manage Docker image references.
+
+    This command provides access to the centralized image configuration,
+    allowing you to query and export image references for different profiles.
+
+    Examples:
+        # Print the registry host
+        mops dev images print registry_host
+
+        # Print the full scheduler image reference
+        mops dev images print scheduler
+
+        # Print worker image for dev profile
+        mops dev images print worker --profile dev
+
+        # Export all image environment variables
+        mops dev images export-env
+
+        # Export for CI with dev profile
+        mops dev images export-env --profile dev
+    """
+    try:
+        # Load configuration
+        config_path = config or Path("modelops-images.yaml")
+        img_config = get_image_config()
+
+        # Override profile if specified
+        if profile:
+            os.environ["MOPS_IMAGE_PROFILE"] = profile
+            # Force reload with new profile
+            from ..images import ImageConfig
+            img_config = ImageConfig.from_yaml(config_path, profile)
+
+        if action == "print":
+            if not key:
+                error("Key required for 'print' action")
+                info("Available keys: registry_host, registry_org, scheduler, worker, runner, adaptive-worker")
+                raise typer.Exit(1)
+
+            # Get the active profile
+            active_profile = img_config.get_profile(profile)
+
+            # Handle special keys
+            if key == "registry_host":
+                print(active_profile.registry.host)
+            elif key == "registry_org":
+                print(active_profile.registry.org)
+            elif key in ["scheduler", "worker", "runner", "adaptive-worker"]:
+                print(img_config.ref(key, profile))
+            else:
+                error(f"Unknown key: {key}")
+                info("Available keys: registry_host, registry_org, scheduler, worker, runner, adaptive-worker")
+                raise typer.Exit(1)
+
+        elif action == "export-env":
+            # Export environment variables for shell/CI
+            active_profile = img_config.get_profile(profile)
+            print(f"REGISTRY={active_profile.registry.host}")
+            print(f"ORG={active_profile.registry.org}")
+            print(f"SCHEDULER_IMAGE={img_config.scheduler_image(profile)}")
+            print(f"WORKER_IMAGE={img_config.worker_image(profile)}")
+            print(f"RUNNER_IMAGE={img_config.runner_image(profile)}")
+            print(f"ADAPTIVE_WORKER_IMAGE={img_config.adaptive_worker_image(profile)}")
+
+        else:
+            error(f"Unknown action: {action}")
+            info("Available actions: print, export-env")
+            raise typer.Exit(1)
+
+    except FileNotFoundError as e:
+        error(f"Configuration file not found: {e}")
+        info("Create modelops-images.yaml in the project root")
+        raise typer.Exit(1)
+    except ValueError as e:
+        error(f"Configuration error: {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        error(f"Unexpected error: {e}")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
