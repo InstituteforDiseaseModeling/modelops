@@ -190,7 +190,7 @@ def submit(
             raise typer.Exit(1)
     elif bundle:
         bundle_ref = bundle
-        info(f"\n📦 Using explicit bundle: {bundle_ref[:20]}...")
+        info(f"\n Using explicit bundle: {bundle_ref[:20]}...")
     else:
         error("Must specify either --bundle or --auto")
         raise typer.Exit(1)
@@ -210,7 +210,7 @@ def submit(
         info(f"  Status: Running")
 
         # Show how to check status
-        info("\n📊 To check job status:")
+        info("\n To check job status:")
         info(f"  kubectl -n modelops-dask-dev get job job-{job_id}")
         info("\n📋 To see logs:")
         info(f"  kubectl -n modelops-dask-dev logs job/job-{job_id}")
@@ -325,7 +325,7 @@ def status(
     job_state = registry.get_job(job_id)
     if not job_state:
         error(f"Job {job_id} not found in registry")
-        info("\n💡 Try kubectl to check if it exists:")
+        info("\n Try kubectl to check if it exists:")
         info(f"  kubectl -n modelops-dask-{env} get job job-{job_id}")
         raise typer.Exit(1)
 
@@ -394,7 +394,7 @@ def logs(
     env = env or "dev"
 
     warning("Logs command not yet implemented")
-    info("\n💡 For now, use kubectl directly:")
+    info("\n For now, use kubectl directly:")
     if follow:
         info(f"  kubectl -n modelops-dask-dev logs -f job/job-{job_id}")
     else:
@@ -483,7 +483,7 @@ def list(
     console.print(table)
 
     # Show summary
-    info(f"\n📊 Showing {len(jobs)} of {limit} most recent jobs")
+    info(f"\n Showing {len(jobs)} of {limit} most recent jobs")
 
     # Count by status
     counts = registry.count_jobs_by_status()
@@ -492,7 +492,7 @@ def list(
     if active_count > 0:
         info(f"  Active jobs: {active_count}")
 
-    info("\n💡 To see job details, use:")
+    info("\n To see job details, use:")
     info("  mops jobs status <job-id>")
 
 
@@ -679,7 +679,7 @@ def resume(
     # Check if job is resumable
     if job_state.status != JobStatus.PARTIAL_SUCCESS:
         error(f"Job {job_id} is not in PARTIAL_SUCCESS state (current: {job_state.status.value})")
-        info("\n💡 Only jobs with partial success can be resumed")
+        info("\n Only jobs with partial success can be resumed")
         raise typer.Exit(1)
 
     # Get resumable tasks
@@ -733,7 +733,7 @@ def resume(
     )
 
     # Submit the resume job
-    info("\n🚀 Submitting resume job...")
+    info("\n Submitting resume job...")
     try:
         client = JobSubmissionClient(env=env)
 
@@ -750,7 +750,7 @@ def resume(
 
         success(f"\n✓ Resume job submitted: {new_job_id}")
         info(f"\nResuming {len(resumable_tasks)} tasks from job {job_id}")
-        info("\n💡 Track progress with:")
+        info("\n Track progress with:")
         info(f"  mops jobs status {new_job_id}")
 
     except Exception as e:
@@ -792,7 +792,7 @@ def validate(
         info(f"Verified: {job_state.tasks_verified} outputs")
         if job_state.missing_outputs:
             info(f"Missing: {len(job_state.missing_outputs)} outputs")
-        info("\n💡 Use --force to re-validate")
+        info("\n Use --force to re-validate")
         return
 
     section(f"Validating job {job_id}")
@@ -806,14 +806,14 @@ def validate(
         warning(f"Validation unavailable: {validation_result.error}")
         raise typer.Exit(1)
 
-    info(f"\n📊 Validation Results:")
+    info(f"\n Validation Results:")
     info(f"  Status: {validation_result.status.upper()}")
     info(f"  Verified: {validation_result.verified_count} outputs")
     info(f"  Missing: {validation_result.missing_count} outputs")
 
     # Show sample of missing outputs if any
     if validation_result.missing_outputs and len(validation_result.missing_outputs) > 0:
-        info("\n❌ Missing outputs (first 5):")
+        info("\n✗ Missing outputs (first 5):")
         for path in validation_result.missing_outputs[:5]:
             info(f"  • {path}")
         if len(validation_result.missing_outputs) > 5:
@@ -821,7 +821,7 @@ def validate(
 
     # Update job state if needed
     if job_state.status in [JobStatus.RUNNING, JobStatus.SUCCEEDED, JobStatus.FAILED]:
-        info("\n📝 Updating job state based on validation...")
+        info("\n Updating job state based on validation...")
 
         # Transition to validating first if not already
         if job_state.status != JobStatus.VALIDATING:
@@ -832,7 +832,7 @@ def validate(
         success(f"\n✓ Job updated to {updated_state.status.value}")
 
         if updated_state.status == JobStatus.PARTIAL_SUCCESS:
-            info("\n💡 This job can be resumed with:")
+            info("\n This job can be resumed with:")
             info(f"  mops jobs resume {job_id}")
 
 

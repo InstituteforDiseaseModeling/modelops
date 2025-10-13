@@ -1,4 +1,19 @@
-"""Warm process management for efficient subprocess reuse."""
+"""Warm process management for efficient subprocess reuse.
+
+WARNING: Parallel Testing Limitations
+--------------------------------------
+This module uses file-based locking to safely handle concurrent venv creation.
+When running tests in parallel (e.g., with pytest-xdist), multiple test workers
+may attempt to create/access the same venv simultaneously, causing deadlocks.
+
+To avoid this in tests:
+1. Run integration tests serially: pytest -n0 or make test-integration-serial
+2. Set MODELOPS_FORCE_FRESH_VENV=true to force unique venvs per process
+3. Use fixtures that properly isolate resources
+
+The locking mechanism is essential for production where multiple workers
+legitimately need to share the same venv cache.
+"""
 
 import base64
 import hashlib
@@ -328,11 +343,11 @@ class WarmProcessManager:
     
     def _get_venv_key(self, bundle_digest: str, bundle_path: Path) -> str:
         """Generate venv directory name with all isolation factors.
-        
+
         Args:
             bundle_digest: Bundle content hash
             bundle_path: Path to bundle
-            
+
         Returns:
             Venv key like: {digest[:12]}-py3.11-{deps[:8]}
             Or with force_fresh_venv: {digest[:12]}-py3.11-{deps[:8]}-{uuid[:8]}
@@ -340,12 +355,12 @@ class WarmProcessManager:
         py_version = f"py{sys.version_info.major}.{sys.version_info.minor}"
         deps_hash = self._compute_deps_hash(bundle_path)
         base_key = f"{bundle_digest[:12]}-{py_version}-{deps_hash[:8]}"
-        
+
         # Add unique suffix when forcing fresh venvs
         if self.force_fresh_venv:
             unique_id = str(uuid.uuid4())[:8]
             return f"{base_key}-{unique_id}"
-        
+
         return base_key
     
     def _create_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:

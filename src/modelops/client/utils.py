@@ -180,7 +180,7 @@ def validate_component_dependencies(
 
     # Build detailed error message
     if missing or not_ready:
-        msg = f"\n❌ Cannot deploy {component} - dependencies not met:\n\n"
+        msg = f"\n✗ Cannot deploy {component} - dependencies not met:\n\n"
 
         if missing:
             msg += "  Missing components (not deployed):\n"
@@ -200,7 +200,7 @@ def validate_component_dependencies(
             else:
                 msg += f"    ✗ {dep}: Not deployed\n"
 
-        msg += "\n  💡 Solution: Run 'mops infra up' to provision all dependencies\n"
+        msg += "\n   Solution: Run 'mops infra up' to provision all dependencies\n"
         msg += "     Or provision specific components in dependency order"
 
         raise ValueError(msg)

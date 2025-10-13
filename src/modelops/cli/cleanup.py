@@ -300,7 +300,7 @@ def reset(
         raise typer.Exit(1)
     
     if not yes:
-        error("\n🔥 NUCLEAR RESET 🔥")
+        error("\n[⚠ RESET ⚠]")
         warning("This will COMPLETELY DESTROY and remove:")
         for c in components:
             error(f"  • {c} stack and ALL resources")

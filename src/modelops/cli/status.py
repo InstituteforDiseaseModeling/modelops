@@ -158,7 +158,7 @@ def status_all(
             elif "Unknown" in status:
                 console.print(f"  [yellow]?[/yellow] {stack_name}")
             else:
-                console.print(f"  [red]❌[/red] {stack_name}")
+                console.print(f"  [red]✗[/red] {stack_name}")
             
             # Show key details from outputs
             if outputs and status == "✓ Deployed":
@@ -248,7 +248,7 @@ def run_smoke_tests(all_stacks: Dict[str, List[Dict[str, Any]]]):
     
     # First check if we have infrastructure
     if "infra" not in all_stacks or not all_stacks["infra"]:
-        error("  ❌ No infrastructure deployed")
+        error("  ✗ No infrastructure deployed")
         info("\n  Run 'mops infra up' to deploy infrastructure first")
         return
     
@@ -260,7 +260,7 @@ def run_smoke_tests(all_stacks: Dict[str, List[Dict[str, Any]]]):
     info("Checking cluster connectivity...")
     connected, message = check_cluster_connectivity(env)
     if not connected:
-        error(f"  ❌ {message}")
+        error(f"  ✗ {message}")
         info("\n  Your infrastructure may need to be refreshed.")
         info("  Try: mops infra status")
         return
@@ -310,7 +310,7 @@ def run_smoke_tests(all_stacks: Dict[str, List[Dict[str, Any]]]):
                         warning("  ⚠ Storage secret not found in workspace")
 
                 except Exception as e:
-                    error(f"  ❌ Test failed: {e}")
+                    error(f"  ✗ Test failed: {e}")
     
     # Check Dask connectivity
     if "workspace" in all_stacks:
@@ -348,7 +348,7 @@ def run_smoke_tests(all_stacks: Dict[str, List[Dict[str, Any]]]):
                         warning("  ⚠ No worker pods found")
                     
                 except Exception as e:
-                    error(f"  ❌ Test failed: {e}")
+                    error(f"  ✗ Test failed: {e}")
     
     info("\nSmoke tests completed")
 

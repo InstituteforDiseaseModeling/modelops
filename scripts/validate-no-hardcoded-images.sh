@@ -56,7 +56,7 @@ else
 fi
 
 if [ -n "$VIOLATIONS" ]; then
-    echo "❌ Found hardcoded image references in the following files:"
+    echo "✗ Found hardcoded image references in the following files:"
     echo "$VIOLATIONS"
     echo ""
     echo "Please use the centralized image configuration instead:"
@@ -68,13 +68,13 @@ if [ -n "$VIOLATIONS" ]; then
     exit 1
 fi
 
-echo "✅ No hardcoded image references found!"
+echo "✓ No hardcoded image references found!"
 
 # Additional check: ensure modelops-images.yaml exists
 if [ ! -f "modelops-images.yaml" ]; then
-    echo "❌ Error: modelops-images.yaml not found!"
+    echo "✗ Error: modelops-images.yaml not found!"
     echo "This file is required for centralized image configuration."
     exit 1
 fi
 
-echo "✅ Image configuration validation passed!"
+echo "✓ Image configuration validation passed!"

@@ -415,7 +415,6 @@ class InfrastructureService:
                 for stack_name in stacks_to_remove:
                     try:
                         # Check if stack exists first
-                        from ..client.utils import stack_exists
                         if stack_exists(stack_name, self.env):
                             automation.remove_stack(stack_name, self.env)
                             print(f"  ✓ Removed {stack_name} stack")

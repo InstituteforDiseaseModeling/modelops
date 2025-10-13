@@ -16,7 +16,7 @@ from ..core import automation
 from .display import console, success, error, info, warning
 from ..images import get_image_config
 
-app = typer.Typer(help="🧪 Developer tools and testing utilities")
+app = typer.Typer(help=" Developer tools and testing utilities")
 
 
 def get_test_bundle() -> Path:
@@ -230,7 +230,7 @@ def smoke_test(
         mops dev smoke-test --bundle ./my-test-bundle
         mops dev smoke-test --registry localhost:5000
     """
-    info("🧪 Starting OCI bundle smoke test...")
+    info(" Starting OCI bundle smoke test...")
 
     client = None
     port_forward_proc = None
@@ -408,21 +408,21 @@ def smoke_test(
         if hasattr(result, 'outputs') and result.outputs:
             # SimReturn format - check if we have the expected outputs
             if 'result' in result.outputs and 'metadata' in result.outputs:
-                success("✅ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
+                success("✓ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
             else:
                 warning(f"Missing expected outputs in SimReturn: {list(result.outputs.keys())}")
-                error("❌ Smoke test FAILED! Result doesn't contain expected outputs.")
+                error("✗ Smoke test FAILED! Result doesn't contain expected outputs.")
                 raise typer.Exit(1)
         elif isinstance(result, dict) and result.get("status") == "completed":
             # Legacy dict format
-            success("✅ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
+            success("✓ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
         else:
             warning(f"Unexpected result format: {result}")
-            error("❌ Smoke test FAILED! Result doesn't match expected format.")
+            error("✗ Smoke test FAILED! Result doesn't match expected format.")
             raise typer.Exit(1)
 
     except Exception as e:
-        error(f"❌ Smoke test FAILED: {e}")
+        error(f"✗ Smoke test FAILED: {e}")
         raise typer.Exit(1)
     finally:
         # Clean up client connection
@@ -467,7 +467,7 @@ def test_connection(
         scheduler_info = client.scheduler_info()
         n_workers = len(scheduler_info.get('workers', {}))
 
-        success(f"✅ Connected successfully!")
+        success(f"✓ Connected successfully!")
         info(f"Scheduler: {scheduler_url}")
         info(f"Workers: {n_workers}")
 
@@ -483,7 +483,7 @@ def test_connection(
         client.close()
 
     except Exception as e:
-        error(f"❌ Connection failed: {e}")
+        error(f"✗ Connection failed: {e}")
         raise typer.Exit(1)
 
 
@@ -727,11 +727,11 @@ def validate_bundle(
 
     # Report results
     if errors:
-        error("❌ Bundle validation FAILED")
+        error("✗ Bundle validation FAILED")
         for err in errors:
             console.print(f"  [red]✗[/red] {err}")
     else:
-        success("✅ Bundle validation PASSED")
+        success("✓ Bundle validation PASSED")
 
     if warnings:
         warning("⚠️  Warnings:")
@@ -1036,12 +1036,12 @@ def quick_sim(
         info(f"Waiting for result (timeout: {timeout}s)...")
         result = future.result(timeout=timeout)
 
-        success("✅ Simulation completed!")
+        success("✓ Simulation completed!")
         info("Result:")
         console.print(json.dumps(result, indent=2))
 
     except Exception as e:
-        error(f"❌ Simulation failed: {e}")
+        error(f"✗ Simulation failed: {e}")
         raise typer.Exit(1)
     finally:
         if client:

@@ -81,7 +81,7 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
     
     # Check for unreachable cluster errors
     if "unreachable cluster" in error_msg or "unreachable: unable to load" in error_msg:
-        error("\n❌ Kubernetes cluster is unreachable")
+        error("\n✗ Kubernetes cluster is unreachable")
         warning("\nThis happens when:")
         info("  • The AKS cluster has been deleted")
         info("  • Infrastructure was destroyed but dependent stacks remain")
@@ -109,7 +109,7 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
     
     # Check for lock file errors
     elif "locked by" in error_msg or "lock file" in error_msg:
-        error("\n❌ Error: Pulumi stack is locked by another process")
+        error("\n✗ Error: Pulumi stack is locked by another process")
         warning("\nThis usually happens when:")
         info("  • A previous Pulumi operation was interrupted")
         info("  • Another Pulumi command is currently running")
@@ -127,7 +127,7 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
         
     elif "invalid character" in error_msg and "stack name" in error_msg:
         # Invalid stack name error
-        error("\n❌ Invalid stack name detected")
+        error("\n✗ Invalid stack name detected")
         warning("\nStack names can only contain:")
         info("  • Lowercase letters (a-z)")
         info("  • Numbers (0-9)")  
@@ -142,7 +142,7 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
         
     elif "code: 255" in error_msg:
         # Generic Pulumi error with exit code 255
-        error("\n❌ Pulumi operation failed")
+        error("\n✗ Pulumi operation failed")
         
         # Try to extract more specific error information
         if "stderr:" in error_msg:
@@ -159,7 +159,7 @@ def handle_pulumi_error(e: Exception, work_dir: str, stack_name: str) -> None:
     
     elif isinstance(e, auto.CommandError):
         # Handle other Pulumi command errors
-        error(f"\n❌ Pulumi command failed: {error_msg}")
+        error(f"\n✗ Pulumi command failed: {error_msg}")
         
         if "protected" in error_msg.lower():
             warning("\n⚠️  Resource protection detected")

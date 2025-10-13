@@ -173,7 +173,7 @@ class SmokeTest(pulumi.ComponentResource):
                 "# Test storage connectivity",
                 "echo '=== Storage Test ==='",
                 "if [ -z \"$AZURE_STORAGE_CONNECTION_STRING\" ]; then",
-                "  echo '❌ AZURE_STORAGE_CONNECTION_STRING not set'",
+                "  echo '✗ AZURE_STORAGE_CONNECTION_STRING not set'",
                 "  exit 1",
                 "fi",
                 "echo '✓ Storage connection string found'",
@@ -181,7 +181,7 @@ class SmokeTest(pulumi.ComponentResource):
                 "# Try to list containers",
                 "echo 'Listing storage containers...'",
                 "az storage container list --output table || {",
-                "  echo '❌ Failed to list containers'",
+                "  echo '✗ Failed to list containers'",
                 "  exit 1",
                 "}",
                 "echo '✓ Successfully listed containers'",
@@ -210,7 +210,7 @@ class SmokeTest(pulumi.ComponentResource):
                 "    print(f'  Workers: {len(info.get(\\\"workers\\\", {}))}')",
                 "    client.close()",
                 "except Exception as e:",
-                "    print(f'❌ Failed to connect to Dask: {e}')",
+                "    print(f'✗ Failed to connect to Dask: {e}')",
                 "    sys.exit(1)",
                 "\"",
                 ""
@@ -236,7 +236,7 @@ class SmokeTest(pulumi.ComponentResource):
                 "    print(f'  Version: {version.split()[0]} {version.split()[1]}')",
                 "    conn.close()",
                 "except Exception as e:",
-                "    print(f'❌ Failed to connect to Postgres: {e}')",
+                "    print(f'✗ Failed to connect to Postgres: {e}')",
                 "    sys.exit(1)",
                 "  \"",
                 "fi",
@@ -248,16 +248,16 @@ class SmokeTest(pulumi.ComponentResource):
                 "# Test network connectivity",
                 "echo '=== Network Test ==='",
                 "# Test internal DNS",
-                "nslookup kubernetes.default >/dev/null 2>&1 && echo '✓ Internal DNS working' || echo '❌ Internal DNS failed'",
+                "nslookup kubernetes.default >/dev/null 2>&1 && echo '✓ Internal DNS working' || echo '✗ Internal DNS failed'",
                 "",
                 "# Test external connectivity",
-                "curl -s -o /dev/null -w '%{http_code}' https://www.google.com | grep -q 200 && echo '✓ External connectivity working' || echo '❌ External connectivity failed'",
+                "curl -s -o /dev/null -w '%{http_code}' https://www.google.com | grep -q 200 && echo '✓ External connectivity working' || echo '✗ External connectivity failed'",
                 ""
             ])
         
         script_parts.extend([
             "echo ''",
-            "echo '✅ All smoke tests completed successfully!'",
+            "echo '✓ All smoke tests completed successfully!'",
             "exit 0"
         ])
         

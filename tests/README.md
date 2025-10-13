@@ -58,18 +58,22 @@ Integration tests run automatically on GitHub Actions:
 
 ## Advanced: Using External Dask for Debugging
 
-While tests normally create their own Dask clusters, you can use an external cluster for debugging:
+By default, tests create their own LocalCluster instances. To use an external Dask cluster for debugging:
 
 ```bash
 # Start external Dask cluster
 make dask-local        # Starts at tcp://localhost:8786
 
-# Tests will detect and use the external cluster
-make test-integration
+# Explicitly use external cluster with --dask-address or DASK_ADDRESS env var
+make test-integration-external   # Uses --dask-address=tcp://localhost:8786
+# OR
+DASK_ADDRESS=tcp://localhost:8786 make test-integration
 
 # Stop when done
 make dask-stop
 ```
+
+**Note**: Tests no longer auto-detect external clusters. You must explicitly opt-in using `--dask-address` or the `DASK_ADDRESS` environment variable.
 
 ## Test Markers
 

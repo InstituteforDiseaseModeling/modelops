@@ -26,7 +26,7 @@ from . import infra, cluster, workspace, adaptive, registry, storage, config as 
 app.add_typer(
     infra.app,
     name="infra",
-    help="🚀 Infrastructure management - setup, status, teardown (RECOMMENDED)"
+    help=" Infrastructure management - setup, status, teardown (RECOMMENDED)"
 )
 
 app.add_typer(
@@ -38,7 +38,7 @@ app.add_typer(
 app.add_typer(
     results.app,
     name="results",
-    help="📊 View and manage experiment results"
+    help=" View and manage experiment results"
 )
 
 # Advanced component-specific commands (for power users)
@@ -89,7 +89,7 @@ app.add_typer(
 app.add_typer(
     dev.app,
     name="dev",
-    help="🧪 Developer tools and testing utilities"
+    help=" Developer tools and testing utilities"
 )
 
 app.add_typer(
