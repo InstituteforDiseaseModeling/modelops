@@ -130,7 +130,7 @@ def test_cli_status_command():
     registry.update_progress("test-123", tasks_completed=5, tasks_total=10)
 
     # Mock both resolve_env and _get_registry
-    with patch("modelops.cli.jobs.resolve_env", return_value="dev"), \
+    with patch("modelops.cli.utils.resolve_env", return_value="dev"), \
          patch("modelops.cli.jobs._get_registry") as mock_get_registry:
         mock_get_registry.return_value = registry
 
@@ -183,7 +183,7 @@ def test_cli_list_command():
             registry.update_status(job_id, JobStatus.FAILED)
 
     # Mock both resolve_env and _get_registry
-    with patch("modelops.cli.jobs.resolve_env", return_value="dev"), \
+    with patch("modelops.cli.utils.resolve_env", return_value="dev"), \
          patch("modelops.cli.jobs._get_registry") as mock_get_registry:
         mock_get_registry.return_value = registry
 
