@@ -15,17 +15,38 @@ All commands support:
 
 Unified infrastructure provisioning that orchestrates all components in correct dependency order.
 
-#### `mops infra up CONFIG`
+#### `mops infra init`
+Generate infrastructure configuration with guided setup.
+
+```bash
+mops infra init                    # Interactive mode, saves to ~/.modelops/
+mops infra init --non-interactive  # Use defaults
+mops infra init --output custom.yaml  # Custom location
+```
+
+**Options:**
+- `--output, -o` - Custom output path (default: ~/.modelops/infrastructure.yaml)
+- `--interactive/--non-interactive` - Interactive mode for selections
+
+**Behavior:**
+- Detects Azure subscriptions from `az account list`
+- Prompts for subscription selection if multiple found
+- Fetches latest AKS versions for selected region
+- Generates complete infrastructure configuration
+- Saves to ~/.modelops/infrastructure.yaml by default
+
+#### `mops infra up [CONFIG]`
 Provision infrastructure from YAML configuration.
 
 ```bash
-mops infra up infrastructure.yaml
-mops infra up infrastructure.yaml --components storage,workspace
-mops infra up infrastructure.yaml --env staging --verbose
+mops infra up                      # Uses ~/.modelops/infrastructure.yaml
+mops infra up infrastructure.yaml   # Custom config
+mops infra up --components storage,workspace
+mops infra up --env staging --verbose
 ```
 
 **Arguments:**
-- `CONFIG` - Infrastructure configuration file (YAML)
+- `CONFIG` - Infrastructure configuration file (optional, defaults to ~/.modelops/infrastructure.yaml)
 
 **Options:**
 - `--components, -c` - Specific components to provision (registry,cluster,storage,workspace)

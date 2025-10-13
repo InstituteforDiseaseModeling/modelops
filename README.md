@@ -44,93 +44,69 @@ uv pip install -e .
 pip install -e .
 ```
 
-**Note**: Pulumi is installed automatically as a Python dependency - no separate installation required.
+**Note**: Pulumi is installed automatically as a Python dependency via the Automation API - no separate Pulumi CLI installation required.
+
+## Prerequisites
+
+- **Python 3.11+**
+- **Azure CLI** (`az`) - [Install guide](https://aka.ms/azure-cli)
+- **kubectl** - [Install guide](https://kubernetes.io/docs/tasks/tools/)
+- **Docker** - [Install guide](https://docs.docker.com/get-docker/)
+- **Azure subscription** - [Get free trial](https://azure.microsoft.com/free)
 
 ## Quick Start
 
-### 1. Configure Azure Credentials
+### 1. Install ModelOps
+```bash
+git clone https://github.com/vsbuffalo/modelops.git
+cd modelops
+pip install -e .
+```
+
+### 2. Initialize Configuration
 ```bash
 # Login to Azure
 az login
 
-# Set your subscription
-az account set --subscription YOUR_SUBSCRIPTION_ID
-```
-
-### 2. Initialize ModelOps Configuration
-```bash
-# Initialize config (creates ~/.modelops/config.yaml)
+# Initialize ModelOps config
 mops config init
 
-# Verify configuration
-mops config
+# Generate infrastructure configuration (interactive)
+mops infra init
+# Creates ~/.modelops/infrastructure.yaml with your Azure subscription
 ```
 
-### 3. Create Infrastructure
+### 3. Deploy Infrastructure
 ```bash
-# Create infrastructure.yaml
-cat > infrastructure.yaml <<EOF
-apiVersion: modelops/v1
-kind: Infrastructure
-metadata:
-  name: dev
-spec:
-  cluster:
-    provider: azure
-    location: eastus2
-    kubernetes_version: "1.30"
-    node_count: 2
-  storage:
-    account_tier: Standard
-  registry:
-    sku: Basic
-  workspace:
-    workers:
-      replicas: 2
-      processes: 2
-      threads: 1
-EOF
-
-# Provision everything
-mops infra up infrastructure.yaml --env dev
+# Deploy (uses ~/.modelops/infrastructure.yaml by default)
+mops infra up
 
 # Check status
-mops infra status --env dev
+mops infra status
 ```
 
 ### 4. Run a Simulation
 ```bash
-# Create a study configuration
-cat > study.yaml <<EOF
-apiVersion: modelops/v1
-kind: Study
-metadata:
-  name: pi-estimation
-spec:
-  simulation:
-    function: examples.simulations:monte_carlo_pi
-    bundle_ref: ""
-  parameters:
-    n_samples: 100000
-  replicates: 100
-  seed: 42
-EOF
+# Install Calabaria for experiment design (optional)
+pip install modelops-calabaria
 
-# Submit the job
-mops jobs submit study.yaml
+# Generate study with Sobol sampling
+cb sampling sobol models.example:SimpleModel \
+  --n-samples 20 \
+  --n-replicates 3 \
+  --output study.json
 
-# Check status
-mops jobs list
+# Submit to cluster
+mops jobs submit study.json
+
+# Monitor progress
 mops jobs status <job-id>
 ```
 
 ### 5. Clean Up
 ```bash
-# Destroy infrastructure (keeps data by default)
-mops infra down --env dev
-
-# Destroy everything including data
-mops infra down --env dev --destroy-all --yes
+# Destroy infrastructure
+mops infra down
 ```
 
 ## Documentation
@@ -169,6 +145,20 @@ make deploy           # Deploy to cluster
 # Development utilities
 mops dev smoke-test   # Verify bundle execution
 mops dev images print --all  # Show image configuration
+```
+
+### Testing Without Credentials
+
+To test infrastructure commands without Azure credentials (e.g., in CI):
+
+```bash
+# Use --plan flag to preview without creating resources
+mops infra up infrastructure.yaml --plan
+
+# Test CLI commands that don't require cloud access
+mops config init
+mops version
+mops dev images print --all
 ```
 
 See [Developer Guide](docs/dev/README.md) for detailed development instructions.

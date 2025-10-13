@@ -142,7 +142,7 @@ $(STUDY_FILE): $(VENV)/.installed
 	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 
 .PHONY: submit
-submit: $(STUDY_FILE) $(VENV)/.installed
+submit: bundle-init bundle-register $(STUDY_FILE) $(VENV)/.installed
 	# Submit with auto-push from current directory
 	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE)) --auto
 	@echo "✓ Submitted job with auto-pushed bundle"

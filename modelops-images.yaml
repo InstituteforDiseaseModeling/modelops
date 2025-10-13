@@ -1,7 +1,7 @@
 # ModelOps Image Configuration
 # Single source of truth for all container image references
 version: 1
-default_profile: prod
+default_profile: dev
 
 profiles:
   prod:

@@ -3,23 +3,127 @@
 Orchestrates all infrastructure components with a single command.
 """
 
+import json
+import subprocess
+import shutil
 import typer
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 from ..client import InfrastructureService
 from ..components.specs.infra import UnifiedInfraSpec
 from .display import console, success, error, info, section, warning
 from .common_options import env_option, yes_option
+from .templates import get_infra_template
 
 app = typer.Typer(help="Unified infrastructure management")
 
 
 @app.command()
+def init(
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="Custom output path"),
+    interactive: bool = typer.Option(True, "--interactive/--non-interactive", help="Interactive mode"),
+):
+    """Generate infrastructure configuration with guided setup.
+
+    Creates a ready-to-use infrastructure configuration file with your Azure
+    subscription and sensible defaults. By default saves to ~/.modelops/infrastructure.yaml
+    which will be used automatically by 'mops infra up'.
+
+    Example:
+        mops infra init                    # Interactive mode
+        mops infra init --non-interactive  # Use defaults
+        mops infra init --output custom.yaml  # Custom location
+    """
+    # Default to ~/.modelops/infrastructure.yaml
+    if output is None:
+        output = Path.home() / ".modelops" / "infrastructure.yaml"
+        output.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output = Path(output)
+
+    # Check Azure CLI
+    if not shutil.which("az"):
+        error("Azure CLI not found. Install: https://aka.ms/azure-cli")
+        raise typer.Exit(1)
+
+    # Get subscriptions
+    subs = get_azure_subscriptions()
+    if not subs:
+        error("No Azure subscriptions found. Run: az login")
+        raise typer.Exit(1)
+
+    # Select subscription
+    if len(subs) == 1:
+        subscription = subs[0]
+        info(f"Using subscription: {subscription['name']}")
+    elif interactive:
+        from rich.table import Table
+        table = Table(title="Azure Subscriptions")
+        table.add_column("#", style="cyan")
+        table.add_column("Name", style="bold")
+        table.add_column("ID", style="dim")
+
+        for i, sub in enumerate(subs, 1):
+            table.add_row(str(i), sub['name'], sub['id'])
+
+        console.print(table)
+        choice = typer.prompt("Select subscription", type=int, default=1)
+        subscription = subs[choice - 1]
+    else:
+        # Non-interactive: use default subscription
+        subscription = next((s for s in subs if s.get('isDefault')), subs[0])
+        info(f"Using subscription: {subscription['name']}")
+
+    # Select location
+    if interactive:
+        location = typer.prompt("Azure location", default="eastus2")
+    else:
+        location = "eastus2"
+
+    # Get AKS version (with fallback)
+    try:
+        versions = get_aks_versions(subscription['id'], location)
+        k8s_version = versions[0] if versions else "1.30"
+        info(f"Using Kubernetes {k8s_version} (latest in {location})")
+    except Exception:
+        k8s_version = "1.30"
+        warning(f"Could not fetch AKS versions, using {k8s_version}")
+
+    # Get username from config (or system)
+    try:
+        from ..core.config import get_username
+        username = get_username()
+    except Exception:
+        import getpass
+        username = getpass.getuser()
+
+    # Generate YAML from template
+    yaml_content = get_infra_template(
+        subscription_id=subscription['id'],
+        username=username,
+        location=location,
+        k8s_version=k8s_version
+    )
+
+    # Write file
+    output.write_text(yaml_content)
+    success(f"Created infrastructure config: {output}")
+
+    # Next steps
+    console.print("\n[bold green]Next steps:[/bold green]")
+    if output == Path.home() / ".modelops" / "infrastructure.yaml":
+        console.print("  mops infra up              # Deploy infrastructure")
+    else:
+        console.print(f"  mops infra up {output}  # Deploy infrastructure")
+    console.print("  mops infra status           # Check status")
+
+
+@app.command()
 def up(
-    config: Path = typer.Argument(
-        ...,
+    config: Optional[Path] = typer.Argument(
+        None,
         help="Infrastructure configuration file (YAML)",
         exists=True,
         file_okay=True,
@@ -43,17 +147,44 @@ def up(
     This orchestrates cluster, storage, workspace provisioning in the correct order.
 
     Example:
-        mops infra up infrastructure.yaml
-        mops infra up infrastructure.yaml --components storage,workspace
-        mops infra up infrastructure.yaml --plan
+        mops infra up                      # Uses ~/.modelops/infrastructure.yaml
+        mops infra up infrastructure.yaml   # Custom config
+        mops infra up --components storage,workspace
+        mops infra up --plan
     """
     from .utils import resolve_env
 
     env = resolve_env(env)
 
-    # Load spec
+    # Smart default: look for ~/.modelops/infrastructure.yaml
+    if config is None:
+        default_path = Path.home() / ".modelops" / "infrastructure.yaml"
+        if default_path.exists():
+            config = default_path
+            info(f"Using default config: {config}")
+        else:
+            error("No configuration specified and no default found")
+            error("Run 'mops infra init' to generate configuration")
+            error("Or specify config: mops infra up <config.yaml>")
+            raise typer.Exit(1)
+
+    # Validate subscription before expensive operations
     try:
         spec = UnifiedInfraSpec.from_yaml(str(config))
+
+        # Check for placeholder subscription IDs
+        if spec.cluster and spec.cluster.subscription_id:
+            if spec.cluster.subscription_id in ["YOUR_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000"]:
+                error("Invalid subscription ID in configuration")
+                error("Run 'mops infra init' to regenerate with valid subscription")
+                raise typer.Exit(1)
+
+            # Verify subscription is accessible
+            if not verify_subscription(spec.cluster.subscription_id):
+                error(f"Cannot access subscription {spec.cluster.subscription_id[:8]}...")
+                error("Verify you're logged in: az login")
+                error("List available subscriptions: az account list --output table")
+                raise typer.Exit(1)
     except Exception as e:
         error(f"Failed to load configuration: {e}")
         raise typer.Exit(1)
@@ -470,5 +601,43 @@ def outputs(
                             info(f"  {key}: <truncated>")
                         else:
                             info(f"  {key}: {value}")
+
+
+# Helper functions for infra init
+def get_azure_subscriptions() -> List[Dict[str, str]]:
+    """Get list of Azure subscriptions."""
+    result = subprocess.run(
+        ["az", "account", "list", "--query",
+         "[].{name:name, id:id, isDefault:isDefault}", "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        return json.loads(result.stdout)
+    return []
+
+
+def get_aks_versions(subscription_id: str, location: str) -> List[str]:
+    """Get supported AKS versions for location."""
+    result = subprocess.run(
+        ["az", "aks", "get-versions",
+         "--subscription", subscription_id,
+         "--location", location,
+         "--query", "values[?isPreview==null].version",
+         "-o", "json"],
+        capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        versions = json.loads(result.stdout)
+        return sorted(versions, reverse=True)  # Latest first
+    return []
+
+
+def verify_subscription(subscription_id: str) -> bool:
+    """Check if subscription is accessible."""
+    result = subprocess.run(
+        ["az", "account", "show", "--subscription", subscription_id],
+        capture_output=True
+    )
+    return result.returncode == 0
 
 
