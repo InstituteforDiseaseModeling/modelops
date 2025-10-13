@@ -114,14 +114,10 @@ def test_unique_parameter_set_serialization():
         pytest.fail(f"UniqueParameterSet serialization failed: {e}")
 
 
-@pytest.mark.skipif(True, reason="Requires Dask cluster running")
-def test_dask_submission():
-    """Test actual Dask serialization - this is where it might fail.
-
-    Run this test manually with: pytest tests/test_dask_serialization.py::test_dask_submission -s
-    after starting Dask cluster with: make dask-local
-    """
-    from dask.distributed import Client
+@pytest.mark.integration
+def test_dask_submission(dask_cluster):
+    """Test actual Dask serialization - this is where it might fail."""
+    client = dask_cluster  # Use the shared fixture
 
     task = SimTask(
         bundle_ref=TEST_BUNDLE_REF,
@@ -131,8 +127,6 @@ def test_dask_submission():
     )
 
     try:
-        # Connect to local cluster
-        client = Client("tcp://localhost:8786")
 
         # Function that will run on worker
         def process_task(t: SimTask):
@@ -142,25 +136,17 @@ def test_dask_submission():
         future = client.submit(process_task, task, pure=False)
         result = future.result()
 
-        assert "Processed test://bundle" in result
+        assert "Processed sha256:" in result
         print(f"✓ Dask serialization works: {result}")
-
-        client.close()
 
     except Exception as e:
         pytest.fail(f"Dask serialization failed: {e}")
 
 
-@pytest.mark.skipif(True, reason="Requires Dask cluster running")
-def test_through_dask_worker_with_validation():
-    """Test the actual path through Dask workers with objects that have validation.
-
-    Run this test manually with: pytest tests/test_dask_serialization.py::test_through_dask_worker_with_validation -s
-    after starting Dask cluster with: make dask-local
-    """
-    from dask.distributed import Client
-
-    client = Client("tcp://localhost:8786")
+@pytest.mark.integration
+def test_through_dask_worker_with_validation(dask_cluster):
+    """Test the actual path through Dask workers with objects that have validation."""
+    client = dask_cluster  # Use the shared fixture
 
     # Create tasks with different parameters
     tasks = []
@@ -193,7 +179,7 @@ def test_through_dask_worker_with_validation():
 
         # Verify results
         for i, result in enumerate(results):
-            assert result["bundle"] == f"test://bundle{i}"
+            assert result["bundle"].startswith("sha256:")
             assert result["seed"] == 42 + i
 
         print(f"✓ Worker execution succeeded: {results}")

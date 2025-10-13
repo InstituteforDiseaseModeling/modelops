@@ -348,15 +348,37 @@ class SubprocessRunner:
 
                 if rc != 0:
                     logger.warning("uv failed; falling back to pip (PyPI only)")
-                    # Ensure pip is available (uv venv doesn't include it by default)
-                    self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
-                    # Upgrade pip
-                    self._run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-                    # Install with pip using --isolated to avoid config issues
-                    self._run([sys.executable, "-m", "pip", "install",
-                              "--isolated", "--disable-pip-version-check",
-                              "--no-cache-dir", "--no-input",
-                              str(self.bundle_path)])
+                    # Check if we're in an externally managed environment
+                    try:
+                        # Try to detect if pip will fail due to PEP 668
+                        result = subprocess.run(
+                            [sys.executable, "-m", "pip", "--version"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if "externally-managed" in result.stderr.lower():
+                            logger.error("Python environment is externally managed, cannot use pip")
+                            raise RuntimeError("Cannot install packages: Python is externally managed. Ensure uv is available.")
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass
+
+                    # Try to ensure pip is available first
+                    ensurepip_result = self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
+                    if ensurepip_result != 0:
+                        logger.warning("ensurepip failed, pip may not be available")
+
+                    # Try pip install with --break-system-packages as last resort for dev environments
+                    # This is safe in a venv context
+                    pip_args = [sys.executable, "-m", "pip", "install",
+                               "--isolated", "--disable-pip-version-check",
+                               "--no-cache-dir", "--no-input"]
+
+                    # Add break-system-packages flag if we detect it might be needed
+                    if "homebrew" in sys.executable.lower() or "/opt/homebrew" in sys.executable:
+                        logger.warning("Detected Homebrew Python, adding --break-system-packages flag")
+                        pip_args.append("--break-system-packages")
+
+                    pip_args.append(str(self.bundle_path))
+                    self._run(pip_args)
             else:
                 self._run([sys.executable, "-m", "pip", "install",
                           "--isolated", "--disable-pip-version-check",
@@ -373,13 +395,21 @@ class SubprocessRunner:
 
                 if rc != 0:
                     logger.warning("uv failed; falling back to pip (PyPI only)")
-                    # Ensure pip is available
-                    self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
-                    self._run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"])
-                    self._run([sys.executable, "-m", "pip", "install",
-                              "--isolated", "--disable-pip-version-check",
-                              "--no-cache-dir", "--no-input",
-                              "-r", str(requirements)])
+                    # Similar handling as pyproject.toml case
+                    ensurepip_result = self._run([sys.executable, "-m", "ensurepip", "--upgrade"], check=False)
+                    if ensurepip_result != 0:
+                        logger.warning("ensurepip failed, pip may not be available")
+
+                    pip_args = [sys.executable, "-m", "pip", "install",
+                               "--isolated", "--disable-pip-version-check",
+                               "--no-cache-dir", "--no-input"]
+
+                    if "homebrew" in sys.executable.lower() or "/opt/homebrew" in sys.executable:
+                        logger.warning("Detected Homebrew Python, adding --break-system-packages flag")
+                        pip_args.append("--break-system-packages")
+
+                    pip_args.extend(["-r", str(requirements)])
+                    self._run(pip_args)
             else:
                 self._run([sys.executable, "-m", "pip", "install",
                           "--isolated", "--disable-pip-version-check",

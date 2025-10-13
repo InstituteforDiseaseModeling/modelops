@@ -404,6 +404,25 @@ class InfrastructureService:
             from ..core.env_reconcile import reconcile_bundle_env
             reconcile_bundle_env(self.env, dry_run=dry_run)
 
+            # If destroy-all was specified, also remove the empty Pulumi stacks
+            # This prevents issues when users later try to provision again
+            if destroy_all and not dry_run:
+                print("\n→ Removing empty Pulumi stacks for clean slate...")
+                from ..core import automation
+
+                # Remove stacks in reverse order of dependencies
+                stacks_to_remove = ["workspace", "storage", "cluster", "registry", "resource_group"]
+                for stack_name in stacks_to_remove:
+                    try:
+                        # Check if stack exists first
+                        from ..client.utils import stack_exists
+                        if stack_exists(stack_name, self.env):
+                            automation.remove_stack(stack_name, self.env)
+                            print(f"  ✓ Removed {stack_name} stack")
+                    except Exception as e:
+                        # Don't fail destroy if stack removal fails
+                        print(f"  ⚠ Could not remove {stack_name} stack: {e}")
+
         return result
 
     def get_status(self) -> Dict[str, ComponentStatus]:

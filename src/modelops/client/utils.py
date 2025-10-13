@@ -128,6 +128,84 @@ def get_safe_outputs(
     return safe_outputs
 
 
+def validate_component_dependencies(
+    component: str,
+    env: str,
+    infra_service: Optional['InfrastructureService'] = None
+) -> None:
+    """Validate all dependencies are deployed before provisioning component.
+
+    This ensures components cannot be deployed without their required dependencies,
+    preventing broken Pulumi stacks and cryptic errors.
+
+    Args:
+        component: Component to validate (workspace, storage, registry, cluster)
+        env: Environment name (dev, staging, prod)
+        infra_service: Optional InfrastructureService instance (created if not provided)
+
+    Raises:
+        ValueError: If required dependencies are missing or not ready
+    """
+    from .base import ComponentState
+
+    # Canonicalize component name
+    component = canonicalize_component_name(component)
+
+    # Get or create infra service to check statuses
+    if not infra_service:
+        from .infra_service import InfrastructureService
+        infra_service = InfrastructureService(env)
+
+    # Get dependencies for this component
+    dep_graph = DependencyGraph()
+    required_deps = dep_graph.get_dependencies(component)
+
+    # If no dependencies, nothing to check
+    if not required_deps:
+        return
+
+    # Check each dependency
+    missing = []
+    not_ready = []
+
+    # Get status of all components
+    all_status = infra_service.get_status()
+
+    for dep in required_deps:
+        status = all_status.get(dep)
+        if not status or not status.deployed:
+            missing.append(dep)
+        elif status.phase != ComponentState.READY:
+            not_ready.append(f"{dep} ({status.phase.value})")
+
+    # Build detailed error message
+    if missing or not_ready:
+        msg = f"\n❌ Cannot deploy {component} - dependencies not met:\n\n"
+
+        if missing:
+            msg += "  Missing components (not deployed):\n"
+            for dep in missing:
+                msg += f"    • {dep}\n"
+
+        if not_ready:
+            msg += "\n  Components not ready:\n"
+            for dep in not_ready:
+                msg += f"    • {dep}\n"
+
+        msg += "\n  Required dependencies:\n"
+        for dep in sorted(required_deps):
+            status = all_status.get(dep)
+            if status and status.deployed:
+                msg += f"    ✓ {dep}: {status.phase.value}\n"
+            else:
+                msg += f"    ✗ {dep}: Not deployed\n"
+
+        msg += "\n  💡 Solution: Run 'mops infra up' to provision all dependencies\n"
+        msg += "     Or provision specific components in dependency order"
+
+        raise ValueError(msg)
+
+
 def canonicalize_component_name(name: str) -> str:
     """Canonicalize component name to use underscores consistently.
 

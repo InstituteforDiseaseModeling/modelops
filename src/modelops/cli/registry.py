@@ -67,7 +67,17 @@ def create(
             raise typer.Exit(1)
         registry_config["subscription_id"] = subscription_id
         registry_config["location"] = registry_config.get("location", "eastus2")
-    
+
+    # Validate dependencies before attempting to provision
+    try:
+        from ..client.utils import validate_component_dependencies
+        info("\nChecking dependencies...")
+        validate_component_dependencies("registry", env)
+        success("✓ All dependencies satisfied")
+    except ValueError as e:
+        error(str(e))
+        raise typer.Exit(1)
+
     # Use RegistryService
     service = RegistryService(env)
 

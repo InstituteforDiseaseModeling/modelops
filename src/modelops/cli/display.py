@@ -59,12 +59,24 @@ def workspace_info(outputs: Dict, env: str, stack_name: str) -> None:
     from ..core import StackNaming
     namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else StackNaming.get_namespace("dask", env)
     workers = outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'
-    
+
+    # Get autoscaling info from outputs
+    autoscaling_enabled = outputs.get('autoscaling_enabled', {}).value if outputs.get('autoscaling_enabled') else False
+    autoscaling_min = outputs.get('autoscaling_min', {}).value if outputs.get('autoscaling_min') else 'N/A'
+    autoscaling_max = outputs.get('autoscaling_max', {}).value if outputs.get('autoscaling_max') else 'N/A'
+
+    # Format workers display based on autoscaling
+    if autoscaling_enabled:
+        workers_display = f"{autoscaling_min}-{autoscaling_max} (autoscaling)"
+    else:
+        workers_display = f"{workers} (fixed)"
+
     info_dict({
         "Environment": env,
         "Stack": stack_name,
         "Namespace": namespace,
-        "Workers": workers
+        "Workers": workers_display,
+        "Autoscaling": "✓ Enabled" if autoscaling_enabled else "✗ Disabled"
     })
     
     section("Port-forward commands:")
@@ -85,7 +97,9 @@ def workspace_commands(namespace: str) -> None:
     section("Useful commands:")
     info_dict({
         "Logs": f"kubectl logs -n {namespace} -l app=dask-scheduler",
-        "Workers": f"kubectl get pods -n {namespace} -l app=dask-worker"
+        "Workers": f"kubectl get pods -n {namespace} -l app=dask-worker",
+        "HPA Status": f"kubectl get hpa -n {namespace}",
+        "HPA Details": f"kubectl describe hpa -n {namespace} dask-workers-hpa"
     })
 
 

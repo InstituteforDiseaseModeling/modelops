@@ -37,7 +37,7 @@ spec:
 
   # Dask Workers Configuration
   workers:
-    replicas: 4
+    replicas: 4  # Initial replicas (ignored when autoscaling is enabled)
     image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
     resources:
       requests:
@@ -60,6 +60,15 @@ spec:
         value: "0.95"  # Spill aggressively at 95%
       - name: DASK_WORKER__MEMORY__PAUSE
         value: "0.98"  # Pause execution at 98%
+
+  # Autoscaling Configuration
+  # When enabled, the number of workers scales based on CPU utilization
+  autoscaling:
+    enabled: true  # Enable/disable autoscaling (default: true)
+    min_workers: 2  # Minimum number of worker pods
+    max_workers: 10  # Maximum number of worker pods
+    target_cpu: 70  # Target CPU utilization percentage
+    scale_down_delay: 300  # Seconds to wait before scaling down
 
   # Optional: Authentication for private registries
   # Uncomment to use GitHub Container Registry with PAT

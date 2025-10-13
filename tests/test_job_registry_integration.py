@@ -173,9 +173,12 @@ def test_cli_list_command():
             registry.update_status(job_id, JobStatus.SUBMITTING)
             registry.update_status(job_id, JobStatus.SCHEDULED)
             registry.update_status(job_id, JobStatus.RUNNING)
+            # Must go through VALIDATING before SUCCEEDED (new state machine)
+            registry.update_status(job_id, JobStatus.VALIDATING)
             registry.update_status(job_id, JobStatus.SUCCEEDED)
         else:
             registry.update_status(job_id, JobStatus.SUBMITTING)
+            # Can go directly from SUBMITTING to FAILED
             registry.update_status(job_id, JobStatus.FAILED)
 
     # Mock _get_registry

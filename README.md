@@ -361,8 +361,11 @@ export PULUMI_CONFIG_PASSPHRASE=dev
 ### Testing
 
 ```bash
-# Run all tests
+# Run unit tests (default)
 uv run pytest
+
+# Run integration tests
+uv run pytest -m integration
 
 # Run specific test module
 uv run pytest tests/test_naming.py -v
@@ -370,6 +373,8 @@ uv run pytest tests/test_naming.py -v
 # Run with coverage
 uv run pytest --cov=modelops --cov-report=html
 ```
+
+See [tests/README.md](tests/README.md) for detailed test documentation.
 
 ### Code Quality
 

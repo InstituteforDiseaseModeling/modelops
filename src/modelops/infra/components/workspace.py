@@ -44,12 +44,36 @@ class DaskWorkspace(pulumi.ComponentResource):
         storage = pulumi.StackReference(storage_stack_ref) if storage_stack_ref else None
 
         # Read outputs from Stack 1 (infrastructure)
-        kubeconfig = infra.require_output("kubeconfig")
+        # Use get_output to handle missing outputs gracefully
+        kubeconfig = infra.get_output("kubeconfig")
+
+        # Check if infrastructure stack has outputs
+        def validate_kubeconfig(kc):
+            if not kc:
+                raise ValueError(
+                    f"Infrastructure stack '{infra_stack_ref}' has no kubeconfig output.\n"
+                    "This usually means the infrastructure was destroyed or never created.\n"
+                    "Please run 'mops infra up' first to create the Kubernetes cluster."
+                )
+            return kc
+
+        kubeconfig = kubeconfig.apply(validate_kubeconfig)
 
         # Read outputs from registry stack if provided
         registry_url = None
         if registry:
-            registry_url = registry.require_output("login_server")
+            registry_url_output = registry.get_output("login_server")
+
+            def validate_registry(url):
+                if not url:
+                    raise ValueError(
+                        f"Registry stack '{registry_stack_ref}' has no login_server output.\n"
+                        "This usually means the registry was destroyed or never created.\n"
+                        "Please run 'mops registry create' first to create the container registry."
+                    )
+                return url
+
+            registry_url = registry_url_output.apply(validate_registry)
 
         # Create K8s provider using kubeconfig from Stack 1
         k8s_provider = k8s.Provider(

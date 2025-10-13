@@ -198,6 +198,39 @@ def select_stack(
     )
 
 
+def remove_stack(
+    component: str,
+    env: str,
+    run_id: Optional[str] = None,
+    work_dir: Optional[str] = None
+) -> None:
+    """Remove a Pulumi stack completely.
+
+    This is used when doing a full teardown with --destroy-all to ensure
+    no empty stacks remain that could cause issues on next provisioning.
+
+    Args:
+        component: Component name
+        env: Environment name
+        run_id: Optional run ID for adaptive stacks
+        work_dir: Optional custom work directory path
+    """
+    # Ensure secure passphrase is configured
+    _ensure_passphrase()
+
+    try:
+        stack = select_stack(component, env, run_id, noop_program, work_dir)
+        workspace = stack.workspace
+        stack_name = stack.name
+
+        # Remove the stack
+        workspace.remove_stack(stack_name)
+    except Exception as e:
+        # If stack doesn't exist, that's fine
+        if "no stack named" not in str(e).lower():
+            raise
+
+
 def outputs(
     component: str,
     env: str,

@@ -9,53 +9,19 @@ These tests ensure that previously fixed bugs don't resurface:
 import os
 import pytest
 from pathlib import Path
-from dask.distributed import LocalCluster, Client
 from modelops_contracts import SimTask
 from modelops_contracts.simulation import ReplicateSet
 
 from modelops.services.dask_simulation import DaskSimulationService
 from modelops.worker.config import RuntimeConfig
 
-
-pytestmark = pytest.mark.integration
-
 # CI detection
 IS_CI = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
 
 
-@pytest.fixture(scope="module")
-def dask_cluster():
-    """Create a local Dask cluster with CI-appropriate settings."""
-    import asyncio
-    from concurrent.futures import TimeoutError as FutureTimeoutError
-    
-    # Scale down for CI
-    n_workers = 1 if IS_CI else 2
-    memory_limit = "1GB" if IS_CI else "2GB"
-    
-    try:
-        cluster = LocalCluster(
-            n_workers=n_workers,
-            threads_per_worker=1,
-            processes=True,
-            silence_logs=True,
-            dashboard_address=None,
-            death_timeout="5s",
-            memory_limit=memory_limit,
-        )
-        client = Client(cluster, timeout="10s")
-    except (TimeoutError, FutureTimeoutError, asyncio.TimeoutError):
-        pytest.skip("LocalCluster creation timed out")
-    except Exception as e:
-        pytest.skip(f"LocalCluster creation failed: {e}")
-    
-    yield client
-    
-    try:
-        client.close(timeout=5)
-        cluster.close(timeout=5)
-    except:
-        pass
+pytestmark = pytest.mark.integration
+
+# The dask_cluster fixture is now provided by conftest.py
 
 
 class TestJSONRPCBufferFix:

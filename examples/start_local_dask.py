@@ -1,7 +1,13 @@
 #!/usr/bin/env python
-"""Start a local Dask cluster for testing.
+"""Start a local Dask cluster for manual testing and debugging.
 
-This replaces the need for command-line 'dask scheduler' and 'dask worker'.
+This script starts a standalone Dask cluster for:
+- Manual testing of examples
+- Debugging integration tests with an external cluster
+- Development and experimentation
+
+Note: Integration tests create their own LocalClusters by default,
+so this is not required for running tests.
 """
 
 import time

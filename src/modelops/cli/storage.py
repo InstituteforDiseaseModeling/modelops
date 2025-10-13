@@ -53,6 +53,17 @@ def up(
     from ..components.specs.storage import StorageConfig
     storage_config = StorageConfig(**config_dict)
 
+    # Validate dependencies before attempting to provision
+    if not standalone:
+        try:
+            from ..client.utils import validate_component_dependencies
+            info("Checking dependencies...")
+            validate_component_dependencies("storage", env)
+            success("✓ All dependencies satisfied")
+        except ValueError as e:
+            error(str(e))
+            raise typer.Exit(1)
+
     # Use StorageService
     service = StorageService(env)
 

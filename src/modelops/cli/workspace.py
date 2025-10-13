@@ -51,6 +51,16 @@ def up(
     # Load and validate configuration if provided
     validated_config = WorkspaceConfig.from_yaml_optional(config)
 
+    # Validate dependencies before attempting to provision
+    try:
+        from ..client.utils import validate_component_dependencies
+        info("Checking dependencies...")
+        validate_component_dependencies("workspace", env)
+        success("✓ All dependencies satisfied")
+    except ValueError as e:
+        error(str(e))
+        raise typer.Exit(1)
+
     # Use WorkspaceService - it handles all ref resolution internally
     service = WorkspaceService(env)
 
@@ -167,6 +177,117 @@ def status(
         error(f"Error querying workspace status: {e}")
         handle_pulumi_error(e, "~/.modelops/pulumi/workspace", StackNaming.get_stack_name('workspace', env))
         raise typer.Exit(1)
+
+
+@app.command()
+def autoscaling(
+    env: Optional[str] = env_option(),
+    watch: bool = typer.Option(False, "--watch", "-w", help="Watch autoscaling status (updates every 5s)")
+):
+    """Show autoscaling status and current metrics."""
+    import subprocess
+    import time
+    import json
+
+    env = resolve_env(env)
+    namespace = StackNaming.get_namespace("dask", env)
+
+    # Check if workspace is deployed
+    service = WorkspaceService(env)
+    if not service.status().deployed:
+        warning("Workspace not deployed")
+        raise typer.Exit(1)
+
+    def get_hpa_status():
+        """Get HPA status from kubectl."""
+        try:
+            # Get HPA in JSON format
+            result = subprocess.run(
+                ["kubectl", "get", "hpa", "-n", namespace, "-o", "json"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            hpa_list = json.loads(result.stdout)
+
+            if not hpa_list.get("items"):
+                return None
+
+            # Find the dask-workers HPA
+            for hpa in hpa_list["items"]:
+                if "dask-workers" in hpa["metadata"]["name"]:
+                    return hpa
+            return None
+
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return None
+
+    def display_status():
+        """Display HPA status."""
+        console.clear()
+        section("Autoscaling Status")
+
+        hpa = get_hpa_status()
+        if not hpa:
+            warning("No HorizontalPodAutoscaler found")
+            info("\nAutoscaling may be disabled in workspace configuration")
+            return False
+
+        spec = hpa.get("spec", {})
+        status = hpa.get("status", {})
+
+        # Basic info
+        info_dict({
+            "Namespace": namespace,
+            "Min replicas": spec.get("minReplicas", "N/A"),
+            "Max replicas": spec.get("maxReplicas", "N/A"),
+            "Current replicas": status.get("currentReplicas", "N/A"),
+            "Desired replicas": status.get("desiredReplicas", "N/A")
+        })
+
+        # Metrics
+        section("Current Metrics")
+        current_metrics = status.get("currentMetrics", [])
+        if current_metrics:
+            for metric in current_metrics:
+                if metric["type"] == "Resource" and "resource" in metric:
+                    resource = metric["resource"]
+                    name = resource.get("name", "unknown")
+                    current = resource.get("current", {})
+
+                    if "averageUtilization" in current:
+                        info(f"  {name.upper()}: {current['averageUtilization']}%")
+                    elif "averageValue" in current:
+                        info(f"  {name.upper()}: {current['averageValue']}")
+        else:
+            info("  No metrics available yet")
+
+        # Conditions
+        conditions = status.get("conditions", [])
+        scaling_active = False
+        for condition in conditions:
+            if condition.get("type") == "ScalingActive":
+                scaling_active = condition.get("status") == "True"
+                if not scaling_active:
+                    warning(f"\n⚠ Scaling inactive: {condition.get('message', 'Unknown reason')}")
+
+        if scaling_active:
+            success("\n✓ Autoscaling is active")
+
+        return True
+
+    if watch:
+        info("Watching HPA status (press Ctrl+C to stop)...")
+        try:
+            while True:
+                if display_status():
+                    info(f"\n[dim]Updated: {time.strftime('%H:%M:%S')}[/dim]")
+                time.sleep(5)
+        except KeyboardInterrupt:
+            info("\nStopped watching")
+    else:
+        display_status()
+        info("\nUse --watch to monitor autoscaling in real-time")
 
 
 @app.command(name="list")
