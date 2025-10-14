@@ -1,4 +1,26 @@
-"""Dask-based simulation service implementation."""
+"""Dask-based simulation service implementation.
+
+IMPORTANT: Aggregation Deadlock Prevention
+===========================================
+This module implements critical deadlock prevention for aggregation tasks that depend
+on large numbers of simulation tasks (e.g., 200 replicates per parameter set).
+
+The Deadlock Pattern:
+1. Each aggregation task depends on 200 simulation futures
+2. With limited worker threads (e.g., 8 threads), aggregation tasks waiting for
+   dependencies can consume all available threads
+3. This prevents simulation tasks from running, creating a circular dependency
+
+Solution Implemented (Oct 2025):
+1. Direct dependency passing: Aggregation tasks receive simulation results as *args
+   instead of calling gather() inside workers (commit d2d5f8)
+2. Resource constraints: Aggregation tasks use resources={'aggregation': 1} to run
+   only on workers configured with aggregation resources
+3. Increased worker processes: Scale from 2 to 4 processes per pod for more threads
+
+Without these measures, jobs freeze at 18/20 aggregations with 3998/4000 simulations
+completed - a consistent pattern indicating thread starvation.
+"""
 
 import logging
 from typing import List, Optional
@@ -273,9 +295,8 @@ class DaskSimulationService(SimulationService):
                 target_ep=target_entrypoint,
                 bundle_ref=replicate_set.base_task.bundle_ref,
                 key=TaskKeys.agg_key(param_id),
-                pure=False
-                # TODO: Add resource constraint when workers configured with resources
-                # resources={'aggregation': 1}  # Run on dedicated aggregation workers
+                pure=False,
+                resources={'aggregation': 1}  # Run on dedicated aggregation workers
             )
 
             return DaskFutureAdapter(agg_future)

@@ -535,7 +535,8 @@ class DaskWorkspace(pulumi.ComponentResource):
                                     "tcp://dask-scheduler:8786",
                                     "--nworkers", str(worker_processes),
                                     "--nthreads", str(worker_threads),
-                                    "--memory-limit", memory_limit
+                                    "--memory-limit", memory_limit,
+                                    "--resources", "aggregation=1"  # Each worker gets aggregation resource
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
                                     requests=workers_config.get("resources", {}).get("requests", {
