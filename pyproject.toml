@@ -3,7 +3,7 @@ name = "modelops"
 version = "0.1.0"
 description = "Infrastructure orchestration for ML experimentation"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "modelops-contracts",
     "rich>=14.1.0",

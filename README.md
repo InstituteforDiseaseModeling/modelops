@@ -99,7 +99,21 @@ cb sampling sobol models.example:SimpleModel \
 # Submit to cluster
 mops jobs submit study.json
 
-# Monitor progress
+# Monitor jobs
+mops jobs sync    # Sync status from Kubernetes
+mops jobs list    # List all jobs with status
+
+# Example output:
+#                     Recent Jobs (last 24 hours, PDT)
+# ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
+# ┃ Job ID       ┃ Status    ┃ Progress ┃ Created        ┃ Updated        ┃
+# ┡━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
+# │ job-5b718dc8 │ running   │ -        │ 7 minutes ago  │ just now       │
+# │ job-e6169049 │ failed    │ -        │ 11 minutes ago │ just now       │
+# │ job-267aa463 │ failed    │ -        │ 13 minutes ago │ just now       │
+# └──────────────┴───────────┴──────────┴────────────────┴────────────────┘
+
+# Get detailed status
 mops jobs status <job-id>
 ```
 

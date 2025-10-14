@@ -19,6 +19,7 @@ from ..services.job_state import JobStatus
 from .display import console, success, error, info, warning, section
 from .common_options import env_option
 from .formatting import format_timestamp, format_duration, get_timezone_info
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 app = typer.Typer(help="Submit and manage simulation jobs")
 
@@ -407,10 +408,12 @@ def list(
     status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
     hours: int = typer.Option(24, "--hours", "-h", help="Show jobs from last N hours"),
     env: Optional[str] = env_option(),
+    no_sync: bool = typer.Option(False, "--no-sync", help="Skip automatic status sync"),
 ):
     """List recent jobs.
 
     Shows jobs from the registry with their current status and progress.
+    Automatically syncs status with Kubernetes before displaying.
     """
     from datetime import datetime, timezone, timedelta
     from .utils import resolve_env
@@ -423,6 +426,64 @@ def list(
         warning("Job registry unavailable, use kubectl:")
         info(f"  kubectl -n modelops-dask-{env} get jobs")
         raise typer.Exit(1)
+
+    # Auto-sync status with spinner (unless disabled)
+    if not no_sync:
+        # Get active jobs that need syncing
+        active_jobs = registry.list_jobs(
+            status_filter=[
+                JobStatus.PENDING,
+                JobStatus.SUBMITTING,
+                JobStatus.SCHEDULED,
+                JobStatus.RUNNING
+            ]
+        )
+
+        if active_jobs:
+            # Setup Kubernetes client
+            temp_path = None
+            try:
+                from kubernetes import client, config
+                from rich.progress import Progress, SpinnerColumn, TextColumn
+
+                # Configure kubectl
+                infra_state = load_infrastructure_state(env)
+                if infra_state and infra_state.get("kubeconfig"):
+                    temp_path = write_temp_kubeconfig(infra_state["kubeconfig"])
+                    config.load_kube_config(config_file=temp_path)
+                else:
+                    config.load_kube_config()
+
+                batch_v1 = client.BatchV1Api()
+
+                # Sync with progress spinner
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                    transient=True
+                ) as progress:
+                    task = progress.add_task("Syncing job status...", total=None)
+
+                    _perform_sync(
+                        registry=registry,
+                        batch_v1=batch_v1,
+                        active_jobs=active_jobs,
+                        dry_run=False,
+                        validate=True,
+                        progress=progress,
+                        verbose=False  # Quiet during spinner
+                    )
+
+                    progress.update(task, completed=True)
+
+            except Exception as e:
+                # Silently skip sync on error, still show list
+                pass
+
+            finally:
+                if temp_path:
+                    cleanup_temp_kubeconfig(temp_path)
 
     # Parse status filter if provided
     status_filter = None
@@ -496,6 +557,96 @@ def list(
     info("  mops jobs status <job-id>")
 
 
+def _perform_sync(
+    registry,
+    batch_v1,
+    active_jobs: list,
+    dry_run: bool = False,
+    validate: bool = True,
+    progress_task=None,
+    progress=None,
+    verbose: bool = True
+) -> int:
+    """Perform the actual sync operation.
+
+    Returns number of jobs updated.
+    """
+    updated_count = 0
+    total_jobs = len(active_jobs)
+
+    for idx, job in enumerate(active_jobs):
+        # Update progress if provided
+        if progress and progress_task is not None:
+            progress.update(
+                progress_task,
+                description=f"Syncing job status from Kubernetes... [{idx+1}/{total_jobs}]"
+            )
+
+        # Get Kubernetes job status
+        try:
+            k8s_job = batch_v1.read_namespaced_job(
+                name=job.k8s_name,
+                namespace=job.k8s_namespace or "modelops-dask-dev"
+            )
+
+            # Determine status based on Kubernetes job
+            k8s_status = None
+            if k8s_job.status.succeeded and k8s_job.status.succeeded > 0:
+                k8s_status = JobStatus.SUCCEEDED
+            elif k8s_job.status.failed and k8s_job.status.failed > 0:
+                k8s_status = JobStatus.FAILED
+            elif k8s_job.status.active and k8s_job.status.active > 0:
+                k8s_status = JobStatus.RUNNING
+            else:
+                # Still scheduled/pending
+                continue
+
+            # Update if status changed
+            if k8s_status and k8s_status != job.status:
+                if dry_run:
+                    if verbose:
+                        info(f"  {job.job_id}: {job.status.value} → {k8s_status.value}")
+                else:
+                    try:
+                        # Handle K8s job success with validation
+                        if k8s_status == JobStatus.SUCCEEDED and validate:
+                            # Transition to VALIDATING if currently RUNNING
+                            if job.status == JobStatus.RUNNING:
+                                registry.update_job_status(job.job_id, JobStatus.VALIDATING)
+                                # Note: A separate validation process will handle the actual validation
+                                if verbose:
+                                    info(f"  {job.job_id}: {job.status.value} → validating")
+                        else:
+                            registry.update_job_status(job.job_id, k8s_status)
+                            if verbose:
+                                info(f"  {job.job_id}: {job.status.value} → {k8s_status.value}")
+                        updated_count += 1
+                    except Exception as e:
+                        if verbose:
+                            warning(f"  Failed to update {job.job_id}: {e}")
+
+        except Exception as e:
+            # Check if it's a 404 (job doesn't exist)
+            if "404" in str(e) or "not found" in str(e).lower():
+                if verbose:
+                    info(f"  {job.job_id}: K8s job not found (may have been deleted)")
+                # Mark as failed if it was running but now missing
+                if job.status == JobStatus.RUNNING and not dry_run:
+                    try:
+                        registry.update_job_status(job.job_id, JobStatus.FAILED)
+                        if verbose:
+                            info(f"    → marked as failed")
+                        updated_count += 1
+                    except Exception as update_e:
+                        if verbose:
+                            warning(f"  Failed to update {job.job_id}: {update_e}")
+            else:
+                if verbose:
+                    warning(f"  Error checking {job.job_id}: {e}")
+
+    return updated_count
+
+
 @app.command()
 def sync(
     env: Optional[str] = env_option(),
@@ -535,110 +686,29 @@ def sync(
             info("No active jobs to sync")
             return
 
-        section(f"Syncing {len(active_jobs)} active jobs")
+        # Use progress spinner for sync operation
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True,  # Disappears when done
+        ) as progress:
+            task = progress.add_task(
+                f"Syncing {len(active_jobs)} active {'job' if len(active_jobs) == 1 else 'jobs'}...",
+                total=None
+            )
 
-        updated_count = 0
-        for job in active_jobs:
-            # Get Kubernetes job status
-            try:
-                k8s_job = batch_v1.read_namespaced_job(
-                    name=job.k8s_name,
-                    namespace=job.k8s_namespace or "modelops-dask-dev"
-                )
+            updated_count = _perform_sync(
+                registry=registry,
+                batch_v1=batch_v1,
+                active_jobs=active_jobs,
+                dry_run=dry_run,
+                validate=validate,
+                progress_task=task,
+                progress=progress,
+                verbose=False  # Quiet during spinner
+            )
 
-                # Determine status based on Kubernetes job
-                k8s_status = None
-                if k8s_job.status.succeeded and k8s_job.status.succeeded > 0:
-                    k8s_status = JobStatus.SUCCEEDED
-                elif k8s_job.status.failed and k8s_job.status.failed > 0:
-                    k8s_status = JobStatus.FAILED
-                elif k8s_job.status.active and k8s_job.status.active > 0:
-                    k8s_status = JobStatus.RUNNING
-                else:
-                    # Still scheduled/pending
-                    continue
-
-                # Update if status changed
-                if k8s_status and k8s_status != job.status:
-                    if dry_run:
-                        info(f"  Would update {job.job_id}: {job.status.value} → {k8s_status.value}")
-                    else:
-                        try:
-                            # Handle K8s job success with validation
-                            if k8s_status == JobStatus.SUCCEEDED and validate:
-                                # Transition to VALIDATING if currently RUNNING
-                                if job.status == JobStatus.RUNNING:
-                                    registry.transition_to_validating(job.job_id)
-                                    info(f"  ↻ Validating outputs for {job.job_id}...")
-
-                                    # Perform validation
-                                    validation_result = registry.validate_outputs(job.job_id)
-
-                                    # Finalize based on validation
-                                    registry.finalize_with_validation(job.job_id, validation_result)
-
-                                    # Report result
-                                    if validation_result.status == "complete":
-                                        success(f"  ✓ {job.job_id}: All outputs verified ({validation_result.verified_count} files)")
-                                    elif validation_result.status == "partial":
-                                        warning(f"  ⚠ {job.job_id}: Partial success ({validation_result.verified_count} verified, {validation_result.missing_count} missing)")
-                                    else:
-                                        error(f"  ✗ {job.job_id}: Validation failed ({validation_result.missing_count} outputs missing)")
-
-                                    updated_count += 1
-                                elif job.status == JobStatus.SCHEDULED:
-                                    # Move through intermediate states first
-                                    registry.update_status(job.job_id, JobStatus.RUNNING)
-                                    registry.transition_to_validating(job.job_id)
-                                    validation_result = registry.validate_outputs(job.job_id)
-                                    registry.finalize_with_validation(job.job_id, validation_result)
-                                    updated_count += 1
-
-                            # Handle K8s job failure
-                            elif k8s_status == JobStatus.FAILED:
-                                # If currently scheduled, move to running first
-                                if job.status == JobStatus.SCHEDULED:
-                                    registry.update_status(job.job_id, JobStatus.RUNNING)
-
-                                # Now finalize as failed
-                                registry.finalize_job(
-                                    job.job_id,
-                                    JobStatus.FAILED,
-                                    error_info={"message": "Job failed (sync from K8s)"}
-                                )
-                                error(f"  ✗ {job.job_id}: Job failed")
-                                updated_count += 1
-
-                            # Handle K8s job success without validation
-                            elif k8s_status == JobStatus.SUCCEEDED and not validate:
-                                # Traditional finalization without validation
-                                if job.status == JobStatus.SCHEDULED:
-                                    registry.update_status(job.job_id, JobStatus.RUNNING)
-
-                                registry.finalize_job(job.job_id, JobStatus.SUCCEEDED)
-                                success(f"  ✓ {job.job_id}: Marked as succeeded (no validation)")
-                                updated_count += 1
-
-                            else:
-                                # Intermediate state update (e.g., SCHEDULED → RUNNING)
-                                registry.update_status(job.job_id, k8s_status)
-                                info(f"  Updated {job.job_id}: {job.status.value} → {k8s_status.value}")
-                                updated_count += 1
-
-                        except Exception as e:
-                            warning(f"  Failed to update {job.job_id}: {e}")
-
-            except Exception as e:
-                # Kubernetes job not found or error
-                if "not found" in str(e).lower():
-                    warning(f"  {job.job_id}: K8s job not found (may have been deleted)")
-                else:
-                    warning(f"  {job.job_id}: Failed to get K8s status: {e}")
-
-        if updated_count > 0:
-            success(f"\n✓ Updated {updated_count} job{'s' if updated_count != 1 else ''}")
-        else:
-            info("\nNo updates needed")
+            progress.update(task, completed=True)
 
     finally:
         if temp_path:

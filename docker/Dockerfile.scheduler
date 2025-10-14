@@ -1,5 +1,5 @@
 # MVP Dask Scheduler Image with ModelOps dependencies
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # Build arguments for provenance and authentication
 ARG GIT_SHA=dev

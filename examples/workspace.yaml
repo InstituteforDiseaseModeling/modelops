@@ -19,7 +19,7 @@ metadata:
 spec:
   # Dask Scheduler Configuration
   scheduler:
-    image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
+    image: ghcr.io/vsbuffalo/modelops-dask-scheduler:latest
     resources:
       requests:
         memory: "2Gi"
@@ -38,7 +38,7 @@ spec:
   # Dask Workers Configuration
   workers:
     replicas: 4  # Initial replicas (ignored when autoscaling is enabled)
-    image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+    image: ghcr.io/vsbuffalo/modelops-dask-worker:latest
     resources:
       requests:
         memory: "4Gi"
