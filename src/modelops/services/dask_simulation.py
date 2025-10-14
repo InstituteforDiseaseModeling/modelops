@@ -274,6 +274,8 @@ class DaskSimulationService(SimulationService):
                 bundle_ref=replicate_set.base_task.bundle_ref,
                 key=TaskKeys.agg_key(param_id),
                 pure=False
+                # TODO: Add resource constraint when workers configured with resources
+                # resources={'aggregation': 1}  # Run on dedicated aggregation workers
             )
 
             return DaskFutureAdapter(agg_future)

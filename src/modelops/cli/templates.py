@@ -53,7 +53,7 @@ workspace:
     workers:
       image: ghcr.io/vsbuffalo/modelops-dask-worker:latest
       replicas: 2
-      processes: 2
+      processes: 4  # Increased to prevent aggregation deadlock
       threads: 1
 """
 
