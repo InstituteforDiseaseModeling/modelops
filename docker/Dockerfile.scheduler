@@ -44,14 +44,11 @@ RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/
 # 3. Install modelops-bundle WITH its dependencies
 RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-bundle.git
 
-# 4. Install calabaria from GitHub
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/calabaria.git
-
-# 5. Copy and install modelops with --no-deps to prevent downgrading contracts
+# 4. Copy and install modelops with --no-deps to prevent downgrading contracts
 COPY . /tmp/modelops
 RUN python -m pip install --no-deps --no-cache-dir /tmp/modelops
 
-# 6. Clean up
+# 5. Clean up
 RUN rm -rf /tmp/modelops
 
 # Final verification to catch any accidental downgrade
