@@ -54,6 +54,8 @@ spec:
     threads: 1    # Number of threads per worker process (--nthreads)
     # Environment variables for workers
     env:
+      - name: MODELOPS_FORCE_FRESH_VENV
+        value: "true"  # Force fresh venv creation to debug subprocess issues
       - name: DASK_WORKER__MEMORY__TARGET
         value: "0.90"  # Spill to disk at 90% memory
       - name: DASK_WORKER__MEMORY__SPILL

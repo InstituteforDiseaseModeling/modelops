@@ -215,6 +215,7 @@ def submit(
         info(f"  kubectl -n modelops-dask-dev get job job-{job_id}")
         info("\n📋 To see logs:")
         info(f"  kubectl -n modelops-dask-dev logs job/job-{job_id}")
+        info(f"  kubectl -n modelops-dask-dev logs deployment/dask-workers")
 
     except Exception as e:
         error(f"Job submission failed: {e}")
