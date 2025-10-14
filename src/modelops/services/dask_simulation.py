@@ -78,8 +78,39 @@ def _worker_run_aggregation(task: AggregationTask) -> AggregationReturn:
         )
     
     # Use the IsolatedWarmExecEnv's run_aggregation method
-    # TODO: why go around the modelops_runtime? 
+    # TODO: why go around the modelops_runtime?
     return worker.modelops_exec_env.run_aggregation(task)
+
+
+def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
+    """Aggregate results directly without gather to avoid deadlock.
+
+    This function fixes a critical deadlock that occurred when aggregation tasks
+    called client.gather() inside a worker thread. The deadlock happened because
+    aggregation tasks would occupy all worker threads while waiting for their
+    dependencies (replicate tasks) to complete, but those tasks couldn't run
+    because all threads were blocked. By passing futures as direct dependencies
+    (*args), Dask's scheduler materializes them before calling this function,
+    eliminating the deadlock while keeping aggregation on workers (not scheduler).
+
+    Args:
+        *sim_returns: Materialized SimReturn objects (Dask passes these)
+        target_ep: Target entrypoint string
+        bundle_ref: Bundle reference
+
+    Returns:
+        AggregationReturn with computed loss
+    """
+    from modelops_contracts.simulation import AggregationTask
+
+    # sim_returns are already materialized by Dask
+    agg_task = AggregationTask(
+        bundle_ref=bundle_ref,
+        target_entrypoint=target_ep,
+        sim_returns=list(sim_returns)
+    )
+
+    return _worker_run_aggregation(agg_task)
 
 
 class DaskFutureAdapter:
@@ -226,45 +257,25 @@ class DaskSimulationService(SimulationService):
             key=keys  # Explicit keys for tracking
         )
         
-        # TODO: we should support iteration over many targets? 
+        # TODO: we should support iteration over many targets?
         # or should the Targets abstraction encapsulate that?
         if target_entrypoint:
             # Submit aggregation that runs ON WORKER
             # This is the magic - no data comes back to client!
-            
-            # Create a function that gathers and aggregates
-            def gather_and_aggregate(futures, target_ep, bundle_ref):
-                """Gather futures and aggregate ON WORKER."""
-                from dask.distributed import get_client
-                from modelops_contracts.simulation import AggregationTask
-                
-                # Get client from within worker
-                client = get_client()
-                
-                # Gather futures (within worker, not to client!)
-                sim_returns = client.gather(futures)
-                
-                # Create aggregation task
-                agg_task = AggregationTask(
-                    bundle_ref=bundle_ref,
-                    target_entrypoint=target_ep,
-                    sim_returns=sim_returns
-                )
-                
-                # Run aggregation using warm process
-                return _worker_run_aggregation(agg_task)
-            
-            # Submit aggregation task
+
+            # NEW: Use direct dependency handling to avoid deadlock
+            # Pass futures as dependencies - Dask will materialize them
             param_id = replicate_set.base_task.params.param_id
+
             agg_future = self.client.submit(
-                gather_and_aggregate,
-                replicate_futures,
-                target_entrypoint,
-                replicate_set.base_task.bundle_ref,
+                _worker_run_aggregation_direct,
+                *replicate_futures,  # Unpack futures as args - Dask handles dependencies
+                target_ep=target_entrypoint,
+                bundle_ref=replicate_set.base_task.bundle_ref,
                 key=TaskKeys.agg_key(param_id),
                 pure=False
             )
-            
+
             return DaskFutureAdapter(agg_future)
         
         else:
