@@ -78,7 +78,8 @@ def test_job_submission_with_registry():
             job_state = registry.get_job(job_id)
             assert job_state is not None
             assert job_state.status == JobStatus.SCHEDULED
-            assert job_state.k8s_name == f"job-{job_id}"
+            # job_id already contains "job-" prefix, don't add another
+            assert job_state.k8s_name == job_id
             assert job_state.k8s_namespace == "modelops-dask-dev"
 
             # Simulate job running
@@ -120,7 +121,7 @@ def test_cli_status_command():
     # Register a test job
     registry.register_job(
         job_id="test-123",
-        k8s_name="job-test-123",
+        k8s_name="test-123",  # job_id already contains prefix if needed
         namespace="modelops-dask-dev",
         metadata={"test": True}
     )
@@ -161,7 +162,7 @@ def test_cli_list_command():
         job_id = f"test-{i:03d}"
         registry.register_job(
             job_id=job_id,
-            k8s_name=f"job-{job_id}",
+            k8s_name=job_id,  # job_id already contains prefix if needed
             namespace="modelops-dask-dev"
         )
 
