@@ -304,12 +304,12 @@ class WarmProcessManager:
         try:
             # Health check: ensure process is still alive before calling ready
             import time
-            for i in range(10):
+            for i in range(20):
                 if process.poll() is not None:
                     # Process died, capture any remaining stderr
                     stderr_text = "\n".join(stderr_lines) if stderr_lines else "No stderr captured"
                     raise RuntimeError(f"Process died with code {process.returncode} before ready.\nStderr: {stderr_text}")
-                time.sleep(0.5)
+                time.sleep(0.1)  # Shorter sleep for faster response
 
             # Create WarmProcess first so we can use safe_call
             warm_process = WarmProcess(
