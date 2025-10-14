@@ -195,7 +195,8 @@ class JobSubmissionClient:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 
         # Register job in tracking system (non-blocking)
-        k8s_name = f"job-{job.job_id}"
+        # job_id already has "job-" prefix, don't add another
+        k8s_name = job.job_id
         if self.registry:
             try:
                 self.registry.register_job(
@@ -491,9 +492,10 @@ class JobSubmissionClient:
 
         try:
             # Create job manifest
+            # job_id already has "job-" prefix, don't add another
             job_manifest = k8s_client.V1Job(
                 metadata=k8s_client.V1ObjectMeta(
-                    name=f"job-{job_id}",
+                    name=job_id,
                     namespace=self.namespace,
                     labels={
                         "app": "modelops",
