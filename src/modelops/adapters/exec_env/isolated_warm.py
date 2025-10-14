@@ -40,7 +40,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         max_warm_processes: int = 128,
         provenance_schema: Optional[ProvenanceSchema] = None,
         force_fresh_venv: bool = False,
-        disable_provenance_cache: bool = False
+        disable_provenance_cache: bool = False,
+        azure_backend: Optional[Dict[str, Any]] = None
     ):
         """Initialize the execution environment.
 
@@ -53,6 +54,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             provenance_schema: Schema for storage paths (default: bundle invalidation)
             force_fresh_venv: Force fresh venv creation for each execution (debugging)
             disable_provenance_cache: Disable provenance cache lookups (debugging)
+            azure_backend: Azure backend configuration for automatic uploads
         """
         self.bundle_repo = bundle_repo
         self.venvs_dir = venvs_dir
@@ -61,10 +63,11 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         self.disable_provenance_cache = disable_provenance_cache or \
             os.environ.get("MODELOPS_DISABLE_PROVENANCE", "").lower() in ("1", "true")
 
-        # Create provenance store
+        # Create provenance store with optional Azure backend
         self.provenance = ProvenanceStore(
             storage_dir=storage_dir,
-            schema=provenance_schema or DEFAULT_SCHEMA
+            schema=provenance_schema or DEFAULT_SCHEMA,
+            azure_backend=azure_backend
         )
 
         # Create process manager
@@ -190,6 +193,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         """Clean shutdown of all warm processes."""
         logger.info("Shutting down IsolatedWarmExecEnv")
         self._process_manager.shutdown_all()
+        # Shutdown provenance store (flushes any pending blob uploads)
+        self.provenance.shutdown()
 
     def _resolve_bundle(self, bundle_ref: str) -> tuple[str, Path]:
         """Resolve bundle reference to local path.

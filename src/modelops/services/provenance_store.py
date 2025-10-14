@@ -8,6 +8,7 @@ storage (hash of inputs) rather than content-addressed storage.
 import json
 import hashlib
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -47,19 +48,37 @@ class ProvenanceStore:
     def __init__(
         self,
         storage_dir: Path,
-        schema: ProvenanceSchema = DEFAULT_SCHEMA
+        schema: ProvenanceSchema = DEFAULT_SCHEMA,
+        azure_backend: Optional[Dict] = None
     ):
         """Initialize provenance store.
 
         Args:
-            storage_dir: Root directory for storage
+            storage_dir: Root directory for local storage (always used)
             schema: Schema for path generation
+            azure_backend: Optional Azure configuration for automatic uploads
         """
         self.storage_dir = Path(storage_dir)
         self.schema = schema
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Initialized ProvenanceStore with schema '{schema.name}' at {storage_dir}")
+        # Initialize Azure backend if configured for automatic uploads
+        self._azure_backend = None
+        if azure_backend:
+            try:
+                from .storage.azure import AzureBlobBackend
+                self._azure_backend = AzureBlobBackend(
+                    container=azure_backend.get("container", "results"),
+                    connection_string=azure_backend.get("connection_string")
+                )
+                logger.info("ProvenanceStore: Azure uploads enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize Azure backend: {e}")
+                logger.info("ProvenanceStore: Continuing with local-only storage")
+                self._azure_backend = None
+
+        backend_msg = " with Azure uploads" if self._azure_backend else " (local-only)"
+        logger.info(f"Initialized ProvenanceStore at {storage_dir}{backend_msg}")
 
     def _write_json_atomic(self, path: Path, data: Dict) -> None:
         """Write JSON atomically to avoid corruption.
@@ -84,8 +103,17 @@ class ProvenanceStore:
         path_context = self._sim_path_context(task)
         result_dir = self.storage_dir / self.schema.sim_path(**path_context)
 
+        # Check local first
         if not result_dir.exists():
-            return None
+            # Try downloading from Azure
+            if self._azure_backend:
+                remote_path = self.schema.sim_path(**path_context)
+                if self._download_from_azure(remote_path, result_dir):
+                    logger.debug(f"Downloaded sim result from Azure: {remote_path}")
+                else:
+                    return None
+            else:
+                return None
 
         try:
             # Load metadata
@@ -224,6 +252,10 @@ class ProvenanceStore:
                 }
 
             self._write_json_atomic(result_dir / "result.json", result_data)
+
+            # Also upload to Azure if configured
+            if self._azure_backend:
+                self._upload_to_azure(result_dir, self.schema.sim_path(**path_context))
 
             logger.debug(f"Stored simulation result at {result_dir}")
             return str(result_dir)
@@ -443,3 +475,78 @@ class ProvenanceStore:
             logger.info(f"Cleared schema '{target_schema}' data")
         else:
             logger.info(f"Schema '{target_schema}' has no data to clear")
+
+    def _upload_to_azure(self, local_dir: Path, remote_prefix: str):
+        """Upload local directory to remote backend.
+
+        Args:
+            local_dir: Local directory to upload
+            remote_prefix: Remote path prefix
+        """
+        if not self._azure_backend:
+            return
+
+        try:
+            # Upload all files in the directory
+            for file_path in local_dir.iterdir():
+                if file_path.is_file():
+                    relative_path = file_path.relative_to(local_dir)
+                    blob_path = f"{remote_prefix}/{relative_path}"
+
+                    with open(file_path, 'rb') as f:
+                        data = f.read()
+
+                    # Note: The existing AzureBlobBackend doesn't have async, uses sync save
+                    self._azure_backend.save(blob_path, data)
+
+            logger.debug(f"Queued upload of {local_dir} to {remote_prefix}")
+        except Exception as e:
+            logger.error(f"Failed to upload to remote: {e}")
+            # Don't fail the operation if remote upload fails
+
+    def _download_from_azure(self, remote_prefix: str, local_dir: Path) -> bool:
+        """Download from remote backend to local directory.
+
+        Args:
+            remote_prefix: Remote path prefix
+            local_dir: Local directory to download to
+
+        Returns:
+            True if successfully downloaded, False otherwise
+        """
+        if not self._azure_backend:
+            return False
+
+        try:
+            # List all blobs with the prefix
+            blobs = self._azure_backend.list_keys(remote_prefix)
+
+            if not blobs:
+                return False
+
+            # Download each blob
+            local_dir.mkdir(parents=True, exist_ok=True)
+
+            for blob_path in blobs:
+                # Extract relative path from blob
+                relative_path = blob_path[len(remote_prefix):].lstrip('/')
+                local_path = local_dir / relative_path
+
+                # Download blob
+                data = self._azure_backend.load(blob_path)
+                if data:
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(local_path, 'wb') as f:
+                        f.write(data)
+
+            logger.debug(f"Downloaded {len(blobs)} files from {remote_prefix}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to download from remote: {e}")
+            return False
+
+    def shutdown(self):
+        """Shutdown any background tasks."""
+        # Note: The existing AzureBlobBackend doesn't have a shutdown method
+        # It uses synchronous operations so no cleanup needed
+        pass

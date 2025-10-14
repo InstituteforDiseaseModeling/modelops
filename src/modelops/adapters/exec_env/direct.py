@@ -7,7 +7,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 
 from modelops_contracts import SimTask, SimReturn, TableArtifact
 from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
@@ -17,21 +17,30 @@ logger = logging.getLogger(__name__)
 
 class DirectExecEnv(ExecutionEnvironment):
     """Direct execution environment for testing.
-    
+
     This environment executes tasks directly in the current process.
     Useful for testing and debugging, but provides no isolation.
     """
-    
-    def __init__(self, bundle_repo: BundleRepository, storage_dir: Path = None):
+
+    def __init__(
+        self,
+        bundle_repo: BundleRepository,
+        storage_dir: Path = None,
+        azure_backend: Optional[Dict[str, Any]] = None
+    ):
         """Initialize the execution environment.
 
         Args:
             bundle_repo: Repository for fetching bundles
             storage_dir: Directory for provenance-based storage (optional)
+            azure_backend: Azure backend configuration (ignored in direct mode)
         """
         self.bundle_repo = bundle_repo
         self.storage_dir = storage_dir or Path("/tmp/modelops/provenance")
         self._wire_fn_cache: Dict[str, Callable] = {}  # Cache wire functions by bundle digest
+        # Direct execution doesn't use remote storage
+        if azure_backend:
+            logger.info("DirectExecEnv ignores azure_backend (local-only execution)")
     
     def _discover_wire_function(self, bundle_path: Path) -> Callable:
         """Discover wire function via Python entry points.
@@ -165,7 +174,7 @@ class DirectExecEnv(ExecutionEnvironment):
             tid_components = f"{param_id[:16]}-{task.seed}-error"
             tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
             
-            # Store error in table
+            # Store error inline
             error_data = json.dumps({
                 "error": str(e),
                 "type": type(e).__name__,
@@ -173,15 +182,13 @@ class DirectExecEnv(ExecutionEnvironment):
                 "seed": task.seed
             }).encode()
             checksum = hashlib.sha256(error_data).hexdigest()
-            error_ref = self.cas.put(error_data, checksum)
-            
+
             return SimReturn(
                 task_id=tid,
                 outputs={"error": TableArtifact(
-                    ref=f"cas://{error_ref}",
-                    checksum=checksum,
                     size=len(error_data),
-                    inline=None
+                    inline=error_data,  # Store inline instead of using CAS
+                    checksum=checksum
                 )}
             )
     

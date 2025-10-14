@@ -1,10 +1,11 @@
 """ModelOps Dask WorkerPlugin implementation.
 
-This is the composition root for ModelOps - all dependency injection 
-from outside ports (modelops-bundle, 
+This is the composition root for ModelOps - all dependency injection
+from outside ports (modelops-bundle,
 
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -148,15 +149,25 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         storage_dir: Path
     ) -> ExecutionEnvironment:
         """Instantiate the appropriate execution environment.
-        
+
         Args:
             config: Runtime configuration
             bundle_repo: Bundle repository for fetching code
             storage_dir: Directory for provenance-based storage
-            
+
         Returns:
             ExecutionEnvironment implementation based on config
         """
+        # Create Azure backend configuration if uploads are enabled
+        azure_backend = None
+        if config.upload_to_azure:
+            azure_config = {
+                'container': config.azure_container,
+                'connection_string': config.azure_connection_string
+            }
+            # Only set azure_backend if upload is enabled
+            azure_backend = azure_config
+
         if config.executor_type == 'isolated_warm':
             from modelops.adapters.exec_env.isolated_warm import IsolatedWarmExecEnv
             return IsolatedWarmExecEnv(
@@ -165,14 +176,16 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
                 storage_dir=storage_dir,
                 mem_limit_bytes=config.mem_limit_bytes,
                 max_warm_processes=config.max_warm_processes,
-                force_fresh_venv=config.force_fresh_venv
+                force_fresh_venv=config.force_fresh_venv,
+                azure_backend=azure_backend
             )
         elif config.executor_type == 'direct':
             # Simple in-process execution for testing
             from modelops.adapters.exec_env.direct import DirectExecEnv
             return DirectExecEnv(
                 bundle_repo=bundle_repo,
-                storage_dir=storage_dir
+                storage_dir=storage_dir,
+                azure_backend=azure_backend
             )
         else:
             raise ValueError(f"Unknown executor type: {config.executor_type}")

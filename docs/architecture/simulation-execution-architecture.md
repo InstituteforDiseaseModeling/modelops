@@ -24,7 +24,7 @@ Dask Cluster
     │
     └── IsolatedWarmExecEnv (infrastructure)
         ├── BundleRepository (fetches code)
-        ├── CAS (stores outputs)
+        ├── ProvenanceStore (stores outputs)
         └── WarmProcessManager
             └── Process Pool (OrderedDict)
                 ├── Key: {bundle_digest}-py{version}-{deps_hash}
@@ -101,7 +101,7 @@ Performance through intelligent reuse:
 2. **Wire function** discovered via Python entry points
 3. **Simulation runs** in isolated environment
 4. **Results returned** as artifacts
-5. **Large artifacts** stored in CAS, small ones inlined
+5. **Results stored** in ProvenanceStore (local or remote)
 
 ## Component Details
 
@@ -110,7 +110,7 @@ Performance through intelligent reuse:
 The composition root that creates and wires all components on worker initialization:
 
 - **Loads configuration** from environment variables
-- **Creates adapters** based on config (CAS, BundleRepository, ExecutionEnvironment)  
+- **Creates adapters** based on config (BundleRepository, ExecutionEnvironment, ProvenanceStore)  
 - **Attaches executor** to worker for task access
 - **Manages lifecycle** with setup/teardown hooks
 

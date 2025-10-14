@@ -21,12 +21,11 @@ class RuntimeConfig:
     bundles_dir: Optional[str] = None  # For file source
     bundle_insecure: bool = False  # Use HTTP instead of HTTPS (for local dev)
     
-    # CAS configuration  
-    cas_backend: str = "memory"  # "memory", "azure"
-    cas_bucket: Optional[str] = None
-    cas_prefix: str = "modelops/artifacts"
-    cas_region: Optional[str] = None
+    # Storage configuration
+    upload_to_azure: bool = False  # Enable automatic upload to Azure blob storage
     azure_storage_account: Optional[str] = None
+    azure_container: str = "results"
+    azure_connection_string: Optional[str] = None  # Optional explicit connection string
     
     # Execution environment
     executor_type: str = "isolated_warm"  # "isolated_warm", "direct"
@@ -61,12 +60,11 @@ class RuntimeConfig:
         config.bundles_dir = os.environ.get("MODELOPS_BUNDLES_DIR", config.bundles_dir)
         config.bundle_insecure = os.environ.get("MODELOPS_BUNDLE_INSECURE", "false").lower() == "true"
         
-        # CAS configuration
-        config.cas_backend = os.environ.get("MODELOPS_CAS_BACKEND", config.cas_backend)
-        config.cas_bucket = os.environ.get("MODELOPS_CAS_BUCKET", config.cas_bucket)
-        config.cas_prefix = os.environ.get("MODELOPS_CAS_PREFIX", config.cas_prefix)
-        config.cas_region = os.environ.get("MODELOPS_CAS_REGION", config.cas_region)
+        # Storage configuration
+        config.upload_to_azure = os.environ.get("MODELOPS_UPLOAD_TO_AZURE", "false").lower() == "true"
         config.azure_storage_account = os.environ.get("MODELOPS_AZURE_STORAGE_ACCOUNT", config.azure_storage_account)
+        config.azure_container = os.environ.get("MODELOPS_AZURE_CONTAINER", config.azure_container)
+        config.azure_connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING", config.azure_connection_string)
         
         # Execution environment
         config.executor_type = os.environ.get("MODELOPS_EXECUTOR_TYPE", config.executor_type)
@@ -103,15 +101,15 @@ class RuntimeConfig:
         if self.bundle_source not in ["oci", "file"]:
             raise ValueError(f"Invalid bundle_source: {self.bundle_source}")
         
-        # CAS backend validation
-        if self.cas_backend == "azure":
-            if not self.cas_bucket:
-                raise ValueError("cas_bucket must be specified for Azure backend")
-            if not self.azure_storage_account:
-                raise ValueError("azure_storage_account must be specified for Azure backend")
-        
-        if self.cas_backend not in ["memory", "azure"]:
-            raise ValueError(f"Invalid cas_backend: {self.cas_backend}")
+        # Storage validation
+        if self.upload_to_azure:
+            # Need either connection string OR storage account
+            if not self.azure_connection_string and not self.azure_storage_account:
+                raise ValueError(
+                    "When upload_to_azure is enabled, must provide either:\n"
+                    "  - AZURE_STORAGE_CONNECTION_STRING environment variable\n"
+                    "  - MODELOPS_AZURE_STORAGE_ACCOUNT environment variable"
+                )
         
         # Executor type validation
         if self.executor_type not in ["isolated_warm", "direct"]:

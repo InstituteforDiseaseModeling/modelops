@@ -17,8 +17,8 @@ MODELOPS    := $(abspath ../..)  # Current repo is modelops
 # --- Example config ---
 MODEL_CLASS := models.seir:StochasticSEIR
 STUDY_FILE  := study.json
-N_SAMPLES   := 20
-N_REPLICATES := 200
+N_SAMPLES   := 100
+N_REPLICATES := 500
 NAMESPACE   := modelops-dask-dev
 
 # --- Venv and tools ---
