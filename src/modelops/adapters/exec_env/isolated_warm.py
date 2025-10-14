@@ -7,6 +7,7 @@ TODO: we need to clean up / refactor run() and run_aggregation().
 import base64
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Tuple
 from dataclasses import replace
@@ -38,7 +39,8 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         mem_limit_bytes: Optional[int] = None,
         max_warm_processes: int = 128,
         provenance_schema: Optional[ProvenanceSchema] = None,
-        force_fresh_venv: bool = False
+        force_fresh_venv: bool = False,
+        disable_provenance_cache: bool = False
     ):
         """Initialize the execution environment.
 
@@ -50,11 +52,14 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             max_warm_processes: Maximum number of warm processes
             provenance_schema: Schema for storage paths (default: bundle invalidation)
             force_fresh_venv: Force fresh venv creation for each execution (debugging)
+            disable_provenance_cache: Disable provenance cache lookups (debugging)
         """
         self.bundle_repo = bundle_repo
         self.venvs_dir = venvs_dir
         self.storage_dir = storage_dir
         self.mem_limit_bytes = mem_limit_bytes
+        self.disable_provenance_cache = disable_provenance_cache or \
+            os.environ.get("MODELOPS_DISABLE_PROVENANCE", "").lower() in ("1", "true")
 
         # Create provenance store
         self.provenance = ProvenanceStore(
@@ -78,14 +83,14 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Returns:
             SimReturn with status and artifacts
         """
-        # Check provenance store first
-        # TODO: add flag to turn this cache lookup off? 
-        stored = self.provenance.get_sim(task)
-        if stored:
-            # Generate a task identifier for logging
-            task_ident = f"{task.params.param_id[:8]}-seed{task.seed}"
-            logger.debug(f"Cache hit for task {task_ident}")
-            return stored
+        # Check provenance store first (unless disabled)
+        if not self.disable_provenance_cache:
+            stored = self.provenance.get_sim(task)
+            if stored:
+                # Generate a task identifier for logging
+                task_ident = f"{task.params.param_id[:8]}-seed{task.seed}"
+                logger.debug(f"Cache hit for task {task_ident}")
+                return stored
 
         try:
             # 1. Resolve bundle
@@ -103,8 +108,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             # 3. Create return value
             result = self._create_sim_return(task, raw_artifacts)
 
-            # 4. Store in provenance
-            self.provenance.put_sim(task, result)
+            # 4. Store in provenance (if cache enabled)
+            if not self.disable_provenance_cache:
+                self.provenance.put_sim(task, result)
 
             return result
 
@@ -126,12 +132,12 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Returns:
             AggregationReturn with loss and diagnostics
         """
-        # Check provenance store first
-        stored = self.provenance.get_agg(task)
-        # TODO: add flag to turn this cache lookup off? 
-        if stored:
-            logger.debug(f"Cache hit for aggregation {task.aggregation_id()}")
-            return stored
+        # Check provenance store first (unless disabled)
+        if not self.disable_provenance_cache:
+            stored = self.provenance.get_agg(task)
+            if stored:
+                logger.debug(f"Cache hit for aggregation {task.aggregation_id()}")
+                return stored
 
         try:
             # 1. Resolve bundle
@@ -162,8 +168,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 n_replicates=result.get('n_replicates', len(task.sim_returns))
             )
 
-            # 5. Store in provenance
-            self.provenance.put_agg(task, agg_return)
+            # 5. Store in provenance (if enabled)
+            if not self.disable_provenance_cache:
+                self.provenance.put_agg(task, agg_return)
 
             return agg_return
 
@@ -211,6 +218,25 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Raises:
             RuntimeError: If subprocess returned an error
         """
+        # Log total artifact size for debugging (without full decode)
+        def estimate_b64_size(s: str) -> int:
+            """Estimate decoded size from base64 without decoding."""
+            n = len(s)
+            # Base64 encoding increases size by ~4/3, so decoded is ~3/4
+            pad = 2 if s.endswith("==") else 1 if s.endswith("=") else 0
+            return (3 * (n // 4)) - pad
+
+        total_size = sum(
+            estimate_b64_size(v) if isinstance(v, str) else len(v)
+            for v in raw_artifacts.values()
+        )
+
+        # Warn about large payloads
+        if total_size > 1024 * 1024:  # 1MB threshold
+            logger.warning(
+                f"Large sim output: {total_size:,} bytes for task "
+                f"{task.params.param_id[:8]}-seed{task.seed}"
+            )
         # Check for subprocess errors
         if len(raw_artifacts) == 1 and "error" in raw_artifacts:
             error_data = base64.b64decode(raw_artifacts["error"])

@@ -17,12 +17,14 @@ legitimately need to share the same venv cache.
 
 import base64
 import hashlib
+import io
 import logging
 import os
 import select
 import subprocess
 import sys
 import fcntl
+import time
 import uuid
 import threading
 from collections import OrderedDict
@@ -43,6 +45,7 @@ class WarmProcess:
     client: JSONRPCClient
     bundle_digest: str
     use_count: int = 0
+    stderr_file: Optional[io.FileIO] = None  # File handle for stderr logging
     _lock: threading.RLock = field(default_factory=threading.RLock)  # Reentrant lock for same thread
     
     def is_alive(self) -> bool:
@@ -61,6 +64,14 @@ class WarmProcess:
                     # Force kill if graceful shutdown fails
                     self.process.kill()
                     self.process.wait()
+
+            # Close stderr file if open
+            if self.stderr_file:
+                try:
+                    self.stderr_file.close()
+                    self.stderr_file = None
+                except Exception:
+                    pass  # Best effort cleanup
 
     def safe_call(self, method: str, params: dict, timeout: float = 10.0):
         """Make a thread-safe JSON-RPC call to the subprocess.
@@ -216,33 +227,37 @@ class WarmProcessManager:
     
     def _start_subprocess(self, venv_path: Path, bundle_path: Path, bundle_digest: str) -> WarmProcess:
         """Start a subprocess with existing venv.
-        
+
         Args:
             venv_path: Path to virtual environment
             bundle_path: Path to bundle
             bundle_digest: Bundle digest
-            
+
         Returns:
             New WarmProcess
         """
         logger.info(f"Starting subprocess with existing venv: {venv_path}")
-        
+
+        # Create logs directory
+        log_dir = venv_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"runner-{bundle_digest[:12]}-{os.getpid()}.stderr"
+        stderr_file = open(log_path, "ab", buffering=0)
+
         # Get path to standalone runner script
         runner_script = Path(__file__).parent / "subprocess_runner.py"
         if not runner_script.exists():
             raise RuntimeError(f"Subprocess runner script not found: {runner_script}")
-        
+
         # Use venv's Python for true isolation
         venv_python = venv_path / "bin" / "python"
-        
+
         # Clean environment
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure unbuffered output
-        
+
         # Start the subprocess with venv's Python and standalone runner
-        # CRITICAL: Use DEVNULL for stderr to prevent deadlock with large messages
-        # The subprocess logs to stderr, and if the stderr pipe buffer fills up
-        # while we're writing large data to stdin, we get a deadlock.
+        # Redirect stderr to file to prevent deadlock with large messages
         process = subprocess.Popen(
             [
                 str(venv_python),  # Use venv's Python for clean isolation
@@ -253,49 +268,28 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,  # TEMPORARY: Capture for debugging
+            stderr=stderr_file,  # Direct to file, not PIPE
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
             cwd=str(bundle_path),  # Run from bundle directory so relative paths work
             env=env
         )
-        
+
         # Check for immediate failure
         if process.poll() is not None:
-            # Process died immediately - capture all available output
-            stderr = process.stderr.read() if process.stderr else b""
-            stdout = process.stdout.read() if process.stdout else b""
-            
-            # Decode with error handling
-            stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "No stderr output"
-            stdout_text = stdout.decode('utf-8', errors='replace') if stdout else "No stdout output"
-            
-            logger.error(f"Subprocess died immediately with exit code {process.returncode}")
-            logger.error(f"Stderr: {stderr_text}")
-            logger.error(f"Stdout: {stdout_text}")
-            
-            # Include both in error message for debugging
-            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}\nStdout: {stdout_text}"
-            raise RuntimeError(error_msg)
-        
-        # Start continuous stderr draining to prevent blocking
-        import threading
-        stderr_lines = []
-        def drain_stderr(proc):
-            """Continuously drain stderr to prevent blocking."""
-            try:
-                for line in iter(proc.stderr.readline, b''):
-                    if line:
-                        stderr_text = line.decode('utf-8', errors='replace').rstrip()
-                        stderr_lines.append(stderr_text)
-                        logger.error(f"Subprocess stderr: {stderr_text}")
-            except Exception as e:
-                logger.error(f"Error draining stderr: {e}")
+            # Process died immediately
+            stderr_file.close()
+            # Read back error from file for debugging
+            with open(log_path, 'rb') as f:
+                stderr_text = f.read().decode('utf-8', errors='replace')
 
-        stderr_thread = threading.Thread(target=drain_stderr, args=(process,))
-        stderr_thread.daemon = True
-        stderr_thread.start()
+            logger.error(f"Subprocess died immediately with exit code {process.returncode}")
+            logger.error(f"Stderr from log file: {stderr_text}")
+
+            # Include in error message for debugging
+            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
+            raise RuntimeError(error_msg)
 
         # Create JSON-RPC client
         client = JSONRPCClient(process.stdin, process.stdout)
@@ -303,20 +297,22 @@ class WarmProcessManager:
         # Wait for ready signal
         try:
             # Health check: ensure process is still alive before calling ready
-            import time
             for i in range(20):
                 if process.poll() is not None:
-                    # Process died, capture any remaining stderr
-                    stderr_text = "\n".join(stderr_lines) if stderr_lines else "No stderr captured"
+                    # Process died, read stderr from file
+                    stderr_file.close()
+                    with open(log_path, 'rb') as f:
+                        stderr_text = f.read().decode('utf-8', errors='replace')
                     raise RuntimeError(f"Process died with code {process.returncode} before ready.\nStderr: {stderr_text}")
                 time.sleep(0.1)  # Shorter sleep for faster response
 
-            # Create WarmProcess first so we can use safe_call
+            # Create WarmProcess with stderr file handle
             warm_process = WarmProcess(
                 process=process,
                 client=client,
                 bundle_digest=bundle_digest,
-                use_count=1
+                use_count=1,
+                stderr_file=stderr_file
             )
 
             result = warm_process.safe_call("ready", {}, timeout=10.0)
@@ -325,22 +321,20 @@ class WarmProcessManager:
 
             return warm_process
         except Exception as e:
-            # Try to capture any stderr before killing process
-            stderr_output = ""
-            if process.stderr and process.poll() is None:
-                try:
-                    # Non-blocking read of available stderr
-                    import select
-                    if select.select([process.stderr], [], [], 0.1)[0]:
-                        stderr_bytes = process.stderr.read()
-                        if stderr_bytes:
-                            stderr_output = stderr_bytes.decode('utf-8', errors='replace')
-                            logger.error(f"Subprocess stderr during initialization:\n{stderr_output}")
-                except Exception:
-                    pass  # Best effort
-
+            # Clean up on failure
             process.terminate()
             process.wait()
+
+            # Close stderr file and read any error output
+            stderr_file.close()
+            stderr_output = ""
+            try:
+                with open(log_path, 'rb') as f:
+                    stderr_output = f.read().decode('utf-8', errors='replace')
+                    if stderr_output:
+                        logger.error(f"Subprocess stderr during initialization:\n{stderr_output}")
+            except Exception:
+                pass  # Best effort
 
             # Include stderr in the error message if available
             error_msg = f"Failed to initialize process: {e}"
@@ -392,21 +386,21 @@ class WarmProcessManager:
     
     def _create_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Create a new warm subprocess.
-        
+
         Args:
             bundle_digest: Bundle digest
             bundle_path: Path to the bundle
-            
+
         Returns:
             New WarmProcess
         """
         logger.info(f"Creating warm process for bundle {bundle_digest[:12]}")
-        
+
         # Generate venv key with Python version and deps hash
         venv_key = self._get_venv_key(bundle_digest, bundle_path)
         venv_path = self.venvs_dir / venv_key
         logger.info(f"Using venv path: {venv_path}")
-        
+
         # Create venv if it doesn't exist
         venv_python = venv_path / "bin" / "python"
         if not venv_path.exists():
@@ -421,23 +415,28 @@ class WarmProcessManager:
             except subprocess.CalledProcessError as e:
                 logger.error(f"Failed to create venv: {e.stderr}")
                 raise
-        
+
+        # Create logs directory
+        log_dir = venv_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / f"runner-{bundle_digest[:12]}-{os.getpid()}.stderr"
+        stderr_file = open(log_path, "ab", buffering=0)
+
         # Get path to standalone runner script
         runner_script = Path(__file__).parent / "subprocess_runner.py"
         if not runner_script.exists():
             raise RuntimeError(f"Subprocess runner script not found: {runner_script}")
-        
+
         # Clean environment
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"  # Ensure unbuffered output
-        
+
         # Create the subprocess using venv's Python
         # The subprocess will:
         # 1. Install bundle dependencies into venv
         # 2. Discover wire function via entry points
         # 3. Start JSON-RPC server and wait for tasks
-        # CRITICAL: Use DEVNULL for stderr to prevent deadlock with large messages
-        # TEMPORARY: Capture stderr for debugging subprocess failures
+        # Redirect stderr to file to prevent deadlock with large messages
         process = subprocess.Popen(
             [
                 str(venv_python),  # Use venv's Python for clean isolation
@@ -448,72 +447,64 @@ class WarmProcessManager:
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,  # TEMPORARY: Capture for debugging
+            stderr=stderr_file,  # Direct to file, not PIPE
             text=False,  # Binary mode for proper Content-Length framing
             bufsize=0,   # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
             cwd=str(bundle_path),  # Run from bundle directory so relative paths work
             env=env
         )
-        
+
         # Check for immediate failure
         if process.poll() is not None:
-            # Process died immediately - capture all available output
-            stderr = process.stderr.read() if process.stderr else b""
-            stdout = process.stdout.read() if process.stdout else b""
-            
-            # Decode with error handling
-            stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "No stderr output"
-            stdout_text = stdout.decode('utf-8', errors='replace') if stdout else "No stdout output"
-            
+            # Process died immediately
+            stderr_file.close()
+            # Read back error from file for debugging
+            with open(log_path, 'rb') as f:
+                stderr_text = f.read().decode('utf-8', errors='replace')
+
             logger.error(f"Subprocess died immediately with exit code {process.returncode}")
-            logger.error(f"Stderr: {stderr_text}")
-            logger.error(f"Stdout: {stdout_text}")
-            
-            # Include both in error message for debugging
-            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}\nStdout: {stdout_text}"
+            logger.error(f"Stderr from log file: {stderr_text}")
+
+            # Include in error message for debugging
+            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
             raise RuntimeError(error_msg)
-        
+
         # Create JSON-RPC client for communication
         client = JSONRPCClient(process.stdin, process.stdout)
-        
+
         # Wait for ready signal
         try:
             result = client.call("ready", {})  # Pass empty params dict
             if not result.get("ready"):
                 raise RuntimeError(f"Process not ready: {result}")
         except Exception as e:
-            # Try to capture any available stderr
-            stderr_output = None
-            stderr_text = ""
-            if process.stderr:
-                try:
-                    # Try to read any available stderr without blocking
-                    # Make stderr non-blocking
-                    flags = fcntl.fcntl(process.stderr.fileno(), fcntl.F_GETFL)
-                    fcntl.fcntl(process.stderr.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-                    # Read any available stderr
-                    stderr_output = process.stderr.read()
-                    if stderr_output:
-                        stderr_text = stderr_output.decode('utf-8', errors='replace')
-                        logger.error(f"Subprocess stderr: {stderr_text}")
-                except Exception as read_err:
-                    logger.debug(f"Could not read stderr: {read_err}")
-
+            # Clean up on failure
             process.terminate()
             process.wait()
+
+            # Close stderr file and read any error output
+            stderr_file.close()
+            stderr_text = ""
+            try:
+                with open(log_path, 'rb') as f:
+                    stderr_text = f.read().decode('utf-8', errors='replace')
+                    if stderr_text:
+                        logger.error(f"Subprocess stderr: {stderr_text}")
+            except Exception:
+                pass  # Best effort
 
             error_msg = f"Failed to initialize process: {e}"
             if stderr_text:
                 error_msg += f"\nStderr: {stderr_text}"
             raise RuntimeError(error_msg)
-        
+
         return WarmProcess(
             process=process,
             client=client,
             bundle_digest=bundle_digest,
-            use_count=1
+            use_count=1,
+            stderr_file=stderr_file
         )
     
     def _evict_lru(self):
@@ -536,17 +527,25 @@ class WarmProcessManager:
     def execute_task(self, bundle_digest: str, bundle_path: Path,
                      entrypoint: str, params: Dict, seed: int) -> Dict[str, str]:
         """Execute a task in a warm process.
-        
+
         Args:
             bundle_digest: Bundle digest
             bundle_path: Path to the bundle
             entrypoint: Entrypoint identifying model and scenario
             params: Task parameters
             seed: Random seed
-            
+
         Returns:
             Task results as dict of artifact name to base64-encoded strings
         """
+        # Log execution sizes for debugging
+        import sys
+        params_size = sys.getsizeof(str(params))  # Estimate size
+        logger.debug(
+            f"Executing task with params size: ~{params_size:,} bytes, "
+            f"bundle: {bundle_digest[:12]}, entrypoint: {entrypoint}, seed: {seed}"
+        )
+
         # Get or create warm process
         process = self.get_process(bundle_digest, bundle_path)
         

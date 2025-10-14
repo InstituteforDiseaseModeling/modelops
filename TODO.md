@@ -6,6 +6,7 @@
 - [ ] Either deprecate component-specific CLI (`registry up`, `storage up`) or update to use wiring info like `infra` CLI
 
 ## Observability
+- [ ] Consider [structlog](https://www.structlog.org/en/stable/why.html)
 - [ ] Add modern cloud-friendly observability library (replace `logging`)
 
 ## Performance
