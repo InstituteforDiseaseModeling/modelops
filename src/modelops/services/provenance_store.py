@@ -401,20 +401,22 @@ class ProvenanceStore:
 
     def _sim_path_context(self, task: SimTask) -> Dict[str, Any]:
         """Generate path context for simulation task."""
+        # Extract the actual digest from bundle_ref (e.g., "sha256:abc123..." -> "abc123...")
+        if ":" in task.bundle_ref:
+            bundle_digest = task.bundle_ref.split(":", 1)[1]
+        else:
+            bundle_digest = task.bundle_ref
+
         context = {
-            "bundle_digest": hashlib.blake2b(
-                task.bundle_ref.encode(), digest_size=32
-            ).hexdigest(),
+            "bundle_digest": bundle_digest,  # Already a digest, don't hash again!
             "param_id": task.params.param_id,
             "seed": task.seed
         }
 
-        # For token invalidation, would need model_digest from bundle
+        # For token invalidation, would need model_digest from bundle manifest
         # For now, use bundle_digest as fallback
         if "model_digest" in self.schema.sim_path_template:
-            context["model_digest"] = hashlib.blake2b(
-                task.bundle_ref.encode(), digest_size=32
-            ).hexdigest()
+            context["model_digest"] = bundle_digest
 
         return context
 
@@ -443,20 +445,22 @@ class ProvenanceStore:
 
     def _agg_path_context(self, task: AggregationTask) -> Dict[str, Any]:
         """Generate path context for aggregation task."""
+        # Extract the actual digest from bundle_ref (e.g., "sha256:abc123..." -> "abc123...")
+        if ":" in task.bundle_ref:
+            bundle_digest = task.bundle_ref.split(":", 1)[1]
+        else:
+            bundle_digest = task.bundle_ref
+
         context = {
-            "bundle_digest": hashlib.blake2b(
-                task.bundle_ref.encode(), digest_size=32
-            ).hexdigest(),
+            "bundle_digest": bundle_digest,  # Already a digest, don't hash again!
             "target": str(task.target_entrypoint).replace("/", "_"),
             "aggregation_id": task.aggregation_id()
         }
 
-        # For token invalidation, would need model_digest from bundle
+        # For token invalidation, would need model_digest from bundle manifest
         # For now, use bundle_digest as fallback
         if "model_digest" in self.schema.agg_path_template:
-            context["model_digest"] = hashlib.blake2b(
-                task.bundle_ref.encode(), digest_size=32
-            ).hexdigest()
+            context["model_digest"] = bundle_digest
 
         return context
 

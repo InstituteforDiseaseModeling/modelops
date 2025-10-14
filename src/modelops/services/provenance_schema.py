@@ -39,12 +39,12 @@ class ProvenanceSchema(BaseModel, frozen=True):
     )
 
     sim_path_template: str = Field(
-        default="sims/{hash(bundle_digest)[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
+        default="sims/{bundle_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
         description="Template for simulation result paths"
     )
 
     agg_path_template: str = Field(
-        default="aggs/{hash(bundle_digest)[:12]}/target_{target}/agg_{aggregation_id}",
+        default="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}",
         description="Template for aggregation result paths"
     )
 
@@ -166,14 +166,16 @@ class ProvenanceSchema(BaseModel, frozen=True):
 # Pre-defined schema instances for different strategies
 BUNDLE_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="bundle",
-    sim_path_template="sims/{hash(bundle_digest)[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
-    agg_path_template="aggs/{hash(bundle_digest)[:12]}/target_{target}/agg_{aggregation_id}"
+    version=2,  # Bump version to avoid collisions with existing double-hashed data
+    sim_path_template="sims/{bundle_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
+    agg_path_template="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}"
 )
 
 TOKEN_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="token",
-    sim_path_template="sims/{hash(model_digest)[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
-    agg_path_template="aggs/{hash(model_digest)[:12]}/target_{target}/agg_{aggregation_id}"
+    version=2,  # Bump version to avoid collisions with existing double-hashed data
+    sim_path_template="sims/{model_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
+    agg_path_template="aggs/{model_digest[:12]}/target_{target}/agg_{aggregation_id}"
 )
 
 DEFAULT_SCHEMA = TOKEN_INVALIDATION_SCHEMA
