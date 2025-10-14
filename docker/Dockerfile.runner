@@ -23,7 +23,7 @@ WORKDIR /app
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 RUN python -m pip install --upgrade pip wheel setuptools
 RUN python -m pip install \
-    "dask[distributed]==2024.8.0" \
+    "dask[distributed]==2024.10.0" \
     azure-storage-blob \
     kubernetes
 

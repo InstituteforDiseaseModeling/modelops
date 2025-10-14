@@ -11,7 +11,7 @@ dependencies = [
     "pyyaml>=6.0",
     "polars>=0.20.0",
     "pyarrow>=14.0.0",
-    "dask[distributed]==2024.8.0",
+    "dask[distributed]==2024.10.0",
     "pulumi>=3.100.0",
     "pulumi-kubernetes>=4.5.0",
     "kubernetes>=28.0.0",
