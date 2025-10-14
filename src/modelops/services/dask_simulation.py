@@ -38,26 +38,32 @@ logger = logging.getLogger(__name__)
 
 class TaskKeys:
     """Dask task key generation following hyphenated convention.
-    
+
     Dask groups tasks by the substring before the first hyphen in the key.
     For example: 'sim-abc123-4' groups as 'sim', 'agg-def456' groups as 'agg'.
-    Using underscores causes each task to be its own group in the dashboard, 
+    Using underscores causes each task to be its own group in the dashboard,
     messing up the colors in task streams.
+
+    IMPORTANT: Do NOT truncate param_id to avoid key collisions!
+    With only 8 characters, collisions are likely with many parameter sets.
     """
-    
+
     @staticmethod
     def sim_key(param_id: str, replicate_idx: int) -> str:
-        """Generate simulation task key: sim-{param_id[:8]}-{idx}"""
-        return f"sim-{param_id[:8]}-{replicate_idx}"
-    
+        """Generate simulation task key: sim-{param_id}-{idx}"""
+        # Use full param_id to avoid collisions
+        return f"sim-{param_id}-{replicate_idx}"
+
     @staticmethod
     def agg_key(param_id: str) -> str:
-        """Generate aggregation task key: agg-{param_id[:8]}"""
-        return f"agg-{param_id[:8]}"
-    
+        """Generate aggregation task key: agg-{param_id}"""
+        # Use full param_id to avoid collisions
+        return f"agg-{param_id}"
+
     @staticmethod
     def single_sim_key(seed: int, bundle_ref: str) -> str:
         """Generate single simulation key: sim-{seed}-{bundle[:12]}"""
+        # Bundle ref truncation is less risky as it's for display
         return f"sim-{seed}-{bundle_ref[:12]}"
 
 
@@ -188,6 +194,8 @@ class DaskSimulationService(SimulationService):
         plugin = ModelOpsWorkerPlugin(self.config)
         
         # Register it with the cluster
+        # Use the current API - register_plugin() handles all plugin types
+        # register_worker_plugin() is deprecated since 2023.9.2
         self.client.register_plugin(plugin, name="modelops-runtime-v1")
         
         self._plugin_installed = True
