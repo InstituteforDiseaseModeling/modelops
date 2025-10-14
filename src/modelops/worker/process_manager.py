@@ -279,11 +279,38 @@ class WarmProcessManager:
             error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}\nStdout: {stdout_text}"
             raise RuntimeError(error_msg)
         
+        # Start continuous stderr draining to prevent blocking
+        import threading
+        stderr_lines = []
+        def drain_stderr(proc):
+            """Continuously drain stderr to prevent blocking."""
+            try:
+                for line in iter(proc.stderr.readline, b''):
+                    if line:
+                        stderr_text = line.decode('utf-8', errors='replace').rstrip()
+                        stderr_lines.append(stderr_text)
+                        logger.error(f"Subprocess stderr: {stderr_text}")
+            except Exception as e:
+                logger.error(f"Error draining stderr: {e}")
+
+        stderr_thread = threading.Thread(target=drain_stderr, args=(process,))
+        stderr_thread.daemon = True
+        stderr_thread.start()
+
         # Create JSON-RPC client
         client = JSONRPCClient(process.stdin, process.stdout)
-        
+
         # Wait for ready signal
         try:
+            # Health check: ensure process is still alive before calling ready
+            import time
+            for i in range(10):
+                if process.poll() is not None:
+                    # Process died, capture any remaining stderr
+                    stderr_text = "\n".join(stderr_lines) if stderr_lines else "No stderr captured"
+                    raise RuntimeError(f"Process died with code {process.returncode} before ready.\nStderr: {stderr_text}")
+                time.sleep(0.5)
+
             # Create WarmProcess first so we can use safe_call
             warm_process = WarmProcess(
                 process=process,
