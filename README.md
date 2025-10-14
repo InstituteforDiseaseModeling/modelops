@@ -64,6 +64,12 @@ pip install -e .
 ```
 
 ### 2. Initialize Configuration
+
+Currently only Azure is supported by ModelOps, but core cloud infra component
+code is written in a way that makes extending to other cloud providers easy.
+To setup ModelOps, we need to first login to Azure, initialize ModelOps
+
+
 ```bash
 # Login to Azure
 az login
@@ -159,20 +165,6 @@ make deploy           # Deploy to cluster
 # Development utilities
 mops dev smoke-test   # Verify bundle execution
 mops dev images print --all  # Show image configuration
-```
-
-### Testing Without Credentials
-
-To test infrastructure commands without Azure credentials (e.g., in CI):
-
-```bash
-# Use --plan flag to preview without creating resources
-mops infra up infrastructure.yaml --plan
-
-# Test CLI commands that don't require cloud access
-mops config init
-mops version
-mops dev images print --all
 ```
 
 See [Developer Guide](docs/dev/README.md) for detailed development instructions.

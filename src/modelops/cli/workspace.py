@@ -154,6 +154,41 @@ def down(
 
 
 @app.command()
+def restart(
+    config: Optional[Path] = typer.Option(
+        None, "--config", "-c",
+        help="Workspace configuration file (YAML)"
+    ),
+    infra_stack: str = typer.Option(
+        StackNaming.get_project_name("infra"),
+        "--infra-stack",
+        help=f"Infrastructure stack name (default: {StackNaming.get_project_name('infra')}, auto-appends env for default)"
+    ),
+    env: Optional[str] = env_option(),
+    yes: bool = typer.Option(
+        False, "--yes", "-y",
+        help="Skip confirmation prompts"
+    )
+):
+    """Restart the Dask workspace (down then up).
+
+    This is equivalent to running:
+      mops workspace down --yes
+      mops workspace up [--config CONFIG] [--infra-stack STACK]
+    """
+    from modelops.cli.display import info, success
+
+    info(f"Restarting workspace in environment: {resolve_env(env)}")
+
+    # First, bring down the workspace
+    down(env=env, yes=yes)
+
+    # Then bring it back up with all the same parameters
+    up(config=config, env=env, infra_stack=infra_stack)
+
+    success("✓ Workspace restarted successfully")
+
+@app.command()
 def status(
     env: Optional[str] = env_option(),
     smoke_test: bool = typer.Option(

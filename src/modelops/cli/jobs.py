@@ -211,10 +211,11 @@ def submit(
         info(f"  Status: Running")
 
         # Show how to check status
+        # job_id already contains "job-" prefix
         info("\n To check job status:")
-        info(f"  kubectl -n modelops-dask-dev get job job-{job_id}")
+        info(f"  kubectl -n modelops-dask-dev get job {job_id}")
         info("\n📋 To see logs:")
-        info(f"  kubectl -n modelops-dask-dev logs job/job-{job_id}")
+        info(f"  kubectl -n modelops-dask-dev logs job/{job_id}")
         info(f"  kubectl -n modelops-dask-dev logs deployment/dask-workers")
 
     except Exception as e:

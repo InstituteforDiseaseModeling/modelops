@@ -289,14 +289,32 @@ class DaskSimulationService(SimulationService):
             # Pass futures as dependencies - Dask will materialize them
             param_id = replicate_set.base_task.params.param_id
 
+            # Check if any worker has aggregation resources
+            # This prevents deadlock in tests/local clusters without resources
+            submit_kwargs = {
+                "pure": False
+            }
+            try:
+                # Check scheduler info for worker resources
+                info = self.client.scheduler_info()
+                has_aggregation_resource = any(
+                    'aggregation' in worker.get('resources', {})
+                    for worker in info.get('workers', {}).values()
+                )
+                if has_aggregation_resource:
+                    submit_kwargs['resources'] = {'aggregation': 1}
+                    logger.debug("Using aggregation resource constraint")
+            except Exception:
+                # If we can't check, don't apply constraint
+                logger.debug("Could not check for aggregation resources")
+
             agg_future = self.client.submit(
                 _worker_run_aggregation_direct,
                 *replicate_futures,  # Unpack futures as args - Dask handles dependencies
                 target_ep=target_entrypoint,
                 bundle_ref=replicate_set.base_task.bundle_ref,
                 key=TaskKeys.agg_key(param_id),
-                pure=False,
-                resources={'aggregation': 1}  # Run on dedicated aggregation workers
+                **submit_kwargs
             )
 
             return DaskFutureAdapter(agg_future)
