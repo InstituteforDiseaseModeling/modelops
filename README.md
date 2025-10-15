@@ -3,11 +3,15 @@
 [![Tests](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml)
 [![Docker Build](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml)
 
-Kubernetes-native infrastructure orchestration for distributed simulation and optimization workloads.
+Kubernetes-native infrastructure orchestration for distributed simulation and
+calibration workloads.
 
 ## What is ModelOps?
 
-ModelOps provides the infrastructure layer for running distributed simulations and adaptive optimization algorithms (Optuna, MCMC) on Kubernetes. It implements the contracts defined in `modelops-contracts` and provides runtime infrastructure for science frameworks like `calabaria`.
+ModelOps provides the infrastructure layer for running distributed simulations
+and adaptive optimization algorithms (Optuna, MCMC) on Kubernetes. It
+implements the contracts defined in `modelops-contracts` and provides runtime
+infrastructure for science frameworks like `modelops-calabaria`.
 
 **Key Features:**
 - **Four-stack architecture** with Pulumi for clean infrastructure management
@@ -92,17 +96,42 @@ mops infra status
 
 ### 4. Run a Simulation
 ```bash
-# Install Calabaria for experiment design (optional)
-pip install modelops-calabaria
+# First, activate your virtual environment
+source .venv/bin/activate  # or wherever your venv is
+
+# Set up your project for bundle packaging
+cd your-project-directory
+
+# Initialize bundle project (creates pyproject.toml)
+mops-bundle init .
+
+# Check bundle status
+mops-bundle status
+
+# Generate observed data (needed for calibration targets)
+python3 generate_observed_data.py
+
+# Register your model
+mops-bundle register-model models/seir.py --no-confirm
+
+# Register calibration targets with data
+mops-bundle register-target targets/prevalence.py --data data/observed_prevalence.csv --no-confirm
+
+# Install Calabaria for experiment design
+pip install git+https://github.com/vsbuffalo/modelops-calabaria.git
 
 # Generate study with Sobol sampling
-cb sampling sobol models.example:SimpleModel \
-  --n-samples 20 \
-  --n-replicates 3 \
+cb sampling sobol "models.seir:StochasticSEIR" \
+  --scenario baseline \
+  --n-samples 100 \
+  --n-replicates 500 \
+  --seed 42 \
+  --scramble \
+  --targets "targets.prevalence:prevalence_target" \
   --output study.json
 
-# Submit to cluster
-mops jobs submit study.json
+# Submit to cluster with auto-push bundle
+mops jobs submit study.json --auto
 
 # Monitor jobs
 mops jobs sync    # Sync status from Kubernetes
@@ -186,7 +215,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ## Related Projects
 
 - **[modelops-contracts](https://github.com/institutefordiseasemodeling/modelops-contracts)** - Stable API contracts
-- **[calabaria](https://github.com/institutefordiseasemodeling/calabaria)** - Science/algorithm framework
+- **[modelops-calabaria](https://github.com/institutefordiseasemodeling/modelops-calabaria)** - Science/algorithm framework
 - **[modelops-bundle](https://github.com/institutefordiseasemodeling/modelops-bundle)** - OCI bundle packaging
 
 ## License
