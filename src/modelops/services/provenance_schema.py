@@ -166,14 +166,14 @@ class ProvenanceSchema(BaseModel, frozen=True):
 # Pre-defined schema instances for different strategies
 BUNDLE_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="bundle",
-    version=2,  # Bump version to avoid collisions with existing double-hashed data
+    version=1,
     sim_path_template="sims/{bundle_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
     agg_path_template="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}"
 )
 
 TOKEN_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="token",
-    version=2,  # Bump version to avoid collisions with existing double-hashed data
+    version=1,
     sim_path_template="sims/{model_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
     agg_path_template="aggs/{model_digest[:12]}/target_{target}/agg_{aggregation_id}"
 )
