@@ -67,24 +67,23 @@ pip install -e .
 
 Currently only Azure is supported by ModelOps, but core cloud infra component
 code is written in a way that makes extending to other cloud providers easy.
-To setup ModelOps, we need to first login to Azure, initialize ModelOps
-
 
 ```bash
 # Login to Azure
 az login
 
-# Initialize ModelOps config
-mops config init
+# Initialize ModelOps (creates unified configuration)
+mops init
+# Creates ~/.modelops/modelops.yaml with all settings
+# Uses smart defaults - no prompts required!
 
-# Generate infrastructure configuration (interactive)
-mops infra init
-# Creates ~/.modelops/infrastructure.yaml with your Azure subscription
+# Optional: Interactive mode for customization
+mops init --interactive
 ```
 
 ### 3. Deploy Infrastructure
 ```bash
-# Deploy (uses ~/.modelops/infrastructure.yaml by default)
+# Deploy (uses ~/.modelops/modelops.yaml by default)
 mops infra up
 
 # Check status

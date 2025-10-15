@@ -160,7 +160,8 @@ def init(
     else:
         # Use default subscription in non-interactive mode
         subscription = next((s for s in subscriptions if s.get('isDefault')), subscriptions[0])
-        info(f"  • {subscription['name']} ({subscription['id'][:8]}...)")
+        default_note = " (Azure CLI default)" if subscription.get('isDefault') else ""
+        info(f"  • {subscription['name']} ({subscription['id'][:8]}...){default_note}")
 
     # Get username
     username = getpass.getuser()

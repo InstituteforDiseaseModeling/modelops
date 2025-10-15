@@ -189,14 +189,24 @@ def up(
             # Convert node pools
             node_pools = []
             for pool in unified.cluster.aks.node_pools:
-                node_pools.append(NodePool(
-                    name=pool.name,
-                    mode=pool.mode,
-                    vm_size=pool.vm_size,
-                    count=pool.count,
-                    min=pool.min,
-                    max=pool.max
-                ))
+                # NodePool expects EITHER count OR min/max, not both
+                pool_config = {
+                    "name": pool.name,
+                    "mode": pool.mode,
+                    "vm_size": pool.vm_size
+                }
+
+                # Add sizing configuration - either fixed or autoscaling
+                if pool.count is not None:
+                    pool_config["count"] = pool.count
+                elif pool.min is not None and pool.max is not None:
+                    pool_config["min"] = pool.min
+                    pool_config["max"] = pool.max
+                else:
+                    # Default to count=1 for safety
+                    pool_config["count"] = 1
+
+                node_pools.append(NodePool(**pool_config))
 
             # Build legacy cluster spec
             cluster_spec = AzureProviderConfig(
