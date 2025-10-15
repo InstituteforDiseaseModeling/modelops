@@ -10,7 +10,7 @@ from .display import console, success, warning, error, info, section, info_dict
 app = typer.Typer(help="Manage ModelOps configuration")
 
 
-@app.command()
+@app.command(hidden=True)  # Hidden: use 'mops init' instead
 def init(
     interactive: bool = typer.Option(
         False,

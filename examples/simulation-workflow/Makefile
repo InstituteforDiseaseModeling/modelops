@@ -37,6 +37,7 @@ help:
 	@echo "Setup:"
 	@echo "  make venv            - Create venv"
 	@echo "  make setup           - Install cb + modelops-bundle (+ mops) from local repos"
+	@echo "  make mops-init       - Initialize ModelOps configuration (one-time setup)"
 	@echo ""
 	@echo "Bundle:"
 	@echo "  make bundle-init     - Initialize bundle metadata in this dir"
@@ -85,6 +86,21 @@ setup: $(VENV)/.installed
 	@echo "  - $$( $(BIN)/cb --help >/dev/null 2>&1 && echo 'cb installed' || echo 'cb missing' )"
 	@echo "  - $$( $(BIN)/modelops-bundle --help >/dev/null 2>&1 && echo 'modelops-bundle installed' || echo 'modelops-bundle missing' )"
 	@echo "  - $$( $(BIN)/mops --help >/dev/null 2>&1 && echo 'mops installed' || echo 'mops missing')"
+
+# Initialize ModelOps configuration (one-time setup)
+.PHONY: mops-init
+mops-init: $(VENV)/.installed
+	@if [ ! -f ~/.modelops/modelops.yaml ] && [ ! -f ~/.modelops/config.yaml ]; then \
+		echo "Initializing ModelOps configuration..."; \
+		$(BIN)/mops init; \
+	else \
+		echo "ModelOps already configured"; \
+		if [ -f ~/.modelops/modelops.yaml ]; then \
+			echo "  Unified config: ~/.modelops/modelops.yaml"; \
+		else \
+			echo "  Legacy config: ~/.modelops/config.yaml"; \
+		fi; \
+	fi
 
 # --- Bundle commands ---
 

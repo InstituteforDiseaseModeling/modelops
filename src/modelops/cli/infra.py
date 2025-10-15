@@ -21,7 +21,7 @@ from .templates import get_infra_template
 app = typer.Typer(help="Unified infrastructure management")
 
 
-@app.command()
+@app.command(hidden=True)  # Hidden: use 'mops init' instead
 def init(
     output: Optional[str] = typer.Option(None, "--output", "-o", help="Custom output path"),
     interactive: bool = typer.Option(True, "--interactive/--non-interactive", help="Interactive mode"),
@@ -157,20 +157,90 @@ def up(
 
     env = resolve_env(env)
 
-    # Smart default: look for infrastructure.yaml using constant
+    # Smart default: look for unified config first, then infrastructure.yaml
     if config is None:
-        if INFRASTRUCTURE_FILE.exists():
+        from ..core.paths import UNIFIED_CONFIG_FILE
+        if UNIFIED_CONFIG_FILE.exists():
+            config = UNIFIED_CONFIG_FILE
+            info(f"Using unified config: {config}")
+        elif INFRASTRUCTURE_FILE.exists():
             config = INFRASTRUCTURE_FILE
-            info(f"Using default config: {config}")
+            info(f"Using legacy config: {config}")
         else:
-            error("No configuration specified and no default found")
-            error("Run 'mops infra init' to generate configuration")
+            error("No configuration found")
+            error("Run 'mops init' to create configuration")
             error("Or specify config: mops infra up <config.yaml>")
             raise typer.Exit(1)
 
     # Validate subscription before expensive operations
     try:
-        spec = UnifiedInfraSpec.from_yaml(str(config))
+        # Check if this is unified config or legacy infra config
+        from ..core.paths import UNIFIED_CONFIG_FILE
+        if config == UNIFIED_CONFIG_FILE or str(config).endswith('modelops.yaml'):
+            # Load unified config and convert to infra spec
+            from ..core.unified_config import UnifiedModelOpsConfig
+            unified = UnifiedModelOpsConfig.from_yaml(config)
+
+            # Convert to legacy infra spec format
+            from ..components.specs.azure import NodePool, AKSConfig, AzureProviderConfig
+            from ..components.specs.storage import StorageConfig
+            from ..components.specs.workspace import WorkspaceConfig
+
+            # Convert node pools
+            node_pools = []
+            for pool in unified.cluster.aks.node_pools:
+                node_pools.append(NodePool(
+                    name=pool.name,
+                    mode=pool.mode,
+                    vm_size=pool.vm_size,
+                    count=pool.count,
+                    min=pool.min,
+                    max=pool.max
+                ))
+
+            # Build legacy cluster spec
+            cluster_spec = AzureProviderConfig(
+                provider=unified.cluster.provider,
+                subscription_id=unified.cluster.subscription_id,
+                resource_group=unified.cluster.resource_group,
+                location=unified.cluster.location,
+                aks=AKSConfig(
+                    name=unified.cluster.aks.name,
+                    kubernetes_version=unified.cluster.aks.kubernetes_version,
+                    node_pools=node_pools
+                )
+            )
+
+            # Build workspace spec
+            workspace_spec = WorkspaceConfig(
+                apiVersion="modelops/v1",
+                kind="Workspace",
+                metadata={"name": "main-workspace"},
+                spec={
+                    "scheduler": {
+                        "image": unified.workspace.scheduler_image,
+                        "replicas": unified.workspace.scheduler_replicas
+                    },
+                    "workers": {
+                        "image": unified.workspace.worker_image,
+                        "replicas": unified.workspace.worker_replicas,
+                        "processes": unified.workspace.worker_processes,
+                        "threads": unified.workspace.worker_threads
+                    }
+                }
+            )
+
+            # Create unified infra spec
+            spec = UnifiedInfraSpec(
+                schemaVersion=1,
+                cluster=cluster_spec,
+                storage=StorageConfig(account_tier=unified.storage.account_tier),
+                registry={"sku": unified.registry.sku},  # Registry is just a dict
+                workspace=workspace_spec
+            )
+        else:
+            # Load legacy infrastructure.yaml format
+            spec = UnifiedInfraSpec.from_yaml(str(config))
 
         # Check for placeholder subscription IDs
         if spec.cluster and spec.cluster.subscription_id:

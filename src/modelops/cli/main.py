@@ -19,9 +19,40 @@ app = typer.Typer(
 )
 
 # Import sub-commands
-from . import infra, cluster, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs, dev
+from . import init as init_cli, infra, cluster, workspace, adaptive, registry, storage, config as config_cli, cleanup, status, results, jobs, dev
 
 # Register sub-commands
+
+# Top-level initialization
+@app.command()
+def init(
+    interactive: bool = typer.Option(
+        False, "--interactive", "-i",
+        help="Interactive mode with prompts for all settings"
+    ),
+    output: typer.FileTextWrite = typer.Option(
+        None, "--output", "-o",
+        help="Custom output path (default: ~/.modelops/modelops.yaml)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Overwrite existing configuration without prompting"
+    )
+):
+    """Initialize ModelOps with unified configuration.
+
+    Creates a complete configuration file that combines all settings needed
+    for ModelOps operation. By default uses smart defaults with minimal prompting.
+
+    Examples:
+        mops init                    # Quick setup with defaults
+        mops init --interactive      # Customize all settings
+        mops init --force           # Overwrite existing config
+    """
+    from pathlib import Path
+    output_path = Path(output.name) if output else None
+    init_cli.init(interactive=interactive, output=output_path, force=force)
+
 # Primary commands for researchers
 app.add_typer(
     infra.app,

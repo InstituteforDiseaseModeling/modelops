@@ -6,11 +6,10 @@ across all components. All path definitions should come from here.
 
 from pathlib import Path
 
-# Configuration file
-CONFIG_FILE = Path.home() / ".modelops" / "config.yaml"
-
-# Infrastructure configuration file (unified spec)
-INFRASTRUCTURE_FILE = Path.home() / ".modelops" / "infrastructure.yaml"
+# Configuration files
+CONFIG_FILE = Path.home() / ".modelops" / "config.yaml"  # Legacy
+INFRASTRUCTURE_FILE = Path.home() / ".modelops" / "infrastructure.yaml"  # Legacy
+UNIFIED_CONFIG_FILE = Path.home() / ".modelops" / "modelops.yaml"  # New unified config
 
 # Base directories
 MODELOPS_HOME = Path.home() / ".modelops"

@@ -55,18 +55,39 @@ class ModelOpsConfig(ConfigModel):
     @classmethod
     def get_instance(cls) -> "ModelOpsConfig":
         """Get cached instance or load from file.
-        
+
         This ensures we only read the config file once per session.
-        
+        First tries to load from unified config, then falls back to legacy.
+
         Returns:
             Cached ModelOpsConfig instance
-            
+
         Raises:
-            ConfigNotFoundError: If configuration file doesn't exist
+            ConfigNotFoundError: If no configuration file exists
         """
         # Use hasattr to check if class variable exists
         if not hasattr(cls, '_cached_instance') or cls._cached_instance is None:
-            cls._cached_instance = cls.load()
+            from .paths import UNIFIED_CONFIG_FILE
+            from .unified_config import UnifiedModelOpsConfig
+
+            # Try unified config first
+            if UNIFIED_CONFIG_FILE.exists():
+                unified = UnifiedModelOpsConfig.load()
+                # Convert to legacy format for compatibility
+                cls._cached_instance = cls(
+                    pulumi=PulumiConfig(
+                        backend_url=unified.pulumi.backend_url,
+                        organization=unified.pulumi.organization
+                    ),
+                    defaults=DefaultsConfig(
+                        environment=unified.settings.environment,
+                        provider=unified.settings.provider,
+                        username=unified.settings.username
+                    )
+                )
+            else:
+                # Fall back to legacy config
+                cls._cached_instance = cls.load()
         return cls._cached_instance
     
     @classmethod
@@ -130,19 +151,34 @@ class ModelOpsConfig(ConfigModel):
 
 def get_username() -> str:
     """Get username from config or system.
-    
+
     Uses local system username (not Azure AD) for resource naming isolation.
     Azure AD username would require subprocess (az CLI) or heavy SDK dependencies.
     Users can override via config if local username doesn't match their identity.
-    
+
+    Tries unified config first, then legacy config, then system user.
+
     Returns:
         Username from config if set, otherwise the current system user.
-        
+
     Raises:
-        ConfigNotFoundError: If configuration file doesn't exist
+        ConfigNotFoundError: If no configuration file exists
     """
     import getpass
-    config = ModelOpsConfig.get_instance()
-    if config.defaults.username:
-        return config.defaults.username
+    from .paths import UNIFIED_CONFIG_FILE
+
+    # Try unified config first
+    if UNIFIED_CONFIG_FILE.exists():
+        from .unified_config import UnifiedModelOpsConfig
+        unified = UnifiedModelOpsConfig.load()
+        return unified.settings.username
+
+    # Fall back to legacy config
+    try:
+        config = ModelOpsConfig.get_instance()
+        if config.defaults.username:
+            return config.defaults.username
+    except ConfigNotFoundError:
+        pass
+
     return getpass.getuser()
