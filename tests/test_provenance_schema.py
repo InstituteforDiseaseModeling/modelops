@@ -126,9 +126,8 @@ class TestInvalidationSchemas:
 
         # Should have bundle/v1 prefix
         assert "bundle/v1/sims" in path
-        # Should have hashed bundle digest
-        bundle_hash_prefix = hashlib.blake2b(bundle_digest.encode(), digest_size=32).hexdigest()[:12]
-        assert bundle_hash_prefix in path
+        # Should use bundle digest directly (not double-hashed)
+        assert bundle_digest[:12] in path
         # Should have sharded param_id (shard function hashes first)
         param_hash = hashlib.blake2b(param_id.encode(), digest_size=32).hexdigest()
         assert param_hash[0:2] in path.split('/')
@@ -150,9 +149,8 @@ class TestInvalidationSchemas:
 
         # Should have token/v1 prefix
         assert "token/v1/sims" in path
-        # Should have hashed model digest (not bundle)
-        model_hash_prefix = hashlib.blake2b(model_digest.encode(), digest_size=32).hexdigest()[:12]
-        assert model_hash_prefix in path
+        # Should use model digest directly (not double-hashed)
+        assert model_digest[:12] in path
         # Should have seed
         assert "seed_42" in path
 
