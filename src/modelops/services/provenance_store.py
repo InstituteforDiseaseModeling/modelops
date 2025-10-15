@@ -254,8 +254,9 @@ class ProvenanceStore:
             self._write_json_atomic(result_dir / "result.json", result_data)
 
             # Also upload to Azure if configured
-            if self._azure_backend:
-                self._upload_to_azure(result_dir, self.schema.sim_path(**path_context))
+            # DISABLED FOR DEMO - Azure uploads causing performance issues
+            # if self._azure_backend:
+            #     self._upload_to_azure(result_dir, self.schema.sim_path(**path_context))
 
             logger.debug(f"Stored simulation result at {result_dir}")
             return str(result_dir)

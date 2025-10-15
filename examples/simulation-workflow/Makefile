@@ -17,8 +17,8 @@ MODELOPS    := $(abspath ../..)  # Current repo is modelops
 # --- Example config ---
 MODEL_CLASS := models.seir:StochasticSEIR
 STUDY_FILE  := study.json
-N_SAMPLES   := 100
-N_REPLICATES := 500
+N_SAMPLES   := 128
+N_REPLICATES := 60
 NAMESPACE   := modelops-dask-dev
 
 # --- Venv and tools ---
@@ -27,8 +27,8 @@ BIN     := $(VENV)/bin
 UV      := uv
 PY      := $(BIN)/python
 
-# Ensure user code importable (for cb to find models/)
-export PYTHONPATH := $(CURDIR):$(PYTHONPATH)
+# Note: cb now automatically adds current directory to Python path
+# No need to set PYTHONPATH manually anymore!
 
 .PHONY: help
 help:

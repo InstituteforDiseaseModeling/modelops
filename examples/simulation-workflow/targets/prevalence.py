@@ -6,13 +6,13 @@ using mean squared error as the loss function.
 """
 
 import polars as pl
-from modelops_calabaria import calibration_target
+import modelops_calabaria as cb
 from modelops_calabaria.core.target import Target
 from modelops_calabaria.core.alignment import JoinAlignment
 from modelops_calabaria.core.evaluation import mean_of_per_replicate_mse
 
 
-@calibration_target(
+@cb.calibration_target(
     model_output="prevalence",
     data={
         'observed': "data/observed_prevalence.csv"

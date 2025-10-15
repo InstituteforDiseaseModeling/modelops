@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 from ..client import WorkspaceService
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
-from ..core.paths import INFRASTRUCTURE_FILE
+from ..core.paths import UNIFIED_CONFIG_FILE
 from ..components import WorkspaceConfig
 from ..components.specs.infra import UnifiedInfraSpec
 from .utils import resolve_env, handle_pulumi_error
@@ -39,13 +39,13 @@ def up(
     the kubeconfig and deploy Dask scheduler and workers.
 
     Example:
-        mops workspace up                  # Uses ~/.modelops/infrastructure.yaml
+        mops workspace up                  # Uses ~/.modelops/modelops.yaml
         mops workspace up --env dev
         mops workspace up --config workspace.yaml --infra-stack modelops-infra-prod
     """
     env = resolve_env(env)
 
-    # Smart default: look for infrastructure.yaml when no config provided
+    # Smart default: look for unified modelops.yaml when no config provided
     validated_config = None
 
     if config:
@@ -56,24 +56,50 @@ def up(
             raise typer.Exit(1)
         validated_config = WorkspaceConfig.from_yaml(config)
     else:
-        # No config provided, check for infrastructure.yaml
-        if INFRASTRUCTURE_FILE.exists():
-            info(f"Using workspace config from: {INFRASTRUCTURE_FILE}")
+        # No config provided, check for unified config
+        if UNIFIED_CONFIG_FILE.exists():
+            info(f"Using workspace config from: {UNIFIED_CONFIG_FILE}")
             try:
-                # Load unified spec and extract workspace section
-                unified_spec = UnifiedInfraSpec.from_yaml(str(INFRASTRUCTURE_FILE))
-                if unified_spec.workspace:
-                    validated_config = unified_spec.workspace
-                else:
-                    warning("No workspace section found in infrastructure.yaml")
-                    info("Add a 'workspace:' section to infrastructure.yaml or use --config")
-                    raise typer.Exit(1)
+                # Load unified config and extract workspace section
+                from ..core.unified_config import UnifiedModelOpsConfig
+                unified_config = UnifiedModelOpsConfig.from_yaml(UNIFIED_CONFIG_FILE)
+                # Convert WorkspaceSpec to WorkspaceConfig format
+                validated_config = WorkspaceConfig(
+                    apiVersion="modelops/v1",
+                    kind="Workspace",
+                    metadata={"name": "default-workspace"},
+                    spec={
+                        "scheduler": {
+                            "image": unified_config.workspace.scheduler_image,
+                            "resources": {
+                                "requests": {"memory": "2Gi", "cpu": "1"},
+                                "limits": {"memory": "2Gi", "cpu": "1"}
+                            }
+                        },
+                        "workers": {
+                            "replicas": unified_config.workspace.worker_replicas,
+                            "image": unified_config.workspace.worker_image,
+                            "resources": {
+                                "requests": {"memory": "4Gi", "cpu": "2"},
+                                "limits": {"memory": "4Gi", "cpu": "2"}
+                            },
+                            "processes": unified_config.workspace.worker_processes,
+                            "threads": unified_config.workspace.worker_threads
+                        },
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_workers": 2,
+                            "max_workers": 10,
+                            "target_cpu": 70
+                        }
+                    }
+                )
             except Exception as e:
-                error(f"Failed to load workspace config from infrastructure.yaml: {e}")
+                error(f"Failed to load workspace config from {UNIFIED_CONFIG_FILE}: {e}")
                 raise typer.Exit(1)
         else:
-            error("No configuration specified and no infrastructure.yaml found")
-            error("Run 'mops infra init' to generate infrastructure.yaml")
+            error("No configuration specified and no modelops.yaml found")
+            error("Run 'mops init' to generate modelops.yaml")
             error("Or specify config: mops workspace up --config <workspace.yaml>")
             raise typer.Exit(1)
 

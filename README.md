@@ -115,20 +115,26 @@ python3 generate_observed_data.py
 mops-bundle register-model models/seir.py --no-confirm
 
 # Register calibration targets with data
-mops-bundle register-target targets/prevalence.py --data data/observed_prevalence.csv --no-confirm
+mops-bundle register-target targets/prevalence.py --no-confirm
 
 # Install Calabaria for experiment design
 pip install git+https://github.com/vsbuffalo/modelops-calabaria.git
 
 # Generate study with Sobol sampling
-cb sampling sobol "models.seir:StochasticSEIR" \
+cb sampling sobol "models/seir.py:StochasticSEIR" \
   --scenario baseline \
-  --n-samples 100 \
+  --n-samples 256 \
   --n-replicates 500 \
   --seed 42 \
   --scramble \
   --targets "targets.prevalence:prevalence_target" \
   --output study.json
+# Generated 256 Sobol samples for 6 parameters
+# ✓ Generated SimulationStudy with 256 parameter sets
+#   Model: models/seir.py/baseline
+#   Sampling: sobol
+#   Targets: targets.prevalence:prevalence_target
+#   Output: study.json
 
 # Submit to cluster with auto-push bundle
 mops jobs submit study.json --auto
