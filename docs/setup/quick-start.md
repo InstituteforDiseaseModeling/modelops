@@ -17,7 +17,7 @@ Before starting, ensure you have:
 Clone the repository and install ModelOps in development mode:
 
 ```bash
-git clone https://github.com/vsbuffalo/modelops.git
+git clone https://github.com/institutefordiseasemodeling/modelops.git
 cd modelops
 pip install -e .
 ```
@@ -225,5 +225,5 @@ az aks get-credentials --resource-group modelops-<username> --name modelops-clus
 ## Getting Help
 
 - **Documentation**: [docs/](../)
-- **Issues**: [GitHub Issues](https://github.com/vsbuffalo/modelops/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vsbuffalo/modelops/discussions)
+- **Issues**: [GitHub Issues](https://github.com/institutefordiseasemodeling/modelops/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/institutefordiseasemodeling/modelops/discussions)

@@ -37,13 +37,13 @@ RUN python -m pip install \
 # 1. Install modelops-contracts WITH deps (so pydantic is pulled)
 RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
     python -m pip install --upgrade \
-    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
+    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-contracts.git@${CONTRACTS_REF}"
 
 # 2. Install oras-py from git (needed by modelops-bundle)
 RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/oras-py.git
 
 # 3. Install modelops-bundle WITH its dependencies
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-bundle.git
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-bundle.git
 
 # 4. Copy and install modelops with --no-deps to prevent downgrading contracts
 COPY . /tmp/modelops

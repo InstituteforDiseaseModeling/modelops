@@ -19,7 +19,7 @@ on:
 env:
   # Default values for building images
   REGISTRY: ghcr.io
-  ORG: vsbuffalo
+  ORG: institutefordiseasemodeling
   PROJECT: modelops
   PYTHON_VERSION: '3.11'
 

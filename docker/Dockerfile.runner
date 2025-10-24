@@ -30,7 +30,7 @@ RUN python -m pip install \
 # Install modelops-contracts WITH deps (so pydantic is pulled)
 RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
     python -m pip install --upgrade \
-    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/vsbuffalo/modelops-contracts.git@${CONTRACTS_REF}"
+    "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-contracts.git@${CONTRACTS_REF}"
 
 # Verify contracts BEFORE installing modelops
 RUN python - <<'PY'

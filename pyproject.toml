@@ -36,8 +36,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-modelops-contracts = { git = "https://github.com/vsbuffalo/modelops-contracts.git" }
-modelops-bundle = { git = "https://github.com/vsbuffalo/modelops-bundle.git" }
+modelops-contracts = { git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git" }
+modelops-bundle = { git = "https://github.com/institutefordiseasemodeling/modelops-bundle.git" }
 
 [dependency-groups]
 azure = [

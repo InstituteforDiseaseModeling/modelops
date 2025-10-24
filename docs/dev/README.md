@@ -66,7 +66,7 @@ profiles:
     registry: {host: ghcr.io, org: institutefordiseasemodeling}
     default_tag: latest
   dev:
-    registry: {host: ghcr.io, org: vsbuffalo}
+    registry: {host: ghcr.io, org: institutefordiseasemodeling}
     default_tag: dev
 
 images:
@@ -86,7 +86,7 @@ mops dev images export-env          # Export as env vars
 # In Python code
 from modelops.images import get_image_config
 config = get_image_config()
-worker_image = config.worker_image()  # ghcr.io/vsbuffalo/modelops-dask-worker:latest
+worker_image = config.worker_image()  # ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
 
 # In Makefile
 WORKER_IMAGE := $(shell uv run mops dev images print worker)

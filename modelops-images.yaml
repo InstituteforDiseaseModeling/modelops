@@ -3,7 +3,7 @@
 version: 1
 
 images:
-  scheduler: ghcr.io/vsbuffalo/modelops-dask-scheduler:latest
-  worker: ghcr.io/vsbuffalo/modelops-dask-worker:latest
-  runner: ghcr.io/vsbuffalo/modelops-dask-runner:latest
-  adaptive-worker: ghcr.io/vsbuffalo/modelops-adaptive-worker:latest
+  scheduler: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
+  worker: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+  runner: ghcr.io/institutefordiseasemodeling/modelops-dask-runner:latest
+  adaptive-worker: ghcr.io/institutefordiseasemodeling/modelops-adaptive-worker:latest

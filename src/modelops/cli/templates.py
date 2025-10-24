@@ -48,10 +48,10 @@ workspace:
     name: main-workspace
   spec:
     scheduler:
-      image: ghcr.io/vsbuffalo/modelops-dask-scheduler:latest
+      image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
       replicas: 1
     workers:
-      image: ghcr.io/vsbuffalo/modelops-dask-worker:latest
+      image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
       replicas: 2
       processes: 4  # Increased to prevent aggregation deadlock
       threads: 1

@@ -1,7 +1,7 @@
 # ModelOps
 
-[![Tests](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/tests.yml)
-[![Docker Build](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/vsbuffalo/modelops/actions/workflows/docker-build.yml)
+[![Tests](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/tests.yml/badge.svg)](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/tests.yml)
+[![Docker Build](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/docker-build.yml/badge.svg)](https://github.com/institutefordiseasemodeling/modelops/actions/workflows/docker-build.yml)
 
 Kubernetes-native infrastructure orchestration for distributed simulation and
 calibration workloads.
@@ -38,7 +38,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 # Clone the repository
-git clone https://github.com/vsbuffalo/modelops.git
+git clone https://github.com/institutefordiseasemodeling/modelops.git
 cd modelops
 
 # Install with uv (recommended)
@@ -62,7 +62,7 @@ pip install -e .
 
 ### 1. Install ModelOps
 ```bash
-git clone https://github.com/vsbuffalo/modelops.git
+git clone https://github.com/institutefordiseasemodeling/modelops.git
 cd modelops
 pip install -e .
 ```
@@ -118,7 +118,7 @@ mops-bundle register-model models/seir.py --no-confirm
 mops-bundle register-target targets/prevalence.py --no-confirm
 
 # Install Calabaria for experiment design
-pip install git+https://github.com/vsbuffalo/modelops-calabaria.git
+pip install git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git
 
 # Generate study with Sobol sampling
 cb sampling sobol "models/seir.py:StochasticSEIR" \
@@ -230,5 +230,5 @@ MIT
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/vsbuffalo/modelops/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/vsbuffalo/modelops/discussions)
+- **Issues**: [GitHub Issues](https://github.com/institutefordiseasemodeling/modelops/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/institutefordiseasemodeling/modelops/discussions)

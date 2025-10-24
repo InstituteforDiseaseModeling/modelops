@@ -1099,7 +1099,7 @@ def images(
                 org = parts[1]
             else:
                 registry = "ghcr.io"
-                org = "vsbuffalo"
+                org = "institutefordiseasemodeling"
 
             print(f"REGISTRY={registry}")
             print(f"ORG={org}")

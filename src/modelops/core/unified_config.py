@@ -63,9 +63,9 @@ class RegistrySpec(BaseModel):
 
 class WorkspaceSpec(BaseModel):
     """Dask workspace specification."""
-    scheduler_image: str = "ghcr.io/vsbuffalo/modelops-dask-scheduler:latest"
+    scheduler_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest"
     scheduler_replicas: int = 1
-    worker_image: str = "ghcr.io/vsbuffalo/modelops-dask-worker:latest"
+    worker_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest"
     worker_replicas: int = 2
     worker_processes: int = 4
     worker_threads: int = 1

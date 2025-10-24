@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] Python version mismatches should be caught upon job submission.
+
 ## CLI Improvements
 - [ ] Consolidate `mops infra status` and `mops status`
 - [ ] Standardize makefile: `make build` → `make deploy` pattern (e.g., `make deploy-worker`)

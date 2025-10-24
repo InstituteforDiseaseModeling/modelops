@@ -657,7 +657,7 @@ requires-dist = [
     { name = "azure-storage-blob", specifier = ">=12.26.0" },
     { name = "dask", extras = ["distributed"], specifier = "==2024.10.0" },
     { name = "kubernetes", specifier = ">=28.0.0" },
-    { name = "modelops-contracts", git = "https://github.com/vsbuffalo/modelops-contracts.git" },
+    { name = "modelops-contracts", git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git" },
     { name = "numpy", specifier = ">=2.3.2" },
     { name = "pandas", specifier = ">=2.3.2" },
     { name = "polars", specifier = ">=0.20.0" },
@@ -674,7 +674,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 azure = [{ name = "azure-storage-blob", specifier = ">=12.26.0" }]
-bundle = [{ name = "modelops-bundle", git = "https://github.com/vsbuffalo/modelops-bundle.git" }]
+bundle = [{ name = "modelops-bundle", git = "https://github.com/institutefordiseasemodeling/modelops-bundle.git" }]
 dev = [
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
@@ -684,7 +684,7 @@ dev = [
 [[package]]
 name = "modelops-bundle"
 version = "0.1.0"
-source = { git = "https://github.com/vsbuffalo/modelops-bundle.git#23a73f6a5967937ddf163da4ef54da8f39062f0e" }
+source = { git = "https://github.com/institutefordiseasemodeling/modelops-bundle.git#73c676ceda74ef2df56e766560bfcfd1afb7e60d" }
 dependencies = [
     { name = "azure-storage-blob" },
     { name = "modelops-contracts" },
@@ -701,7 +701,7 @@ dependencies = [
 [[package]]
 name = "modelops-contracts"
 version = "0.1.0"
-source = { git = "https://github.com/vsbuffalo/modelops-contracts.git#b4b739b4da514dba670d5ef1c5f1dad6a2930667" }
+source = { git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git#9d023bc513166dcdc207042a52183d63264c7605" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
