@@ -701,7 +701,7 @@ dependencies = [
 [[package]]
 name = "modelops-contracts"
 version = "0.1.0"
-source = { git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git#9d023bc513166dcdc207042a52183d63264c7605" }
+source = { git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git#66794f97a62c1e616a54616b58f62afb0cfc6221" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },

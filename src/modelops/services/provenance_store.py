@@ -555,3 +555,84 @@ class ProvenanceStore:
         # Note: The existing AzureBlobBackend doesn't have a shutdown method
         # It uses synchronous operations so no cleanup needed
         pass
+
+    def try_read_json(self, path: str) -> Optional[Dict[str, Any]]:
+        """Try to read JSON file, returning None if missing or invalid.
+
+        Args:
+            path: Path to JSON file (relative to storage_dir)
+
+        Returns:
+            Parsed JSON as dictionary, or None if missing/invalid
+        """
+        full_path = self.storage_dir / path.lstrip('/')
+
+        if not full_path.exists():
+            return None
+
+        try:
+            with open(full_path, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.debug(f"Failed to read JSON from {path}: {e}")
+            return None
+
+    def write_json(self, path: str, data: Dict[str, Any]) -> None:
+        """Write JSON file atomically.
+
+        Args:
+            path: Path to JSON file (relative to storage_dir)
+            data: Dictionary to serialize
+        """
+        full_path = self.storage_dir / path.lstrip('/')
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_json_atomic(full_path, data)
+
+    def atomic_rename(self, src: str, dst: str) -> None:
+        """Atomically rename/move a directory or file.
+
+        Args:
+            src: Source path (relative to storage_dir)
+            dst: Destination path (relative to storage_dir)
+        """
+        src_path = self.storage_dir / src.lstrip('/')
+        dst_path = self.storage_dir / dst.lstrip('/')
+
+        # Ensure destination parent exists
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Remove destination if it exists (for idempotent overwrites)
+        if dst_path.exists():
+            import shutil
+            if dst_path.is_dir():
+                shutil.rmtree(dst_path)
+            else:
+                dst_path.unlink()
+
+        # Atomic rename
+        src_path.rename(dst_path)
+        logger.debug(f"Atomic rename: {src} -> {dst}")
+
+    @classmethod
+    def from_env(cls, env: Optional[str] = None) -> "ProvenanceStore":
+        """Create ProvenanceStore from environment configuration.
+
+        Args:
+            env: Environment name (dev, staging, prod)
+
+        Returns:
+            Configured ProvenanceStore instance
+        """
+        # Default storage directory
+        storage_dir = os.environ.get("MODELOPS_PROVENANCE_DIR", "/tmp/modelops/provenance")
+
+        # Check for Azure configuration
+        azure_backend = None
+        conn_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        if conn_string:
+            azure_backend = {
+                "connection_string": conn_string,
+                "container": os.environ.get("AZURE_STORAGE_CONTAINER", "results")
+            }
+
+        return cls(Path(storage_dir), azure_backend=azure_backend)

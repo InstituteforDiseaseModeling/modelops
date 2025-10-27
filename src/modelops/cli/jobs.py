@@ -74,6 +74,114 @@ def _get_registry(env: str) -> Optional[JobRegistry]:
         return None
 
 
+def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: bool = True):
+    """Trigger result indexing as a K8s Job.
+
+    Creates a single-shot K8s Job that runs the result indexer for the given job.
+
+    Args:
+        job_id: Job ID to index results for
+        batch_v1: Kubernetes batch API client
+        namespace: Kubernetes namespace for the indexer job
+        verbose: Whether to print progress messages
+    """
+    from kubernetes import client as k8s_client
+    from ..images import get_image_config
+
+    try:
+        # Get worker image for indexer
+        image_config = get_image_config("worker")
+        worker_image = image_config["full_tag"]
+
+        # Create K8s Job for indexing
+        indexer_name = f"mops-results-indexer-{job_id[:8]}"
+
+        # Check if indexer job already exists
+        try:
+            existing = batch_v1.read_namespaced_job(
+                name=indexer_name,
+                namespace=namespace
+            )
+            if verbose:
+                info(f"    Result indexer already exists for {job_id}")
+            return
+        except k8s_client.ApiException as e:
+            if e.status != 404:
+                raise
+
+        # Create indexer job spec
+        job_spec = k8s_client.V1Job(
+            api_version="batch/v1",
+            kind="Job",
+            metadata=k8s_client.V1ObjectMeta(
+                name=indexer_name,
+                namespace=namespace,
+                labels={
+                    "app": "modelops-indexer",
+                    "job-id": job_id[:8],
+                    "component": "result-indexer",
+                }
+            ),
+            spec=k8s_client.V1JobSpec(
+                ttl_seconds_after_finished=3600,  # Clean up after 1 hour
+                backoff_limit=2,
+                template=k8s_client.V1PodTemplateSpec(
+                    metadata=k8s_client.V1ObjectMeta(
+                        labels={
+                            "app": "modelops-indexer",
+                            "job-id": job_id[:8],
+                        }
+                    ),
+                    spec=k8s_client.V1PodSpec(
+                        restart_policy="OnFailure",
+                        containers=[
+                            k8s_client.V1Container(
+                                name="indexer",
+                                image=worker_image,
+                                command=["python", "-m", "modelops.cli.main"],
+                                args=["results", "index", job_id],
+                                env=[
+                                    k8s_client.V1EnvVar(
+                                        name="MODELOPS_JOB_ID",
+                                        value=job_id
+                                    ),
+                                    # Pass through storage configuration
+                                    k8s_client.V1EnvVar(
+                                        name="AZURE_STORAGE_CONNECTION_STRING",
+                                        value_from=k8s_client.V1EnvVarSource(
+                                            secret_key_ref=k8s_client.V1SecretKeySelector(
+                                                name="modelops-storage",
+                                                key="connection-string",
+                                                optional=True
+                                            )
+                                        )
+                                    ),
+                                ],
+                                resources=k8s_client.V1ResourceRequirements(
+                                    requests={"cpu": "0.5", "memory": "1Gi"},
+                                    limits={"cpu": "1", "memory": "2Gi"}
+                                )
+                            )
+                        ]
+                    )
+                )
+            )
+        )
+
+        # Create the indexer job
+        batch_v1.create_namespaced_job(
+            namespace=namespace,
+            body=job_spec
+        )
+
+        if verbose:
+            info(f"    Triggered result indexer: {indexer_name}")
+
+    except Exception as e:
+        if verbose:
+            warning(f"    Failed to trigger result indexing: {e}")
+
+
 @app.command()
 def submit(
     study_file: Path = typer.Argument(
@@ -622,6 +730,10 @@ def _perform_sync(
                             registry.update_job_status(job.job_id, k8s_status)
                             if verbose:
                                 info(f"  {job.job_id}: {job.status.value} → {k8s_status.value}")
+
+                            # Trigger result indexing for succeeded jobs
+                            if k8s_status == JobStatus.SUCCEEDED:
+                                _trigger_result_indexing(job.job_id, batch_v1, job.k8s_namespace, verbose)
                         updated_count += 1
                     except Exception as e:
                         if verbose:

@@ -292,3 +292,83 @@ def stats(
     except Exception as e:
         error(f"Failed to get statistics: {e}")
         raise typer.Exit(code=1)
+
+
+@app.command()
+def index(
+    job_id: str = typer.Argument(
+        ...,
+        help="Job ID to index results for"
+    ),
+    storage_dir: Path = typer.Option(
+        Path("/tmp/modelops/provenance"),
+        "--storage-dir",
+        "-s",
+        help="Storage directory for provenance store"
+    ),
+    registry_url: Optional[str] = typer.Option(
+        None,
+        "--registry-url",
+        help="Job registry URL (defaults to environment)"
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed progress"
+    ),
+):
+    """Index simulation results for a completed job into query-ready Parquet."""
+    try:
+        from ..services.results_indexer import IndexerConfig, ResultIndexer
+        from ..services.job_registry import JobRegistry
+
+        section(f"Indexing results for job: {job_id}")
+
+        # Initialize job registry
+        if verbose:
+            info("Connecting to job registry...")
+        job_registry = JobRegistry.from_env() if not registry_url else JobRegistry(registry_url)
+
+        # Initialize provenance store
+        if verbose:
+            info(f"Using provenance store at: {storage_dir}")
+        prov_store = ProvenanceStore(storage_dir)
+
+        # Create and run indexer
+        config = IndexerConfig(
+            job_id=job_id,
+            job_registry_uri=registry_url,
+            prov_root=str(storage_dir),
+        )
+
+        if verbose:
+            info("Starting indexer...")
+        indexer = ResultIndexer(config, job_registry, prov_store)
+        result_path = indexer.run()
+
+        success(f"Successfully indexed results to: {result_path}")
+
+        # Show summary
+        manifest_path = storage_dir / f"token/v1/views/jobs/{job_id}/manifest.json"
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
+                section("Index Summary")
+                info_dict({
+                    "Total rows": manifest["row_counts"]["total"],
+                    "Available": manifest["row_counts"]["available"],
+                    "Missing": manifest["row_counts"]["missing"],
+                    "Failed": manifest["row_counts"].get("failed", 0),
+                    "Dataset": manifest["dataset_uri"],
+                })
+
+    except ValueError as e:
+        error(f"Job not found: {e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        error(f"Failed to index results: {e}")
+        if verbose:
+            import traceback
+            console.print(traceback.format_exc())
+        raise typer.Exit(code=1)
