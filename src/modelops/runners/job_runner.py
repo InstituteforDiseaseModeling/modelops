@@ -388,6 +388,90 @@ def main():
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
 
+        # Trigger result indexing on Dask cluster for simulation jobs
+        if isinstance(job, SimJob):
+            try:
+                logger.info("Triggering result indexing on Dask cluster...")
+
+                # Define indexing function to run on worker
+                def run_indexing_on_worker(job_id, job_spec_dict):
+                    """Run indexing on a Dask worker that has the data."""
+                    import logging
+                    from pathlib import Path
+
+                    # Set up logging for the worker task
+                    worker_logger = logging.getLogger("indexer")
+                    worker_logger.setLevel(logging.INFO)
+
+                    try:
+                        from modelops.services.results_indexer import IndexerConfig, ResultIndexer
+                        from modelops.services.job_registry import JobRegistry
+                        from modelops.services.job_state import JobState, JobStatus
+                        from modelops.services.provenance_store import ProvenanceStore
+                        from modelops_contracts import SimJob
+                        from datetime import datetime, timezone
+                        import json
+
+                        # Create temporary job registry with this job's info
+                        # Since we can't access the main registry from the worker
+                        temp_registry_dir = Path(f"/tmp/modelops/temp_registry/{job_id}")
+                        temp_registry_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Create a minimal registry with just this job
+                        registry = JobRegistry(str(temp_registry_dir))
+
+                        # Reconstruct the job from the dict
+                        job_obj = SimJob.model_validate(job_spec_dict)
+
+                        # Create job state for the registry
+                        job_state = JobState(
+                            job_id=job_id,
+                            status=JobStatus.SUCCEEDED,
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                            updated_at=datetime.now(timezone.utc).isoformat(),
+                        )
+                        job_state.job_spec = job_obj
+
+                        # Add to registry
+                        registry._write_job_file(job_state)
+
+                        # Create indexer config
+                        config = IndexerConfig(
+                            job_id=job_id,
+                            prov_root="/tmp/modelops/provenance/token/v1"
+                        )
+
+                        # Create provenance store
+                        store = ProvenanceStore(Path("/tmp/modelops/provenance"))
+
+                        # Run indexer
+                        indexer = ResultIndexer(config, registry, store)
+                        result_path = indexer.run()
+
+                        worker_logger.info(f"Indexing completed: {result_path}")
+                        return result_path
+
+                    except Exception as e:
+                        worker_logger.error(f"Indexing failed on worker: {e}")
+                        raise
+
+                # Submit indexing task to Dask
+                # Convert job to dict for serialization
+                job_dict = job.model_dump()
+
+                future = client.submit(run_indexing_on_worker, job.job_id, job_dict,
+                                      key=f"index-{job.job_id}")
+
+                # Wait for indexing to complete (with timeout)
+                result_path = future.result(timeout=120)
+                logger.info(f"Result indexing completed successfully: {result_path}")
+
+            except TimeoutError:
+                logger.error("Result indexing timed out after 120 seconds")
+            except Exception as e:
+                logger.error(f"Result indexing failed: {e}")
+                # Don't fail the entire job if indexing fails
+
         logger.info("Job execution completed successfully")
 
     except Exception as e:
