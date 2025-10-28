@@ -50,10 +50,12 @@ def write_job_view(
     available_count = 0
     failed_count = 0
 
+    logger.info(f"Processing {len(results)} results...")
     for i, result in enumerate(results):
         if not isinstance(result, AggregationReturn):
             logger.warning(f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}")
             continue
+        logger.debug(f"Processing AggregationReturn {i}: {result.aggregation_id}")
 
         # Get param_id from corresponding task group
         # Results are ordered same as task groups
@@ -86,14 +88,24 @@ def write_job_view(
             failed_count += 1
 
         rows.append(row)
+        logger.debug(f"Added row for param_id {param_id[:8]}")
+
+    logger.info(f"Collected {len(rows)} rows for Parquet")
 
     # Write Parquet file
     if not rows:
         logger.warning("No valid results to write to Parquet")
         # Still write manifest even with no data
     else:
-        # Convert to Arrow table
-        table = pa.table(rows)
+        # Convert to Arrow table with explicit schema
+        # PyArrow needs column names when constructing from list of dicts
+        if rows:
+            # Get column names from first row (all rows have same structure)
+            column_names = list(rows[0].keys())
+            # Create lists for each column
+            column_data = {col: [row[col] for row in rows] for col in column_names}
+            # Create table from dict of arrays
+            table = pa.table(column_data)
 
         # Write partitioned by param_id prefix (first 2 chars)
         # This helps with query performance
