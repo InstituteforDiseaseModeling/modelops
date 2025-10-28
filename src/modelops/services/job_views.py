@@ -52,7 +52,7 @@ def write_job_view(
 
     for i, result in enumerate(results):
         if not isinstance(result, AggregationReturn):
-            logger.warning(f"Skipping non-AggregationReturn result at index {i}")
+            logger.warning(f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}")
             continue
 
         # Get param_id from corresponding task group
@@ -88,7 +88,10 @@ def write_job_view(
         rows.append(row)
 
     # Write Parquet file
-    if rows:
+    if not rows:
+        logger.warning("No valid results to write to Parquet")
+        # Still write manifest even with no data
+    else:
         # Convert to Arrow table
         table = pa.table(rows)
 
@@ -102,8 +105,6 @@ def write_job_view(
         )
 
         logger.info(f"Wrote {len(rows)} rows to Parquet at {job_dir}/data")
-    else:
-        logger.warning("No valid results to write")
 
     # Write manifest
     manifest = {

@@ -224,6 +224,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             from pathlib import Path
 
             logger.info("Writing job results to Parquet views...")
+            logger.info(f"Results types: {[type(r).__name__ for r in results[:3]]}")
             view_path = write_job_view(job, results)
             logger.info(f"Job view written to: {view_path}")
         except ImportError as e:
