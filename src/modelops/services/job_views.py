@@ -2,34 +2,40 @@
 
 This module provides functionality to write AggregationReturn objects
 directly to Parquet files, bypassing the need for filesystem scanning
-or Dask worker submission.
+or Dask worker submission. Supports multiple targets with separate Parquet
+files per target.
 """
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timezone
 
 from modelops_contracts import AggregationReturn, SimJob, TargetSpec
 
 logger = logging.getLogger(__name__)
 
-
+# TODO/FIXME: make output_dir use ProvenanceSchema
 def write_job_view(
     job: SimJob,
-    results: List[AggregationReturn],
+    results: Union[List[AggregationReturn], Dict[str, List[AggregationReturn]]],
     output_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
+    prov_store: Optional[Any] = None,
 ) -> Path:
     """Write job results to Parquet for post-job analysis.
 
     Takes AggregationReturn objects from job execution and writes them
-    to a structured Parquet dataset for querying.
+    to structured Parquet datasets for querying. Supports multiple targets
+    with separate Parquet files per target.
 
     Args:
         job: The SimJob that was executed
-        results: List of AggregationReturn objects with loss values
+        results: Either a list of AggregationReturn objects (single target)
+                or a dict mapping target names to lists of AggregationReturn
         output_dir: Base directory for job views
+        prov_store: Optional ProvenanceStore for Azure uploads
 
     Returns:
         Path to the created view directory
@@ -45,103 +51,144 @@ def write_job_view(
     job_dir = output_dir / job.job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # Extract data for Parquet
-    rows = []
-    available_count = 0
-    failed_count = 0
-
-    logger.info(f"Processing {len(results)} results...")
-    for i, result in enumerate(results):
-        if not isinstance(result, AggregationReturn):
-            logger.warning(f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}")
-            continue
-        logger.debug(f"Processing AggregationReturn {i}: {result.aggregation_id}")
-
-        # Get param_id from corresponding task group
-        # Results are ordered same as task groups
-        task_groups = list(job.get_task_groups().items())
-        if i < len(task_groups):
-            param_id, tasks = task_groups[i]
-            first_task = tasks[0]
-        else:
-            logger.warning(f"No task group for result {i}")
-            continue
-
-        row = {
-            "job_id": job.job_id,
-            "param_id": param_id,
-            "bundle_ref": job.bundle_ref,
-            "entrypoint": first_task.entrypoint,
-            "loss": float(result.loss) if result.loss is not None else None,
-            "n_replicates": result.n_replicates,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-
-        # Add parameters
-        for key, value in first_task.params.params.items():
-            row[f"param_{key}"] = value
-
-        # Track availability
-        if result.loss is not None:
-            available_count += 1
-        else:
-            failed_count += 1
-
-        rows.append(row)
-        logger.debug(f"Added row for param_id {param_id[:8]}")
-
-    logger.info(f"Collected {len(rows)} rows for Parquet")
-
-    # Write Parquet file
-    if not rows:
-        logger.warning("No valid results to write to Parquet")
-        # Still write manifest even with no data
+    # Normalize results to dict format
+    if isinstance(results, list):
+        # Single target or no target - use "default" as key
+        results_by_target = {"default": results}
     else:
-        # Convert to Arrow table with explicit schema
-        # PyArrow needs column names when constructing from list of dicts
+        results_by_target = results
+
+    # Process each target separately
+    target_summaries = {}
+    blob_urls = {}
+
+    for target_name, target_results in results_by_target.items():
+        logger.info(f"Processing target '{target_name}' with {len(target_results)} results...")
+
+        # Extract data for Parquet
+        rows = []
+        available_count = 0
+        failed_count = 0
+
+        # Get task groups once for mapping
+        task_groups = list(job.get_task_groups().items())
+
+        for i, result in enumerate(target_results):
+            if not isinstance(result, AggregationReturn):
+                logger.warning(f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}")
+                continue
+
+            # Get param_id from corresponding task group
+            if i < len(task_groups):
+                param_id, tasks = task_groups[i]
+                first_task = tasks[0]
+            else:
+                logger.warning(f"No task group for result {i}")
+                continue
+
+            row = {
+                "job_id": job.job_id,
+                "param_id": param_id,
+                "bundle_ref": job.bundle_ref,
+                "entrypoint": first_task.entrypoint,
+                "loss": float(result.loss) if result.loss is not None else None,
+                "n_replicates": result.n_replicates,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Add parameters as columns
+            for key, value in first_task.params.params.items():
+                row[f"param_{key}"] = value
+
+            # Track availability
+            if result.loss is not None:
+                available_count += 1
+            else:
+                failed_count += 1
+
+            rows.append(row)
+
+        # Write Parquet file for this target
         if rows:
-            # Get column names from first row (all rows have same structure)
+            # Create target-specific directory
+            target_dir = job_dir / "targets" / target_name
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Convert to Arrow table
             column_names = list(rows[0].keys())
-            # Create lists for each column
             column_data = {col: [row[col] for row in rows] for col in column_names}
-            # Create table from dict of arrays
             table = pa.table(column_data)
 
-        # Write partitioned by param_id prefix (first 2 chars)
-        # This helps with query performance
-        pq.write_to_dataset(
-            table,
-            root_path=str(job_dir / "data"),
-            partition_cols=None,  # Don't partition for now, can add later
-            compression="snappy",
-        )
+            # Write Parquet
+            parquet_path = target_dir / "data.parquet"
+            pq.write_table(table, parquet_path, compression="snappy")
 
-        logger.info(f"Wrote {len(rows)} rows to Parquet at {job_dir}/data")
+            logger.info(f"Wrote {len(rows)} rows to {parquet_path}")
+
+            # Calculate mean loss for summary
+            losses = [r["loss"] for r in rows if r["loss"] is not None]
+            mean_loss = sum(losses) / len(losses) if losses else None
+        else:
+            logger.warning(f"No valid results for target '{target_name}'")
+            mean_loss = None
+
+        # Store summary for manifest
+        target_summaries[target_name] = {
+            "rows": len(rows),
+            "available": available_count,
+            "failed": failed_count,
+            "mean_loss": mean_loss,
+        }
 
     # Write manifest
     manifest = {
         "job_id": job.job_id,
         "bundle_ref": job.bundle_ref,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "row_counts": {
-            "total": len(results),
-            "available": available_count,
-            "failed": failed_count,
-            "missing": 0,  # We process all results in memory
-        },
-        "dataset_uri": str(job_dir / "data"),
+        "targets": target_summaries,
+        "dataset_uri": str(job_dir),
         "schema_version": "1.0.0",
         "target_spec": _serialize_target_spec(job.target_spec) if job.target_spec else None,
     }
 
+    # Upload to Azure if ProvenanceStore is available
+    if prov_store and hasattr(prov_store, '_azure_backend') and prov_store._azure_backend:
+        try:
+            logger.info("Uploading job views to Azure...")
+
+            # Upload the entire job directory
+            remote_prefix = f"views/jobs/{job.job_id}"
+            prov_store._upload_to_azure(job_dir, remote_prefix)
+
+            # Extract storage account name from connection string
+            account_name = _extract_account_name(prov_store._azure_backend.connection_string or "")
+            if account_name:
+                # Build blob URLs
+                base_url = f"https://{account_name}.blob.core.windows.net/results/{remote_prefix}"
+                manifest["blob_url"] = f"{base_url}/manifest.json"
+
+                # Add blob URLs for each target
+                for target_name in target_summaries:
+                    target_url = f"{base_url}/targets/{target_name}/data.parquet"
+                    target_summaries[target_name]["blob_url"] = target_url
+                    blob_urls[target_name] = target_url
+
+                logger.info(f"Job views uploaded to: {base_url}")
+                for target_name, url in blob_urls.items():
+                    logger.info(f"  Target '{target_name}': {url}")
+        except Exception as e:
+            logger.error(f"Failed to upload to Azure: {e}")
+            # Continue without blob URLs
+
+    # Write manifest (after adding blob URLs if available)
     manifest_path = job_dir / "manifest.json"
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
     logger.info(f"Job view written to {job_dir}")
-    logger.info(f"  Total results: {len(results)}")
-    logger.info(f"  Available: {available_count}")
-    logger.info(f"  Failed: {failed_count}")
+    logger.info(f"  Total targets: {len(target_summaries)}")
+    for target_name, summary in target_summaries.items():
+        logger.info(f"  Target '{target_name}': {summary['rows']} rows, mean loss: {summary['mean_loss']:.2f}" if summary['mean_loss'] else f"  Target '{target_name}': {summary['rows']} rows")
 
     return job_dir
 
@@ -159,11 +206,25 @@ def _serialize_target_spec(spec: Optional[TargetSpec]) -> Optional[Dict[str, Any
     }
 
 
-def read_job_view(job_id: str, base_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs")) -> Optional[Any]:
-    """Read a job view Parquet dataset.
+def _extract_account_name(connection_string: str) -> Optional[str]:
+    """Extract storage account name from Azure connection string.
+
+    Connection string format:
+    DefaultEndpointsProtocol=https;AccountName=XXX;AccountKey=YYY;EndpointSuffix=core.windows.net
+    """
+    match = re.search(r'AccountName=([^;]+)', connection_string)
+    if match:
+        return match.group(1)
+    return None
+
+
+def read_job_view(job_id: str, target_name: str = "default",
+                  base_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs")) -> Optional[Any]:
+    """Read a job view Parquet dataset for a specific target.
 
     Args:
         job_id: Job ID to read
+        target_name: Target name (default: "default")
         base_dir: Base directory for job views
 
     Returns:
@@ -175,13 +236,19 @@ def read_job_view(job_id: str, base_dir: Path = Path("/tmp/modelops/provenance/t
         logger.error("pyarrow not installed. Cannot read Parquet views.")
         return None
 
-    job_dir = base_dir / job_id / "data"
-    if not job_dir.exists():
-        logger.warning(f"No job view found at {job_dir}")
-        return None
+    # Check for target-specific path first
+    target_path = base_dir / job_id / "targets" / target_name / "data.parquet"
+    if target_path.exists():
+        table = pq.read_table(str(target_path))
+        logger.info(f"Read {table.num_rows} rows from job view {job_id} target '{target_name}'")
+        return table
 
-    # Read the Parquet dataset
-    table = pq.read_table(str(job_dir))
-    logger.info(f"Read {table.num_rows} rows from job view {job_id}")
+    # Fallback to old single-file location
+    legacy_path = base_dir / job_id / "data"
+    if legacy_path.exists():
+        table = pq.read_table(str(legacy_path))
+        logger.info(f"Read {table.num_rows} rows from legacy job view {job_id}")
+        return table
 
-    return table
+    logger.warning(f"No job view found for {job_id} target '{target_name}'")
+    return None

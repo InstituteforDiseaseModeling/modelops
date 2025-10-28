@@ -173,16 +173,18 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     logger.info(f"Processing {len(task_groups)} parameter sets with replicates")
 
     # Check if we have targets for aggregation
-    target_entrypoint = None
+    target_entrypoints = []
     if job.target_spec and job.target_spec.data.get("target_entrypoints"):
-        # Use first target for now (could extend to multiple targets)
-        target_entrypoint = job.target_spec.data["target_entrypoints"][0]
-        logger.info(f"Will aggregate replicates using target: {target_entrypoint}")
+        target_entrypoints = job.target_spec.data["target_entrypoints"]
+        logger.info(f"Will evaluate {len(target_entrypoints)} targets: {target_entrypoints}")
 
-    # Submit replicate sets with aggregation if targets are present
+    # Submit replicate sets - for now still using first target if available
+    # TODO: This needs to be refactored to evaluate ALL targets
     from modelops_contracts import ReplicateSet
 
     futures = []
+    first_target = target_entrypoints[0] if target_entrypoints else None
+
     for param_id, replicate_tasks in task_groups.items():
         if len(replicate_tasks) > 1:
             # Multiple replicates - use ReplicateSet for grouped submission
@@ -192,10 +194,10 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                 n_replicates=len(replicate_tasks),
                 seed_offset=0  # Seeds already set in tasks
             )
-            # Submit with or without target-based aggregation
-            future = sim_service.submit_replicate_set(replicate_set, target_entrypoint)
-            futures.append(future)
-            if target_entrypoint:
+            # Submit with first target for now
+            future = sim_service.submit_replicate_set(replicate_set, first_target)
+            futures.append((param_id, future))
+            if first_target:
                 logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} with target aggregation")
             else:
                 logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} as group")
@@ -203,29 +205,60 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             # Single task - no grouping needed
             task = replicate_tasks[0]
             future = sim_service.submit(task)
-            futures.append(future)
+            futures.append((param_id, future))
             logger.info(f"  Submitted single task for param {param_id[:8]}")
 
-    # Gather results
-    results = sim_service.gather(futures)
+    # Gather results - these are either SimReturn or AggregationReturn for first target
+    param_futures_list = futures  # Save the (param_id, future) pairs
+    results = sim_service.gather([f for _, f in futures])
     logger.info(f"Job complete: {len(results)} results")
 
-    # If we used aggregation, results are already AggregationReturn objects with loss
-    if target_entrypoint:
-        logger.info("Target evaluation completed during aggregation")
-        # Note: Storage happens on worker side in isolated_warm.py
-        for i, result in enumerate(results[:3]):  # Log first 3
-            if hasattr(result, 'loss'):
-                logger.info(f"  Param set {i} loss: {result.loss}")
+    # Build results by target
+    results_by_target = {}
+
+    if target_entrypoints:
+        # For now, we only have results for the first target
+        # TODO: Need to evaluate other targets on the same sim results
+        if first_target:
+            logger.info(f"Results available for target: {first_target}")
+            # Extract just the target name from the entrypoint
+            target_name = first_target.split("/")[-1] if "/" in first_target else first_target
+            results_by_target[target_name] = results
+
+            # Log first few losses
+            for i, result in enumerate(results[:3]):
+                if hasattr(result, 'loss'):
+                    logger.info(f"  Param set {i} loss for {target_name}: {result.loss}")
 
         # Write Parquet views for post-job analysis
         try:
             from modelops.services.job_views import write_job_view
+            from modelops.services.provenance_store import ProvenanceStore
             from pathlib import Path
 
             logger.info("Writing job results to Parquet views...")
-            logger.info(f"Results types: {[type(r).__name__ for r in results[:3]]}")
-            view_path = write_job_view(job, results)
+
+            # Initialize ProvenanceStore with Azure backend if connection string is available
+            prov_store = None
+            conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+            if conn_str:
+                try:
+                    prov_store = ProvenanceStore(
+                        storage_dir=Path("/tmp/modelops/provenance"),
+                        azure_backend={"container": "results", "connection_string": conn_str}
+                    )
+                    logger.info("ProvenanceStore initialized with Azure backend")
+                except Exception as e:
+                    logger.warning(f"Could not initialize ProvenanceStore with Azure: {e}")
+                    prov_store = None
+
+            # If we have multiple targets, pass results_by_target; otherwise pass single results list
+            if results_by_target:
+                view_path = write_job_view(job, results_by_target, prov_store=prov_store)
+            else:
+                # Fallback for jobs without targets
+                view_path = write_job_view(job, results, prov_store=prov_store)
+
             logger.info(f"Job view written to: {view_path}")
         except ImportError as e:
             logger.warning(f"Could not write job views (missing dependency): {e}")

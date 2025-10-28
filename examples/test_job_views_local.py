@@ -67,27 +67,36 @@ def create_test_job():
 
 
 def create_test_results(job):
-    """Create test AggregationReturn objects."""
-    results = []
+    """Create test AggregationReturn objects for multiple targets."""
+    # Simulate multiple targets
+    target_names = ["prevalence", "incidence", "mortality"]
+    results_by_target = {}
 
     # Group tasks by parameter ID
     task_groups = job.get_task_groups()
 
-    for i, (param_id, replicate_tasks) in enumerate(task_groups.items()):
-        # Simulate AggregationReturn for each parameter set
-        loss_value = 1000.0 + i * 500.0  # Dummy loss values
+    for target_idx, target_name in enumerate(target_names):
+        results = []
 
-        result = AggregationReturn(
-            aggregation_id=f"agg-{param_id[:8]}",
-            loss=loss_value,
-            diagnostics={"mean_squared_error": loss_value, "r_squared": 0.85},
-            outputs={},  # Empty for this test
-            n_replicates=len(replicate_tasks)
-        )
-        results.append(result)
-        logger.info(f"Created AggregationReturn for param {param_id[:8]}: loss={loss_value:.2f}")
+        for i, (param_id, replicate_tasks) in enumerate(task_groups.items()):
+            # Different loss values for different targets
+            base_loss = 1000.0 + i * 500.0
+            target_multiplier = 1.0 + target_idx * 0.5  # Each target has different scale
+            loss_value = base_loss * target_multiplier
 
-    return results
+            result = AggregationReturn(
+                aggregation_id=f"agg-{param_id[:8]}-{target_name}",
+                loss=loss_value,
+                diagnostics={"mean_squared_error": loss_value, "r_squared": 0.85 - target_idx * 0.1},
+                outputs={},  # Empty for this test
+                n_replicates=len(replicate_tasks)
+            )
+            results.append(result)
+            logger.info(f"Created AggregationReturn for param {param_id[:8]}, target '{target_name}': loss={loss_value:.2f}")
+
+        results_by_target[target_name] = results
+
+    return results_by_target
 
 
 def test_direct_writing():
@@ -102,8 +111,8 @@ def test_direct_writing():
     logger.info(f"  Total tasks: {job.task_count()}")
     logger.info(f"  Parameter sets: {len(job.get_task_groups())}")
 
-    results = create_test_results(job)
-    logger.info(f"Created {len(results)} AggregationReturn objects")
+    results_by_target = create_test_results(job)
+    logger.info(f"Created results for {len(results_by_target)} targets")
 
     # Use a temporary directory for output
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -113,8 +122,8 @@ def test_direct_writing():
         logger.info(f"\nWriting to: {output_dir}")
 
         try:
-            # Call the write function
-            view_path = write_job_view(job, results, output_dir)
+            # Call the write function with multiple targets
+            view_path = write_job_view(job, results_by_target, output_dir)
             logger.info(f"✓ Successfully wrote job view to: {view_path}")
 
             # Check what was created
@@ -128,38 +137,42 @@ def test_direct_writing():
                 with open(manifest_path, 'r') as f:
                     manifest = json.load(f)
                 logger.info(f"✓ Manifest created:")
-                logger.info(f"  - Total rows: {manifest['row_counts']['total']}")
-                logger.info(f"  - Available: {manifest['row_counts']['available']}")
-                logger.info(f"  - Failed: {manifest['row_counts']['failed']}")
+                logger.info(f"  - Targets: {list(manifest.get('targets', {}).keys())}")
+                for target_name, target_info in manifest.get('targets', {}).items():
+                    logger.info(f"  - Target '{target_name}':")
+                    logger.info(f"      Rows: {target_info['rows']}")
+                    logger.info(f"      Mean loss: {target_info.get('mean_loss', 'N/A')}")
             else:
                 logger.error("✗ No manifest.json found")
 
-            # Check Parquet files
-            data_dir = job_dir / "data"
-            if data_dir.exists():
-                parquet_files = list(data_dir.glob("*.parquet"))
-                logger.info(f"✓ Found {len(parquet_files)} Parquet file(s)")
+            # Check Parquet files for each target
+            targets_dir = job_dir / "targets"
+            if targets_dir.exists():
+                for target_dir in targets_dir.iterdir():
+                    if target_dir.is_dir():
+                        parquet_path = target_dir / "data.parquet"
+                        if parquet_path.exists():
+                            logger.info(f"✓ Found Parquet for target '{target_dir.name}'")
 
-                # Try to read the Parquet data
-                try:
-                    import pyarrow.parquet as pq
-                    table = pq.read_table(str(data_dir))
-                    logger.info(f"✓ Successfully read Parquet table:")
-                    logger.info(f"  - Rows: {table.num_rows}")
-                    logger.info(f"  - Columns: {table.column_names}")
+                            # Try to read the Parquet data
+                            try:
+                                import pyarrow.parquet as pq
+                                table = pq.read_table(str(parquet_path))
+                                logger.info(f"  - Rows: {table.num_rows}")
+                                logger.info(f"  - Columns: {len(table.column_names)}")
 
-                    # Show first few rows
-                    import pandas as pd
-                    df = table.to_pandas()
-                    logger.info("\nFirst 3 rows of data:")
-                    logger.info(df.head(3).to_string())
+                                # Show column names
+                                param_cols = [c for c in table.column_names if c.startswith('param_')]
+                                logger.info(f"  - Parameter columns: {param_cols}")
 
-                except ImportError:
-                    logger.warning("pyarrow not installed - cannot read Parquet files")
-                except Exception as e:
-                    logger.error(f"Failed to read Parquet: {e}")
+                            except ImportError:
+                                logger.warning("pyarrow not installed - cannot read Parquet files")
+                            except Exception as e:
+                                logger.error(f"Failed to read Parquet: {e}")
+                        else:
+                            logger.error(f"✗ No Parquet file for target '{target_dir.name}'")
             else:
-                logger.error("✗ No data directory found")
+                logger.error("✗ No targets directory found")
 
         except Exception as e:
             logger.error(f"✗ Failed to write job view: {e}")
@@ -178,7 +191,7 @@ def test_with_non_aggregation_results():
 
     job = create_test_job()
 
-    # Mix of result types
+    # Mix of result types - simulating what happens with a single target
     results = [
         "not_an_aggregation_return",  # Should be skipped
         {"loss": 100},  # Should be skipped
@@ -206,11 +219,14 @@ def test_with_non_aggregation_results():
                 import json
                 with open(manifest_path, 'r') as f:
                     manifest = json.load(f)
-                logger.info(f"  - Available rows: {manifest['row_counts']['available']}")
-                if manifest['row_counts']['available'] == 1:
+                # New format uses 'targets' instead of 'row_counts'
+                default_target = manifest['targets'].get('default', {})
+                available = default_target.get('available', 0)
+                logger.info(f"  - Available rows: {available}")
+                if available == 1:
                     logger.info("✓ Correctly processed only the valid AggregationReturn")
                 else:
-                    logger.error(f"✗ Expected 1 row, got {manifest['row_counts']['available']}")
+                    logger.error(f"✗ Expected 1 row, got {available}")
         except Exception as e:
             logger.error(f"✗ Failed with mixed types: {e}")
             return False
