@@ -14,7 +14,11 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     git \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Set timezone to UTC (or your preferred timezone)
+ENV TZ=UTC
 
 # Create non-root user for running Dask
 RUN useradd -m -u 1000 dask

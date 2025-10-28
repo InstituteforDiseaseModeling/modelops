@@ -482,7 +482,7 @@ class ProvenanceStore:
             logger.info(f"Schema '{target_schema}' has no data to clear")
 
     def _upload_to_azure(self, local_dir: Path, remote_prefix: str):
-        """Upload local directory to remote backend.
+        """Upload local directory to remote backend, including subdirectories.
 
         Args:
             local_dir: Local directory to upload
@@ -492,8 +492,8 @@ class ProvenanceStore:
             return
 
         try:
-            # Upload all files in the directory
-            for file_path in local_dir.iterdir():
+            # Upload all files in the directory recursively
+            for file_path in local_dir.rglob('*'):
                 if file_path.is_file():
                     relative_path = file_path.relative_to(local_dir)
                     blob_path = f"{remote_prefix}/{relative_path}"
@@ -503,8 +503,9 @@ class ProvenanceStore:
 
                     # Note: The existing AzureBlobBackend doesn't have async, uses sync save
                     self._azure_backend.save(blob_path, data)
+                    logger.debug(f"Uploaded {relative_path} to {blob_path}")
 
-            logger.debug(f"Queued upload of {local_dir} to {remote_prefix}")
+            logger.info(f"Uploaded directory {local_dir} to Azure prefix {remote_prefix}")
         except Exception as e:
             logger.error(f"Failed to upload to remote: {e}")
             # Don't fail the operation if remote upload fails
