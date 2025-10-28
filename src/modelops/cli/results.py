@@ -320,34 +320,8 @@ def index(
 ):
     """Index simulation results for a completed job into query-ready Parquet."""
     try:
-        from ..services.results_indexer import IndexerConfig, ResultIndexer
-        from ..services.job_registry import JobRegistry
-
-        section(f"Indexing results for job: {job_id}")
-
-        # Initialize job registry
-        if verbose:
-            info("Connecting to job registry...")
-        job_registry = JobRegistry.from_env() if not registry_url else JobRegistry(registry_url)
-
-        # Initialize provenance store
-        if verbose:
-            info(f"Using provenance store at: {storage_dir}")
-        prov_store = ProvenanceStore(storage_dir)
-
-        # Create and run indexer
-        config = IndexerConfig(
-            job_id=job_id,
-            job_registry_uri=registry_url,
-            prov_root=str(storage_dir),
-        )
-
-        if verbose:
-            info("Starting indexer...")
-        indexer = ResultIndexer(config, job_registry, prov_store)
-        result_path = indexer.run()
-
-        success(f"Successfully indexed results to: {result_path}")
+        warning("The index command has been deprecated. Results are now indexed automatically during job execution.")
+        info("To view job results, use: mops results list or mops results show <path>")
 
         # Show summary
         manifest_path = storage_dir / f"token/v1/views/jobs/{job_id}/manifest.json"

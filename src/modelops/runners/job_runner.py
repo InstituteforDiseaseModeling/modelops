@@ -217,6 +217,20 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
         for i, result in enumerate(results[:3]):  # Log first 3
             if hasattr(result, 'loss'):
                 logger.info(f"  Param set {i} loss: {result.loss}")
+
+        # Write Parquet views for post-job analysis
+        try:
+            from modelops.services.job_views import write_job_view
+            from pathlib import Path
+
+            logger.info("Writing job results to Parquet views...")
+            view_path = write_job_view(job, results)
+            logger.info(f"Job view written to: {view_path}")
+        except ImportError as e:
+            logger.warning(f"Could not write job views (missing dependency): {e}")
+        except Exception as e:
+            logger.error(f"Failed to write job views: {e}")
+            # Don't fail the job if view writing fails
     elif job.target_spec:
         # Fallback: evaluate targets on client side if not done on worker
         logger.info("Evaluating targets on client side...")
@@ -387,112 +401,6 @@ def main():
                 run_calibration_job(job, client)
             case _:
                 raise ValueError(f"Unknown job type: {type(job).__name__}")
-
-        # Trigger result indexing on Dask cluster for simulation jobs
-        if isinstance(job, SimJob):
-            try:
-                logger.info("Triggering result indexing on Dask cluster...")
-
-                # Define indexing function to run on worker
-                def run_indexing_on_worker(job_id, job_spec_dict):
-                    """Run indexing on a Dask worker that has the data."""
-                    import logging
-                    from pathlib import Path
-
-                    # Set up logging for the worker task
-                    worker_logger = logging.getLogger("indexer")
-                    worker_logger.setLevel(logging.INFO)
-
-                    try:
-                        from modelops.services.results_indexer import IndexerConfig, ResultIndexer
-                        from modelops.services.job_registry import JobRegistry
-                        from modelops.services.job_state import JobState, JobStatus
-                        from modelops.services.provenance_store import ProvenanceStore
-                        from modelops_contracts import SimJob
-                        from datetime import datetime, timezone
-                        import json
-
-                        # Create temporary job registry with this job's info
-                        # Since we can't access the main registry from the worker
-                        temp_registry_dir = Path(f"/tmp/modelops/temp_registry/{job_id}")
-                        temp_registry_dir.mkdir(parents=True, exist_ok=True)
-
-                        # Create a minimal registry with just this job
-                        registry = JobRegistry(str(temp_registry_dir))
-
-                        # Reconstruct the job from the dict
-                        # SimJob is a dataclass, reconstruct it properly
-                        from modelops_contracts.simulation import SimTask
-                        from modelops_contracts.jobs import TargetSpec
-
-                        # Reconstruct tasks
-                        tasks = [SimTask(**task_dict) for task_dict in job_spec_dict.get('tasks', [])]
-
-                        # Reconstruct target_spec if present
-                        target_spec = None
-                        if job_spec_dict.get('target_spec'):
-                            target_spec = TargetSpec(**job_spec_dict['target_spec'])
-
-                        # Reconstruct the job
-                        job_obj = SimJob(
-                            job_id=job_spec_dict['job_id'],
-                            bundle_ref=job_spec_dict['bundle_ref'],
-                            tasks=tasks,
-                            metadata=job_spec_dict.get('metadata', {}),
-                            priority=job_spec_dict.get('priority', 0),
-                            resource_requirements=job_spec_dict.get('resource_requirements'),
-                            target_spec=target_spec
-                        )
-
-                        # Create job state for the registry
-                        job_state = JobState(
-                            job_id=job_id,
-                            status=JobStatus.SUCCEEDED,
-                            created_at=datetime.now(timezone.utc).isoformat(),
-                            updated_at=datetime.now(timezone.utc).isoformat(),
-                        )
-                        job_state.job_spec = job_obj
-
-                        # Add to registry
-                        registry._write_job_file(job_state)
-
-                        # Create indexer config
-                        config = IndexerConfig(
-                            job_id=job_id,
-                            prov_root="/tmp/modelops/provenance/token/v1"
-                        )
-
-                        # Create provenance store
-                        store = ProvenanceStore(Path("/tmp/modelops/provenance"))
-
-                        # Run indexer
-                        indexer = ResultIndexer(config, registry, store)
-                        result_path = indexer.run()
-
-                        worker_logger.info(f"Indexing completed: {result_path}")
-                        return result_path
-
-                    except Exception as e:
-                        worker_logger.error(f"Indexing failed on worker: {e}")
-                        raise
-
-                # Submit indexing task to Dask
-                # Convert job to dict for serialization
-                from dataclasses import asdict
-                job_dict = asdict(job)
-
-                future = client.submit(run_indexing_on_worker, job.job_id, job_dict,
-                                      key=f"index-{job.job_id}")
-
-                # Wait for indexing to complete (with timeout)
-                result_path = future.result(timeout=120)
-                logger.info(f"Result indexing completed successfully: {result_path}")
-
-            except TimeoutError:
-                logger.error("Result indexing timed out after 120 seconds")
-            except Exception as e:
-                logger.error(f"Result indexing failed: {e}")
-                # Don't fail the entire job if indexing fails
 
         logger.info("Job execution completed successfully")
 
