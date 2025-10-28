@@ -71,7 +71,7 @@ def write_job_view(
             "bundle_ref": job.bundle_ref,
             "entrypoint": first_task.entrypoint,
             "loss": float(result.loss) if result.loss is not None else None,
-            "n_replicates": result.n_sim_returns,
+            "n_replicates": result.n_replicates,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
