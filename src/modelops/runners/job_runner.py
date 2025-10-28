@@ -421,7 +421,28 @@ def main():
                         registry = JobRegistry(str(temp_registry_dir))
 
                         # Reconstruct the job from the dict
-                        job_obj = SimJob.model_validate(job_spec_dict)
+                        # SimJob is a dataclass, reconstruct it properly
+                        from modelops_contracts.simulation import SimTask
+                        from modelops_contracts.jobs import TargetSpec
+
+                        # Reconstruct tasks
+                        tasks = [SimTask(**task_dict) for task_dict in job_spec_dict.get('tasks', [])]
+
+                        # Reconstruct target_spec if present
+                        target_spec = None
+                        if job_spec_dict.get('target_spec'):
+                            target_spec = TargetSpec(**job_spec_dict['target_spec'])
+
+                        # Reconstruct the job
+                        job_obj = SimJob(
+                            job_id=job_spec_dict['job_id'],
+                            bundle_ref=job_spec_dict['bundle_ref'],
+                            tasks=tasks,
+                            metadata=job_spec_dict.get('metadata', {}),
+                            priority=job_spec_dict.get('priority', 0),
+                            resource_requirements=job_spec_dict.get('resource_requirements'),
+                            target_spec=target_spec
+                        )
 
                         # Create job state for the registry
                         job_state = JobState(
@@ -457,7 +478,8 @@ def main():
 
                 # Submit indexing task to Dask
                 # Convert job to dict for serialization
-                job_dict = job.model_dump()
+                from dataclasses import asdict
+                job_dict = asdict(job)
 
                 future = client.submit(run_indexing_on_worker, job.job_id, job_dict,
                                       key=f"index-{job.job_id}")
