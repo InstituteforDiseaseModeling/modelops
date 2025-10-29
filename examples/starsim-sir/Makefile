@@ -15,10 +15,10 @@ CALABARIA   := $(REPO_ROOT)/modelops-calabaria
 MODELOPS    := $(abspath ../..)  # Current repo is modelops
 
 # --- Example config ---
-MODEL_CLASS := models.seir:StochasticSEIR
+MODEL_CLASS := models.sir:StarsimSIR
 STUDY_FILE  := study.json
 N_SAMPLES   := 128
-N_REPLICATES := 60
+N_REPLICATES := 30
 NAMESPACE   := modelops-dask-dev
 
 # --- Venv and tools ---
@@ -111,6 +111,8 @@ bundle-init: $(VENV)/.installed
 		echo "Initializing bundle project..."; \
 		$(BIN)/modelops-bundle init .; \
 		echo "dev" > .modelops-bundle/env; \
+		echo "Adding starsim dependency..."; \
+		$(UV) add starsim sciris; \
 	else \
 		echo "Project already initialized (pyproject.toml exists)"; \
 		[ -f .modelops-bundle/env ] || echo "dev" > .modelops-bundle/env; \
@@ -123,15 +125,15 @@ bundle-status: $(VENV)/.installed
 .PHONY: bundle-register
 bundle-register: $(VENV)/.installed
 	# Generate observed data if not present
-	@if [ ! -f data/observed_prevalence.csv ]; then \
-		echo "Generating observed data..."; \
+	@if [ ! -f data/observed_incidence.csv ]; then \
+		echo "Generating observed data with true parameters (beta=0.08, dur_inf=5.0)..."; \
 		$(PY) generate_observed_data.py; \
 	fi
 	# Register the model for cloud job submission
-	$(BIN)/modelops-bundle register-model models/seir.py --no-confirm
+	$(BIN)/modelops-bundle register-model models/sir.py --no-confirm
 	# Register targets - auto-discovers decorated functions and their dependencies
-	$(BIN)/modelops-bundle register-target targets/prevalence.py --no-confirm
-	@echo "✓ Registered SEIR model and calibration targets"
+	$(BIN)/modelops-bundle register-target targets/incidence.py --no-confirm
+	@echo "✓ Registered SIR model and calibration targets"
 
 .PHONY: bundle-push
 bundle-push: $(VENV)/.installed
@@ -151,7 +153,7 @@ $(STUDY_FILE): $(VENV)/.installed
 		--output $(STUDY_FILE) \
 		--seed 42 \
 		--scramble \
-		--targets "targets.prevalence:prevalence_target"
+		--targets "targets.incidence:incidence_target"
 	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 
 .PHONY: submit

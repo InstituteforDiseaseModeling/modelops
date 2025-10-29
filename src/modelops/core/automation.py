@@ -45,6 +45,36 @@ from .paths import ensure_work_dir, get_backend_url
 from .naming import StackNaming
 
 
+def get_stack_output(component: str, output_key: str, env: str = "dev") -> Optional[str]:
+    """Get a single output value from a Pulumi stack.
+
+    Args:
+        component: Component name (e.g., "storage", "infra", "registry")
+        output_key: Key of the output to retrieve
+        env: Environment name (dev, staging, prod)
+
+    Returns:
+        The output value as a string, or None if not found
+    """
+    try:
+        # Use the existing outputs function
+        stack_outputs = outputs(component, env, refresh=False)
+
+        # Return the specific output
+        if output_key in stack_outputs:
+            output = stack_outputs[output_key]
+            # Handle Output objects
+            if hasattr(output, 'value'):
+                return output.value
+            return str(output)
+
+        return None
+
+    except Exception:
+        # Silently fail - caller should handle missing outputs
+        return None
+
+
 def configure_quiet_environment():
     """Configure environment variables to suppress noisy output from gRPC/Pulumi."""
     # Suppress gRPC warnings about fork support

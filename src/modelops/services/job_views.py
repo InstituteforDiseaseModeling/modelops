@@ -151,19 +151,14 @@ def write_job_view(
         "target_spec": _serialize_target_spec(job.target_spec) if job.target_spec else None,
     }
 
-    # Upload to Azure if ProvenanceStore is available
+    # Prepare Azure blob URLs if ProvenanceStore is available
     if prov_store and hasattr(prov_store, '_azure_backend') and prov_store._azure_backend:
         try:
-            logger.info("Uploading job views to Azure...")
-
-            # Upload the entire job directory
-            remote_prefix = f"views/jobs/{job.job_id}"
-            prov_store._upload_to_azure(job_dir, remote_prefix)
-
             # Extract storage account name from connection string
             account_name = _extract_account_name(prov_store._azure_backend.connection_string or "")
             if account_name:
-                # Build blob URLs
+                # Build blob URLs that will be valid after upload
+                remote_prefix = f"views/jobs/{job.job_id}"
                 base_url = f"https://{account_name}.blob.core.windows.net/results/{remote_prefix}"
                 manifest["blob_url"] = f"{base_url}/manifest.json"
 
@@ -172,18 +167,30 @@ def write_job_view(
                     target_url = f"{base_url}/targets/{target_name}/data.parquet"
                     target_summaries[target_name]["blob_url"] = target_url
                     blob_urls[target_name] = target_url
+        except Exception as e:
+            logger.error(f"Failed to prepare Azure URLs: {e}")
 
+    # Write manifest (with blob URLs if available)
+    manifest_path = job_dir / "manifest.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    # Upload to Azure if ProvenanceStore is available
+    if prov_store and hasattr(prov_store, '_azure_backend') and prov_store._azure_backend:
+        try:
+            logger.info("Uploading job views to Azure...")
+
+            # Upload the entire job directory (including manifest)
+            remote_prefix = f"views/jobs/{job.job_id}"
+            prov_store._upload_to_azure(job_dir, remote_prefix)
+
+            if blob_urls:
                 logger.info(f"Job views uploaded to: {base_url}")
                 for target_name, url in blob_urls.items():
                     logger.info(f"  Target '{target_name}': {url}")
         except Exception as e:
             logger.error(f"Failed to upload to Azure: {e}")
-            # Continue without blob URLs
-
-    # Write manifest (after adding blob URLs if available)
-    manifest_path = job_dir / "manifest.json"
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
+            # Continue without upload
 
     logger.info(f"Job view written to {job_dir}")
     logger.info(f"  Total targets: {len(target_summaries)}")

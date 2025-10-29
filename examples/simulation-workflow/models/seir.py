@@ -3,6 +3,7 @@
 import numpy as np
 import polars as pl
 from typing import Dict, Any, Mapping
+from dataclasses import dataclass
 
 from modelops_calabaria import (
     BaseModel, ParameterSpace, ParameterSpec, ParameterSet,
@@ -10,31 +11,58 @@ from modelops_calabaria import (
 )
 
 
+@dataclass(frozen=True)
+class SEIRConfig:
+    """Fixed configuration for SEIR simulation.
+
+    These are simulation settings that remain constant across all parameter
+    samples during calibration. Only the disease dynamics parameters
+    (beta, sigma, gamma) are varied by the sampling algorithm.
+    """
+    population: int = 50000
+    initial_infected: int = 5
+    simulation_days: int = 150
+    dt: float = 0.1  # Time step for simulation
+
+
 class StochasticSEIR(BaseModel):
     """Minimal stochastic SEIR model for testing job submission."""
 
     @classmethod
     def parameter_space(cls):
-        """Define parameter space for Sobol sampling."""
+        """Define parameter space for calibration.
+
+        Only disease dynamics parameters are included here.
+        Fixed simulation settings are handled via SEIRConfig.
+        """
         return ParameterSpace([
             ParameterSpec("beta", 0.1, 2.0, "float", doc="Transmission rate"),
             ParameterSpec("sigma", 0.05, 0.5, "float", doc="Incubation rate"),
             ParameterSpec("gamma", 0.05, 0.5, "float", doc="Recovery rate"),
-            ParameterSpec("population", 10000, 100000, "int", doc="Population size"),
-            ParameterSpec("initial_infected", 1, 10, "int", doc="Initial infected"),
-            ParameterSpec("simulation_days", 100, 200, "int", doc="Days to simulate"),
         ])
 
     def __init__(self, space=None):
-        """Initialize with parameter space."""
+        """Initialize with parameter space.
+
+        Args:
+            space: Parameter space for calibration
+        """
         if space is None:
             space = self.parameter_space()
-        super().__init__(space, base_config={"dt": 0.1})
+
+        # Initialize with default config
+        self.config = SEIRConfig()
+        # Pass empty base_config
+        super().__init__(space, base_config={})
 
     def build_sim(self, params: ParameterSet, config: Mapping[str, Any]) -> Dict:
-        """Build simulation state from parameters."""
-        N = int(params["population"])
-        I0 = int(params["initial_infected"])
+        """Build simulation state from parameters and config.
+
+        Uses fixed configuration from self.config for simulation settings,
+        and params only for disease dynamics.
+        """
+        N = self.config.population
+        I0 = self.config.initial_infected
         E0 = 0  # Start with no exposed
         S0 = N - I0
         R0 = 0
@@ -46,8 +74,8 @@ class StochasticSEIR(BaseModel):
                 "sigma": float(params["sigma"]),
                 "gamma": float(params["gamma"]),
                 "N": N,
-                "days": int(params["simulation_days"]),
-                "dt": config.get("dt", 0.1)
+                "days": self.config.simulation_days,
+                "dt": config.get("dt", self.config.dt)  # Use passed config dt if available, else default
             }
         }
 

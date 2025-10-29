@@ -295,21 +295,34 @@ def stats(
 
 
 @app.command()
-def index(
-    job_id: str = typer.Argument(
-        ...,
-        help="Job ID to index results for"
-    ),
-    storage_dir: Path = typer.Option(
-        Path("/tmp/modelops/provenance"),
-        "--storage-dir",
-        "-s",
-        help="Storage directory for provenance store"
-    ),
-    registry_url: Optional[str] = typer.Option(
+def download(
+    job_id: Optional[str] = typer.Argument(
         None,
-        "--registry-url",
-        help="Job registry URL (defaults to environment)"
+        help="Job ID to download results for (or latest if not specified)"
+    ),
+    output_dir: Path = typer.Option(
+        Path("./results"),
+        "--output",
+        "-o",
+        help="Output directory for downloaded files"
+    ),
+    targets: Optional[str] = typer.Option(
+        None,
+        "--targets",
+        "-t",
+        help="Comma-separated list of targets to download (default: all)"
+    ),
+    format: str = typer.Option(
+        "parquet",
+        "--format",
+        "-f",
+        help="Download format: parquet, manifest, or all"
+    ),
+    env: Optional[str] = typer.Option(
+        None,
+        "--env",
+        "-e",
+        help="Environment name (dev, staging, prod)"
     ),
     verbose: bool = typer.Option(
         False,
@@ -318,30 +331,165 @@ def index(
         help="Show detailed progress"
     ),
 ):
-    """Index simulation results for a completed job into query-ready Parquet."""
+    """Download job results from Azure blob storage.
+
+    Downloads Parquet files and manifest for completed jobs from Azure.
+    If no job ID is specified, uses the latest completed job.
+
+    Examples:
+        mops results download                     # Download latest job results
+        mops results download job-abc123          # Download specific job
+        mops results download -o ./my-results     # Custom output directory
+        mops results download --targets prevalence,incidence  # Specific targets
+    """
+    import os
+    from azure.storage.blob import BlobServiceClient
+
     try:
-        warning("The index command has been deprecated. Results are now indexed automatically during job execution.")
-        info("To view job results, use: mops results list or mops results show <path>")
+        # Get connection string from environment or Pulumi stack
+        conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        if not conn_str:
+            # Try to get from Pulumi stack (canonical source)
+            from ..core.automation import get_stack_output
+            from ..core.config import ModelOpsConfig
+
+            # Load config to get environment
+            try:
+                config = ModelOpsConfig.load()
+                actual_env = env or config.environment or "dev"
+            except:
+                actual_env = env or "dev"
+
+            # Try to get from storage component
+            if verbose:
+                info(f"Getting connection string from Pulumi stack (storage component, env={actual_env})...")
+
+            conn_str = get_stack_output("storage", "connection_string", actual_env)
+
+            if not conn_str:
+                # Fallback: try to get from infra component (some deployments might have it there)
+                conn_str = get_stack_output("infra", "storageConnectionString", actual_env)
+
+            if not conn_str:
+                error(f"Could not get Azure storage connection string from Pulumi stacks.")
+                info(f"Tried stacks: modelops-storage-{actual_env}, modelops-infra-{actual_env}")
+                info("\nOptions:")
+                info("1. Ensure storage is deployed: mops infra up")
+                info("2. Set AZURE_STORAGE_CONNECTION_STRING environment variable")
+                info(f"3. Get it manually: pulumi stack output connectionString --stack modelops-storage-{actual_env}")
+                raise typer.Exit(code=1)
+
+        # Create blob service client
+        blob_service = BlobServiceClient.from_connection_string(conn_str)
+        container_client = blob_service.get_container_client("results")
+
+        # If no job_id, try to find the latest
+        if not job_id:
+            info("Looking for latest job...")
+            # List all job directories with their timestamps
+            prefix = "views/jobs/"
+            blobs = container_client.list_blobs(name_starts_with=prefix)
+
+            # Track latest job by modification time
+            latest_job = None
+            latest_time = None
+
+            for blob in blobs:
+                # Extract job ID from path
+                parts = blob.name.split("/")
+                if len(parts) >= 3 and parts[2].startswith("job-"):
+                    job_id_candidate = parts[2]
+                    blob_time = blob.last_modified
+
+                    # Track the latest by actual modification time
+                    if latest_time is None or blob_time > latest_time:
+                        latest_time = blob_time
+                        latest_job = job_id_candidate
+
+            if not latest_job:
+                error("No jobs found in Azure storage")
+                raise typer.Exit(code=1)
+
+            job_id = latest_job
+            info(f"Using latest job: {job_id} (modified: {latest_time.strftime('%Y-%m-%d %H:%M:%S UTC')})")
+
+        # Create output directory
+        job_output_dir = output_dir / job_id
+        job_output_dir.mkdir(parents=True, exist_ok=True)
+
+        section(f"Downloading results for job {job_id}")
+
+        # Download manifest if requested
+        if format in ["manifest", "all"]:
+            manifest_blob = f"views/jobs/{job_id}/manifest.json"
+            manifest_path = job_output_dir / "manifest.json"
+            try:
+                blob_client = container_client.get_blob_client(manifest_blob)
+                with open(manifest_path, "wb") as f:
+                    download_stream = blob_client.download_blob()
+                    f.write(download_stream.readall())
+                success(f"Downloaded manifest to {manifest_path}")
+
+                # Parse manifest to show summary
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+                    if "targets" in manifest:
+                        info(f"Available targets: {', '.join(manifest['targets'].keys())}")
+            except Exception as e:
+                if verbose:
+                    warning(f"Could not download manifest: {e}")
+
+        # Download Parquet files
+        if format in ["parquet", "all"]:
+            # List all parquet files for this job
+            prefix = f"views/jobs/{job_id}/targets/"
+            blobs = container_client.list_blobs(name_starts_with=prefix)
+
+            downloaded = 0
+            for blob in blobs:
+                if blob.name.endswith(".parquet"):
+                    # Extract target name from path
+                    parts = blob.name.split("/")
+                    if len(parts) >= 5:
+                        target_name = parts[4]
+
+                        # Check if we should download this target
+                        if targets:
+                            target_list = [t.strip() for t in targets.split(",")]
+                            if target_name not in target_list:
+                                continue
+
+                        # Create target directory
+                        target_dir = job_output_dir / "targets" / target_name
+                        target_dir.mkdir(parents=True, exist_ok=True)
+
+                        # Download the Parquet file
+                        output_path = target_dir / "data.parquet"
+                        blob_client = container_client.get_blob_client(blob.name)
+
+                        with open(output_path, "wb") as f:
+                            download_stream = blob_client.download_blob()
+                            f.write(download_stream.readall())
+
+                        info(f"Downloaded {target_name} ({blob.size:,} bytes)")
+                        downloaded += 1
+
+            if downloaded > 0:
+                success(f"Downloaded {downloaded} Parquet file(s) to {job_output_dir}")
+            else:
+                warning("No Parquet files found for this job")
 
         # Show summary
-        manifest_path = storage_dir / f"token/v1/views/jobs/{job_id}/manifest.json"
-        if manifest_path.exists():
-            with open(manifest_path, 'r') as f:
-                manifest = json.load(f)
-                section("Index Summary")
-                info_dict({
-                    "Total rows": manifest["row_counts"]["total"],
-                    "Available": manifest["row_counts"]["available"],
-                    "Missing": manifest["row_counts"]["missing"],
-                    "Failed": manifest["row_counts"].get("failed", 0),
-                    "Dataset": manifest["dataset_uri"],
-                })
+        section("Download complete")
+        info(f"Results saved to: {job_output_dir}")
 
-    except ValueError as e:
-        error(f"Job not found: {e}")
-        raise typer.Exit(code=1)
+        # Suggest next steps
+        info("\nNext steps:")
+        info("  - Load Parquet files with polars: pl.read_parquet('path/to/data.parquet')")
+        info("  - Or use DuckDB for SQL queries: duckdb.sql('SELECT * FROM read_parquet(...)')")
+
     except Exception as e:
-        error(f"Failed to index results: {e}")
+        error(f"Failed to download results: {e}")
         if verbose:
             import traceback
             console.print(traceback.format_exc())
