@@ -156,8 +156,8 @@ $(STUDY_FILE): $(VENV)/.installed
 
 .PHONY: submit
 submit: bundle-init bundle-register $(STUDY_FILE) $(VENV)/.installed
-	# Submit with auto-push from current directory
-	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE)) --auto
+	# Submit with auto-push from current directory (default)
+	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE))
 	@echo "✓ Submitted job with auto-pushed bundle"
 
 .PHONY: workflow

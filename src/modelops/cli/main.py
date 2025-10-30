@@ -144,6 +144,19 @@ app.add_typer(
     hidden=False
 )
 
+# Conditionally add bundle subcommand if modelops-bundle is installed
+try:
+    from . import bundle
+    app.add_typer(
+        bundle.app,
+        name="bundle",
+        help="Bundle packaging and registry management",
+        hidden=False
+    )
+except ImportError:
+    # modelops-bundle not installed, skip bundle commands
+    pass
+
 
 @app.command()
 def version():

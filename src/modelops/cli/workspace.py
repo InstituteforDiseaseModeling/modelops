@@ -72,25 +72,25 @@ def up(
                         "scheduler": {
                             "image": unified_config.workspace.scheduler_image,
                             "resources": {
-                                "requests": {"memory": "2Gi", "cpu": "1"},
-                                "limits": {"memory": "2Gi", "cpu": "1"}
+                                "requests": {"memory": unified_config.workspace.scheduler_memory, "cpu": unified_config.workspace.scheduler_cpu},
+                                "limits": {"memory": unified_config.workspace.scheduler_memory, "cpu": unified_config.workspace.scheduler_cpu}
                             }
                         },
                         "workers": {
                             "replicas": unified_config.workspace.worker_replicas,
                             "image": unified_config.workspace.worker_image,
                             "resources": {
-                                "requests": {"memory": "4Gi", "cpu": "2"},
-                                "limits": {"memory": "4Gi", "cpu": "2"}
+                                "requests": {"memory": unified_config.workspace.worker_memory, "cpu": unified_config.workspace.worker_cpu},
+                                "limits": {"memory": unified_config.workspace.worker_memory, "cpu": unified_config.workspace.worker_cpu}
                             },
                             "processes": unified_config.workspace.worker_processes,
                             "threads": unified_config.workspace.worker_threads
                         },
                         "autoscaling": {
-                            "enabled": True,
-                            "min_workers": 2,
-                            "max_workers": 10,
-                            "target_cpu": 70
+                            "enabled": unified_config.workspace.autoscaling_enabled,
+                            "min_workers": unified_config.workspace.autoscaling_min_workers,
+                            "max_workers": unified_config.workspace.autoscaling_max_workers,
+                            "target_cpu": unified_config.workspace.autoscaling_target_cpu
                         }
                     }
                 )

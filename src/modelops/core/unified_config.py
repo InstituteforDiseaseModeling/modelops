@@ -65,10 +65,19 @@ class WorkspaceSpec(BaseModel):
     """Dask workspace specification."""
     scheduler_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest"
     scheduler_replicas: int = 1
+    scheduler_memory: str = "2Gi"
+    scheduler_cpu: str = "1"
     worker_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest"
     worker_replicas: int = 2
-    worker_processes: int = 4
-    worker_threads: int = 1
+    worker_processes: int = 3  # Multiple processes for pure Python simulations
+    worker_threads: int = 1  # Single thread per process to avoid GIL contention
+    worker_memory: str = "8Gi"  # More memory to prevent OOM
+    worker_cpu: str = "3.5"  # Slightly less than 4 vCPUs to allow for system overhead
+    # Autoscaling configuration
+    autoscaling_enabled: bool = True
+    autoscaling_min_workers: int = 2
+    autoscaling_max_workers: int = 10
+    autoscaling_target_cpu: int = 70
 
 
 class UnifiedModelOpsConfig(ConfigModel):
@@ -193,7 +202,7 @@ class UnifiedModelOpsConfig(ConfigModel):
                     kubernetes_version=old_infra.cluster.aks.kubernetes_version if old_infra.cluster and old_infra.cluster.aks else "1.30",
                     node_pools=node_pools or [
                         NodePoolSpec(name="system", mode="System", vm_size="Standard_B2s", count=1),
-                        NodePoolSpec(name="workers", mode="User", vm_size="Standard_B4ms", min=1, max=3)
+                        NodePoolSpec(name="workers", mode="User", vm_size="Standard_D4s_v3", min=2, max=20)
                     ]
                 )
             )
@@ -219,7 +228,7 @@ class UnifiedModelOpsConfig(ConfigModel):
                     kubernetes_version="1.30",
                     node_pools=[
                         NodePoolSpec(name="system", mode="System", vm_size="Standard_B2s", count=1),
-                        NodePoolSpec(name="workers", mode="User", vm_size="Standard_B4ms", min=1, max=3)
+                        NodePoolSpec(name="workers", mode="User", vm_size="Standard_D4s_v3", min=2, max=20)
                     ]
                 )
             )

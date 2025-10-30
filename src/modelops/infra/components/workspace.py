@@ -378,7 +378,13 @@ class DaskWorkspace(pulumi.ComponentResource):
                             "app": "dask-scheduler",
                             "modelops.io/component": "scheduler"
                         },
-                        annotations=scheduler_annotations if scheduler_annotations else None
+                        annotations={
+                            **(scheduler_annotations if scheduler_annotations else {}),
+                            # CRITICAL: Prevent cluster autoscaler from evicting scheduler
+                            # Without this, scheduler can be killed during node scale-down,
+                            # causing total loss of all job progress and task state
+                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false"
+                        }
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # Security: Run containers as non-root to prevent privilege escalation
@@ -468,7 +474,28 @@ class DaskWorkspace(pulumi.ComponentResource):
             ),
             opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
         )
-        
+
+        # Create PodDisruptionBudget for scheduler to prevent disruption
+        # This ensures scheduler pod cannot be evicted during node maintenance or updates
+        scheduler_pdb = k8s.policy.v1.PodDisruptionBudget(
+            f"{name}-scheduler-pdb",
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                namespace=namespace,
+                name="dask-scheduler-pdb",
+                labels={
+                    "modelops.io/component": "scheduler",
+                    "app": "dask-scheduler"
+                }
+            ),
+            spec=k8s.policy.v1.PodDisruptionBudgetSpecArgs(
+                min_available=1,  # Always keep scheduler running
+                selector=k8s.meta.v1.LabelSelectorArgs(
+                    match_labels={"app": "dask-scheduler"}
+                )
+            ),
+            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+        )
+
         # Extract autoscaling config if using structured config
         autoscaling_config = None
         if "spec" in config and "autoscaling" in config["spec"]:

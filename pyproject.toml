@@ -26,6 +26,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Full suite of ModelOps tools for end users
+full = [
+    "modelops-bundle @ git+https://github.com/institutefordiseasemodeling/modelops-bundle.git",
+    "modelops-calabaria @ git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git",
+]
 # Azure dependencies are in main for MVP
 # Future: aws = ["pulumi-aws>=..."]
 # Future: gcp = ["pulumi-gcp>=..."]
@@ -40,6 +45,7 @@ build-backend = "hatchling.build"
 [tool.uv.sources]
 modelops-contracts = { git = "https://github.com/institutefordiseasemodeling/modelops-contracts.git" }
 modelops-bundle = { git = "https://github.com/institutefordiseasemodeling/modelops-bundle.git" }
+modelops-calabaria = { git = "https://github.com/institutefordiseasemodeling/modelops-calabaria.git" }
 
 [dependency-groups]
 azure = [
@@ -53,6 +59,9 @@ dev = [
     "pytest-cov>=6.2.1",
     "pytest-timeout>=2.4.0",
 ]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build]
 packages = ["src/modelops", "examples"]

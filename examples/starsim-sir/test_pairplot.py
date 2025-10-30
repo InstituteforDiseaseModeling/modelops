@@ -12,7 +12,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def create_loss_pairplot(df, param_cols=None, figsize=(15, 15), alpha=0.3, cmap='viridis'):
+def create_loss_pairplot(df, param_cols=None, figsize=(15, 15), alpha=1, cmap='viridis'):
     """
     Create a pairplot showing loss relationships with parameters.
 
@@ -36,6 +36,13 @@ def create_loss_pairplot(df, param_cols=None, figsize=(15, 15), alpha=0.3, cmap=
     # Get loss values for coloring
     losses = df['loss'].to_numpy()
     loss_norm = (losses - losses.min()) / (losses.max() - losses.min())
+
+    # Compute consistent axis limits for each parameter
+    param_limits = {}
+    for col in param_cols:
+        data = df[col].to_numpy()
+        margin = (data.max() - data.min()) * 0.02  # 2% margin
+        param_limits[col] = (data.min() - margin, data.max() + margin)
 
     # Find the MLE (minimum loss) point
     mle_idx = np.argmin(losses)
@@ -137,15 +144,36 @@ def create_loss_pairplot(df, param_cols=None, figsize=(15, 15), alpha=0.3, cmap=
                     ax.scatter(x_data, y_data, c=losses, s=3, alpha=0.2,
                              cmap=cmap, edgecolors='none')
 
+                    # Mark MLE point with star
+                    ax.scatter([mle_params[param_j]], [mle_params[param_i]],
+                              color='red', s=200, marker='*', zorder=10,
+                              edgecolors='white', linewidth=1)
+
+                    # Add crosshairs at MLE
+                    ax.axvline(mle_params[param_j], color='red', linestyle='--', alpha=0.3, linewidth=1)
+                    ax.axhline(mle_params[param_i], color='red', linestyle='--', alpha=0.3, linewidth=1)
+
                 except Exception as e:
                     # Fallback to scatter if interpolation fails
                     print(f"Contour failed for {param_i} vs {param_j}: {e}")
                     ax.scatter(x_data, y_data, c=losses, s=10, alpha=alpha, cmap=cmap)
+                    # Still mark MLE in fallback
+                    ax.scatter([mle_params[param_j]], [mle_params[param_i]],
+                              color='red', s=200, marker='*', zorder=10)
 
             else:
                 # Lower triangle: scatter plots
                 ax.scatter(x_data, y_data, c=losses, s=10, alpha=alpha,
                          cmap=cmap, edgecolors='none')
+
+                # Mark MLE point with star
+                ax.scatter([mle_params[param_j]], [mle_params[param_i]],
+                          color='red', s=200, marker='*', zorder=10,
+                          edgecolors='white', linewidth=1)
+
+                # Add crosshairs at MLE
+                ax.axvline(mle_params[param_j], color='red', linestyle='--', alpha=0.3, linewidth=1)
+                ax.axhline(mle_params[param_i], color='red', linestyle='--', alpha=0.3, linewidth=1)
 
             # Handle tick labels and axis labels more carefully
             if i < n_params - 1:
@@ -177,8 +205,11 @@ def create_loss_pairplot(df, param_cols=None, figsize=(15, 15), alpha=0.3, cmap=
 
             # Set consistent axis limits for each parameter
             if i != j:
-                ax.set_xlim(x_data.min(), x_data.max())
-                ax.set_ylim(y_data.min(), y_data.max())
+                ax.set_xlim(param_limits[param_j])
+                ax.set_ylim(param_limits[param_i])
+            else:
+                # For diagonal plots, set x limits
+                ax.set_xlim(param_limits[param_j])
 
             # Format tick values to avoid scientific notation for small ranges
             # Only apply to numeric axes (not string types)

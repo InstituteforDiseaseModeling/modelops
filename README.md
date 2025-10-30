@@ -8,69 +8,130 @@ calibration workloads.
 
 ## What is ModelOps?
 
-ModelOps provides the infrastructure layer for running distributed simulations
-and adaptive optimization algorithms (Optuna, MCMC) on Kubernetes. It
-implements the contracts defined in `modelops-contracts` and provides runtime
-infrastructure for science frameworks like `modelops-calabaria`.
+ModelOps is the infrastructure layer for the ModelOps/Calabaria cloud
+simulation-based modeling platform.
 
-**Key Features:**
+With its sibling packages like
+[ModelOps-Calabaria](https://github.com/institutefordiseasemodeling/modelops-calabaria)
+and
+[ModelOps-Bundle](https://github.com/institutefordiseasemodeling/modelops-bundle),
+ModelOps/Calabaria allows researchers to:
+
+ 1. Spin up their own (non-shared) cloud-based cluster, complete with a
+    parallel simulation execution service, via a user-friendly command-line
+    interface.
+ 2. Use ModelOps-Bundle to effortlessly and reproducibly mirror model code and
+    data between the research-user's workstation and the cloud. ModelOps-Bundle
+    tracks registered models and their data and code dependencies, ensuring
+    that cloud execution results are fully provenanced and scientifically
+    reproducible. ModelOps-Bundle is intentionally decoupled (and not a
+    replacement for) version control software like Git by design. This allows
+    the user to develop and refine multiple model variants in the same project
+    repository without invalidating past model runs or calibrations when a
+    different model's code is changed (i.e., via a model-specific dependency
+    graph).
+
+3. ModelOps-Calabaria is the science-facing interface layer, which has four key
+   components:
+
+   a. A thin, user-friendly interface that wraps *any* model, allowing it
+   to run on the ModelOps platform. This interface decouples the *modeling
+   interface* (i.e., running simulations) from the underlying simulation library
+   (e.g., Starsim, LASER, EMOD, etc.).
+
+   b. A common interface to a suite of available calibration algorithms that
+   are plug-and-play once a model has been wrapped in Calabaria's model interface.
+
+   c. An expressive, declarative, user-friendly interface for common model
+   workflow operations, such as running different scenarios,
+   reparameterizations, running models on a subset of free parameters after
+   fixing others, etc.
+
+   d. A toolkit of common modeling operations, such as generating parameter
+   sweeps using quasi-random low-discrepancy sequences (e.g., Sobol sequences),
+   random samples, grids, etc.
+
+**Key ModelOps Design Features:**
+
+- **CLI for spinning up & tearing down** all cloud infrastructure needed to run models
 - **Four-stack architecture** with Pulumi for clean infrastructure management
-- **OCI bundle support** for reproducible simulation code distribution
+- **OCI bundle support** for reproducible simulation code distribution (via [ModelOps-Contracts](https://github.com/institutefordiseasemodeling/modelops-contracts))
 - **Warm process pools** for 16x faster simulation execution
 - **Single source of truth** for Docker images and configuration
-- **Azure-native** with AWS/GCP coming soon
+- **Azure-native** (with AWS/GCP easily addable later)
 
 ## Prerequisites
 
-### Required Tools
 - **Python 3.11+**
-- **Azure CLI** (`az`) - [Install guide](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli)
-- **kubectl** - [Install guide](https://kubernetes.io/docs/tasks/tools/)
-- **Docker** - [Install guide](https://docs.docker.com/get-docker/)
+- **Azure CLI** (`az`) - [Install guide](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli), used for logging in to Azure.
+- **Azure subscription** - [Get free trial](https://azure.microsoft.com/free)
 
-### Python Package Manager
-We recommend using `uv` for fast dependency management:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Additionally, developers and early alpha testers benefit from installing
+
+- **kubectl** - [Install guide](https://kubernetes.io/docs/tasks/tools/)
+
+since logging/job monitoring functionality is not fully built out into the
+ModelOps CLI yet. Developers should also install Docker,
+
+- **Docker** - [Install guide](https://docs.docker.com/get-docker/)
 
 ## Installation
 
+### Quick Install (Recommended)
+
+The fastest way to get started is with our installer script:
+
 ```bash
-# Clone the repository
+# Clone the repository (organization members have access)
+git clone https://github.com/InstituteforDiseaseModeling/modelops.git
+cd modelops
+bash install.sh
+```
+
+Once the repository is public, you'll be able to install directly:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/InstituteforDiseaseModeling/modelops/main/install.sh | bash
+```
+
+This installer will:
+- Install `uv` (modern Python package manager) if not present
+- Install the complete ModelOps suite: `mops`, `modelops-bundle`, and `cb` commands
+- Configure your shell PATH (with your permission)
+- Verify the installation
+
+### Alternative: Manual Installation
+
+If you prefer to install manually or are developing ModelOps:
+
+```bash
+# Install uv first
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install ModelOps with all components
+uv tool install "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
+```
+
+### For Developers
+
+```bash
+# Clone repositories
 git clone https://github.com/institutefordiseasemodeling/modelops.git
 cd modelops
 
-# Install with uv (recommended)
-uv pip install -e .
-
-# Or with standard pip
-pip install -e .
+# Install in development mode
+uv pip install -e ".[full]"
 ```
 
-**Note**: Pulumi is installed automatically as a Python dependency via the Automation API - no separate Pulumi CLI installation required.
-
-## Prerequisites
-
-- **Python 3.11+**
-- **Azure CLI** (`az`) - [Install guide](https://aka.ms/azure-cli)
-- **kubectl** - [Install guide](https://kubernetes.io/docs/tasks/tools/)
-- **Docker** - [Install guide](https://docs.docker.com/get-docker/)
-- **Azure subscription** - [Get free trial](https://azure.microsoft.com/free)
+**Note**: Pulumi is installed automatically as a Python dependency - no separate CLI installation required.
 
 ## Quick Start
 
-### 1. Install ModelOps
-```bash
-git clone https://github.com/institutefordiseasemodeling/modelops.git
-cd modelops
-pip install -e .
-```
+### 1. Initialize Configuration
 
-### 2. Initialize Configuration
-
-Currently only Azure is supported by ModelOps, but core cloud infra component
-code is written in a way that makes extending to other cloud providers easy.
+First, we need to configure ModelOps to work with your Azure environment. This
+creates a config file with your resource names, cluster settings, and
+deployment preferences.
 
 ```bash
 # Login to Azure
@@ -85,7 +146,12 @@ mops init
 mops init --interactive
 ```
 
-### 3. Deploy Infrastructure
+### 2. Deploy Infrastructure
+
+Now we'll provision provision all the cloud infrastructure needed to work with
+ModelOps/Calabaria (e.g. Kubernetes cluster, container registry, and storage).
+This typically takes 10-15 minutes.
+
 ```bash
 # Deploy (uses ~/.modelops/modelops.yaml by default)
 mops infra up
@@ -94,70 +160,136 @@ mops infra up
 mops infra status
 ```
 
-### 4. Run a Simulation
+### 3. Initialize a Project
+
+With infrastructure ready, let's set up a project for ModelOps. You can either
+create a new project from scratch or add ModelOps-Bundle support to an existing
+one. This is necessary to register models with ModelsOps-Bundle so they can be
+run on the cloud.
+
 ```bash
-# First, activate your virtual environment
-source .venv/bin/activate  # or wherever your venv is
+# For a new project
+mkdir my-simulation
+cd my-simulation
+mops bundle init .
+```
 
-# Set up your project for bundle packaging
-cd your-project-directory
+For this tutorial, we'll work through an existing example, the Starsim SIR model:
 
-# Initialize bundle project (creates pyproject.toml)
-mops-bundle init .
+```bash
+# Navigate to the example project
+cd examples/starsim-sir
+mops bundle init .
+# This creates pyproject.toml and .modelops-bundle/ for tracking
 
-# Check bundle status
-mops-bundle status
+# Check what's being tracked
+mops bundle status
+```
 
-# Generate observed data (needed for calibration targets)
-python3 generate_observed_data.py
+**Note:** All commands from here on assume you're in the
+`examples/starsim-sir/` directory (after you've cloned this repo with `git
+clone https://github.com/institutefordiseasemodeling/modelops.git ` for the
+examples).
 
-# Register your model
-mops-bundle register-model models/seir.py --no-confirm
+### 4. Register Models
 
-# Register calibration targets with data
-mops-bundle register-target targets/prevalence.py --no-confirm
+Model registration tells ModelOps which code and data files and model
+dependencies, to make cloud execution scientifically reproducible. This design
+keeps infrastructure code separate from your scientific models --- your model
+stays pure Python with no cloud/execution concerns, so you can run models
+locally or in a Jupyter notebook too!
 
-# Install Calabaria for experiment design
-pip install git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git
+```bash
+# Register a model class with its dependencies
+mops bundle register-model models/sir.py --no-confirm
+# Auto-discovers all BaseModel subclasses in the file
 
-# Generate study with Sobol sampling
-cb sampling sobol "models/seir.py:StochasticSEIR" \
+# Or register specific class with data dependencies
+mops bundle register-model models/sir.py --class StochasticSIR \
+  --data data/demographics.csv \
+  --data config/contact_matrix.csv
+
+# Why? When ANY dependency changes, ModelOps knows to invalidate
+# cached results and re-run. Your model code stays clean - no
+# decorators or infrastructure imports needed!
+```
+
+### 5. Define Targets
+
+Targets (a Calabaria feature) define how your model interfaces with observed
+data. When you register a target, it enables ModelOps to automatically compute
+losses when doing parameter "sweeps", and is necessary when doing model
+calibrations.
+
+Here, for the sake of the example, we'll generate synthetic observed data, then
+register target functions.
+
+```bash
+# Generate synthetic observed data for testing
+python generate_observed_data.py
+# Creates data/observed_incidence.csv or similar
+
+# Register target functions that compare model output to data
+mops bundle register-target targets/incidence.py --no-confirm
+# Targets define loss functions for calibration
+
+# Targets can use different evaluation strategies:
+# - replicate_mean_mse: Average replicates first, then compute MSE
+# - mean_of_per_replicate_mse: Compute MSE per replicate, then average
+```
+
+### 6. Design and Submit Experiments
+
+Now create a parameter sweep study and submit it for distributed execution.
+
+```bash
+# Generate Sobol sampling study (quasi-random parameter exploration)
+cb sampling sobol "models/sir.py:StochasticSIR" \
   --scenario baseline \
   --n-samples 256 \
   --n-replicates 500 \
   --seed 42 \
   --scramble \
-  --targets "targets.prevalence:prevalence_target" \
+  --targets "targets.incidence:incidence_target" \
   --output study.json
-# Generated 256 Sobol samples for 6 parameters
-# ✓ Generated SimulationStudy with 256 parameter sets
-#   Model: models/seir.py/baseline
-#   Sampling: sobol
-#   Targets: targets.prevalence:prevalence_target
-#   Output: study.json
 
-# Submit to cluster with auto-push bundle
+# Submit job to cluster (auto-pushes bundle to registry)
 mops jobs submit study.json --auto
 
-# Monitor jobs
-mops jobs sync    # Sync status from Kubernetes
-mops jobs list    # List all jobs with status
-
-# Example output:
-#                     Recent Jobs (last 24 hours, PDT)
-# ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━┓
-# ┃ Job ID       ┃ Status    ┃ Progress ┃ Created        ┃ Updated        ┃
-# ┡━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━┩
-# │ job-5b718dc8 │ running   │ -        │ 7 minutes ago  │ just now       │
-# │ job-e6169049 │ failed    │ -        │ 11 minutes ago │ just now       │
-# │ job-267aa463 │ failed    │ -        │ 13 minutes ago │ just now       │
-# └──────────────┴───────────┴──────────┴────────────────┴────────────────┘
-
-# Get detailed status
-mops jobs status <job-id>
+# Monitor execution
+mops jobs list          # See all jobs
+mops jobs status <job-id>  # Detailed status
 ```
 
-### 5. Clean Up
+### 7. Download and Analyze Results
+
+After jobs complete, download results and generate diagnostic reports.
+
+```bash
+# Download results from cloud storage (auto-detects latest job if no ID given)
+mops results download
+# Downloads Parquet files to results/ directory
+
+# Or download specific job
+mops results download job-abc123
+
+# Generate calibration diagnostics PDF report
+cb diagnostics report results/views/jobs/<job-id>/targets/incidence/data.parquet
+# Creates a PDF with:
+# - Overview with optimum summary and loss landscape
+# - 1D parameter profiles showing loss vs each parameter
+# - 2D contour plots for parameter pairs
+
+# View the PDF report
+open results/views/jobs/<job-id>/targets/incidence/data_diagnostic_report.pdf
+```
+
+### 8. Clean Up
+
+When you're done experimenting, tear down the cloud resources to avoid
+unnecessary charges. This removes all Azure resources but preserves your local
+configuration and code.
+
 ```bash
 # Destroy infrastructure
 mops infra down
@@ -212,11 +344,14 @@ ModelOps uses a four-stack pattern with Pulumi:
 3. **Workspace Stack** - Dask cluster deployment
 4. **Adaptive Stack** - Optimization runs (Optuna, MCMC)
 
-Each stack references outputs from previous stacks, enabling clean separation of concerns and independent lifecycle management.
+Each stack references outputs from previous stacks, enabling clean separation
+of concerns and independent lifecycle management.
 
-## Contributing
+## Contributing & Feedback
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+We welcome contributions! Feel free to reach out to Vince Buffalo
+(vince.buffalo@gatesfoundation.org) for tips on how to get started and where
+efforts would be most helpful!
 
 ## Related Projects
 

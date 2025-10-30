@@ -172,8 +172,8 @@ def init(
     provider = "azure"
     location = "eastus2"
     k8s_version = "1.30"
-    worker_vm_size = "Standard_B4ms"
-    max_workers = 3
+    worker_vm_size = "Standard_D4s_v3"
+    max_workers = 20
 
     # Try to get actual K8s version
     try:

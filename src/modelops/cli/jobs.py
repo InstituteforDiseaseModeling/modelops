@@ -195,7 +195,7 @@ def submit(
         None, "--bundle", "-b", help="Explicit bundle reference (sha256:...)"
     ),
     auto: bool = typer.Option(
-        False, "--auto", help="Auto-push bundle from current directory"
+        True, "--auto/--no-auto", help="Auto-push bundle from current directory (default: True)"
     ),
     env: Optional[str] = env_option(),
 ):
@@ -205,11 +205,16 @@ def submit(
     (e.g., 'cb sampling sobol'). The job specification will be uploaded
     to blob storage to avoid ConfigMap size limits.
 
-    Examples:
-        # Auto-push current directory and submit
-        mops jobs submit study.json --auto
+    By default, auto-pushes the bundle from the current directory.
 
-        # Use explicit bundle digest
+    Examples:
+        # Auto-push current directory and submit (default)
+        mops jobs submit study.json
+
+        # Disable auto-push (requires explicit bundle)
+        mops jobs submit study.json --no-auto --bundle sha256:abc123...
+
+        # Use explicit bundle digest (overrides auto)
         mops jobs submit study.json --bundle sha256:abc123...
     """
     # Use config default if env not specified
@@ -252,12 +257,12 @@ def submit(
         raise typer.Exit(1)
 
     # Determine bundle reference
-    if auto and bundle:
-        error("Cannot use both --auto and --bundle")
-        raise typer.Exit(1)
-
-    if auto:
-        # Auto-push bundle from current directory
+    if bundle:
+        # Explicit bundle overrides auto
+        bundle_ref = bundle
+        info(f"\n Using explicit bundle: {bundle_ref[:20]}...")
+    elif auto:
+        # Auto-push bundle from current directory (default)
         section("Auto-pushing bundle")
         try:
             from modelops_bundle.api import push_dir
@@ -297,11 +302,8 @@ def submit(
         except Exception as e:
             error(f"\nBundle push failed: {e}")
             raise typer.Exit(1)
-    elif bundle:
-        bundle_ref = bundle
-        info(f"\n Using explicit bundle: {bundle_ref[:20]}...")
     else:
-        error("Must specify either --bundle or --auto")
+        error("Must specify either --bundle or use --auto (default)")
         raise typer.Exit(1)
 
     # Submit using client

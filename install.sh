@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# ModelOps Installer Script
+# Installs uv (if needed) and the complete ModelOps suite
+
+set -euo pipefail
+
+# Color codes for beautiful output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Fancy banner
+print_banner() {
+    printf "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}\n"
+    printf "${CYAN}║                                                          ║${NC}\n"
+    printf "${CYAN}║           ${BOLD}ModelOps/Calabaria Installer${NC}${CYAN}                 ║${NC}\n"
+    printf "${CYAN}║                                                          ║${NC}\n"
+    printf "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+}
+
+# Print colored messages
+info() {
+    echo -e "${BLUE}ℹ${NC} $1"
+}
+
+success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+warning() {
+    echo -e "${YELLOW}⚠${NC} $1"
+}
+
+error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Detect the shell
+detect_shell() {
+    if [ -n "${SHELL:-}" ]; then
+        case "$SHELL" in
+            */bash)
+                echo "bash"
+                ;;
+            */zsh)
+                echo "zsh"
+                ;;
+            */fish)
+                echo "fish"
+                ;;
+            *)
+                echo "bash"  # Default fallback
+                ;;
+        esac
+    else
+        echo "bash"
+    fi
+}
+
+# Get shell config file
+get_shell_config() {
+    local shell_name="$1"
+    case "$shell_name" in
+        bash)
+            if [ -f "$HOME/.bashrc" ]; then
+                echo "$HOME/.bashrc"
+            elif [ -f "$HOME/.bash_profile" ]; then
+                echo "$HOME/.bash_profile"
+            else
+                echo "$HOME/.profile"
+            fi
+            ;;
+        zsh)
+            if [ -f "$HOME/.zshrc" ]; then
+                echo "$HOME/.zshrc"
+            else
+                echo "$HOME/.zprofile"
+            fi
+            ;;
+        fish)
+            echo "$HOME/.config/fish/config.fish"
+            ;;
+        *)
+            echo "$HOME/.profile"
+            ;;
+    esac
+}
+
+# Check if directory is in PATH
+is_in_path() {
+    local dir="$1"
+    case ":$PATH:" in
+        *":$dir:"*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Install uv if not present
+install_uv() {
+    if command_exists uv; then
+        success "uv is already installed ($(uv --version))"
+        return 0
+    fi
+
+    info "Installing uv package manager..."
+
+    # Download and install uv
+    if command_exists curl; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    elif command_exists wget; then
+        wget -qO- https://astral.sh/uv/install.sh | sh
+    else
+        error "Neither curl nor wget found. Please install one of them first."
+        exit 1
+    fi
+
+    # Source the uv env file to get it in current session
+    if [ -f "$HOME/.local/bin/env" ]; then
+        source "$HOME/.local/bin/env"
+    fi
+
+    if command_exists uv; then
+        success "uv installed successfully!"
+    else
+        warning "uv installed but not yet in PATH. Will be available after PATH configuration."
+    fi
+}
+
+# Install ModelOps suite
+install_modelops() {
+    info "Installing ModelOps suite with all components..."
+    echo -e "${CYAN}  • mops${NC} - Infrastructure management"
+    echo -e "${CYAN}  • modelops-bundle${NC} - Bundle packaging"
+    echo -e "${CYAN}  • cb${NC} - Calabaria experiment design"
+    echo ""
+
+    # Try to install with full extras, specifying Python 3.12+
+    if uv tool install --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git" 2>/dev/null; then
+        success "ModelOps suite installed successfully!"
+    else
+        # If uv is not in PATH yet, try with full path
+        if [ -x "$HOME/.local/bin/uv" ]; then
+            "$HOME/.local/bin/uv" tool install --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
+            if [ $? -eq 0 ]; then
+                success "ModelOps suite installed successfully!"
+            else
+                error "Failed to install ModelOps. This requires Python 3.12 or later."
+                info "uv can automatically install Python 3.12 for you."
+                info "If installation failed, try: uv python install 3.12"
+                exit 1
+            fi
+        else
+            error "Failed to install ModelOps. Please check your network connection."
+            exit 1
+        fi
+    fi
+}
+
+# Configure PATH
+configure_path() {
+    local bin_dir="$HOME/.local/bin"
+    local shell_name=$(detect_shell)
+    local shell_config=$(get_shell_config "$shell_name")
+
+    # Check if already in PATH
+    if is_in_path "$bin_dir"; then
+        success "PATH already configured correctly"
+        return 0
+    fi
+
+    echo ""
+    warning "PATH configuration needed"
+    info "ModelOps tools are installed in: ${BOLD}$bin_dir${NC}"
+    echo ""
+    echo "To use ModelOps commands, you need to add this directory to your PATH."
+    echo ""
+
+    # Generate the appropriate command for their shell
+    local path_cmd=""
+    case "$shell_name" in
+        fish)
+            path_cmd="set -U fish_user_paths $bin_dir \$fish_user_paths"
+            ;;
+        *)
+            path_cmd="export PATH=\"$bin_dir:\$PATH\""
+            ;;
+    esac
+
+    echo -e "${BOLD}Option 1: Automatic configuration${NC}"
+    echo "Add the following line to $shell_config:"
+    echo ""
+    echo -e "    ${GREEN}$path_cmd${NC}"
+    echo ""
+
+    # Offer to add it automatically
+    read -p "Would you like to add this automatically? [y/N] " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        # Check if it's already there
+        if ! grep -q "$bin_dir" "$shell_config" 2>/dev/null; then
+            echo "" >> "$shell_config"
+            echo "# Added by ModelOps installer" >> "$shell_config"
+            echo "$path_cmd" >> "$shell_config"
+            success "PATH configuration added to $shell_config"
+            echo ""
+            info "Please run: ${BOLD}source $shell_config${NC}"
+            info "Or start a new terminal session"
+        else
+            info "PATH configuration already exists in $shell_config"
+        fi
+    else
+        echo ""
+        echo -e "${BOLD}Option 2: Manual configuration${NC}"
+        echo "Add this line to $shell_config yourself:"
+        echo ""
+        echo -e "    ${GREEN}$path_cmd${NC}"
+        echo ""
+        echo "Then reload your shell configuration:"
+        echo -e "    ${GREEN}source $shell_config${NC}"
+    fi
+}
+
+# Verify installation
+verify_installation() {
+    echo ""
+    info "Verifying installation..."
+
+    local tools_found=true
+
+    # Check if mops is installed (the main entry point)
+    if [ -x "$HOME/.local/bin/mops" ]; then
+        echo -e "  ${GREEN}✓${NC} mops installed"
+        # Check if bundle and cb commands are available through mops
+        if "$HOME/.local/bin/mops" bundle --help >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} mops bundle available"
+        else
+            echo -e "  ${YELLOW}⚠${NC} mops bundle not available (modelops-bundle may not be installed)"
+            tools_found=false
+        fi
+    else
+        echo -e "  ${RED}✗${NC} mops not found"
+        tools_found=false
+    fi
+
+    if [ "$tools_found" = true ]; then
+        echo ""
+        success "All ModelOps tools installed successfully!"
+        echo ""
+        printf "${BOLD}Quick Start:${NC}\n"
+        echo "  1. Configure your Azure credentials:"
+        printf "     ${CYAN}az login${NC}\n"
+        echo ""
+        echo "  2. Initialize ModelOps configuration:"
+        printf "     ${CYAN}mops init${NC}\n"
+        echo ""
+        echo "  3. Deploy infrastructure:"
+        printf "     ${CYAN}mops infra up${NC}\n"
+        echo ""
+        echo "  4. Create a new project:"
+        printf "     ${CYAN}mkdir my-project && cd my-project${NC}\n"
+        printf "     ${CYAN}mops bundle init .${NC}\n"
+        echo ""
+        echo "For more information: https://github.com/institutefordiseasemodeling/modelops"
+    else
+        warning "Some tools were not installed correctly."
+        echo "Please check the installation and try again."
+    fi
+}
+
+# Main installation flow
+main() {
+    print_banner
+
+    info "Starting ModelOps installation..."
+    echo ""
+
+    # Step 1: Install uv
+    install_uv
+    echo ""
+
+    # Step 2: Install ModelOps
+    install_modelops
+    echo ""
+
+    # Step 3: Configure PATH
+    configure_path
+    echo ""
+
+    # Step 4: Verify
+    verify_installation
+}
+
+# Run main function
+main

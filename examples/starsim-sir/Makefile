@@ -17,8 +17,8 @@ MODELOPS    := $(abspath ../..)  # Current repo is modelops
 # --- Example config ---
 MODEL_CLASS := models.sir:StarsimSIR
 STUDY_FILE  := study.json
-N_SAMPLES   := 128
-N_REPLICATES := 30
+N_SAMPLES   := 256
+N_REPLICATES := 10
 NAMESPACE   := modelops-dask-dev
 
 # --- Venv and tools ---
@@ -47,7 +47,9 @@ help:
 	@echo ""
 	@echo "Workflow:"
 	@echo "  make study           - Generate Sobol samples -> $(STUDY_FILE)"
-	@echo "  make submit          - Submit job with auto-push bundle"
+	@echo "  make study-grid      - Generate 5x5 grid samples -> study-grid.json"
+	@echo "  make submit          - Submit Sobol study job with auto-push bundle"
+	@echo "  make submit-grid     - Submit grid study job with auto-push bundle"
 	@echo "  make workflow        - setup -> bundle -> study -> submit"
 	@echo ""
 	@echo "Monitoring:"
@@ -156,11 +158,31 @@ $(STUDY_FILE): $(VENV)/.installed
 		--targets "targets.incidence:incidence_target"
 	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 
+.PHONY: study-grid
+study-grid: study-grid.json
+
+study-grid.json: $(VENV)/.installed
+	$(BIN)/cb sampling grid $(MODEL_CLASS) \
+		--scenario baseline \
+		--grid-points 60 \
+		--n-replicates 20 \
+		--output study-grid.json \
+		--seed 42 \
+		--targets "targets.incidence:incidence_replicate_mean_target" \
+		--targets "targets.incidence:incidence_per_replicate_target"
+	@echo "✓ Wrote study-grid.json with grid points, 20 replicates each, 2 targets"
+
 .PHONY: submit
 submit: bundle-init bundle-register $(STUDY_FILE) $(VENV)/.installed
-	# Submit with auto-push from current directory
-	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE)) --auto
+	# Submit with auto-push from current directory (default)
+	$(BIN)/mops jobs submit $(abspath $(STUDY_FILE))
 	@echo "✓ Submitted job with auto-pushed bundle"
+
+.PHONY: submit-grid
+submit-grid: bundle-init bundle-register study-grid.json $(VENV)/.installed
+	# Submit grid study with auto-push from current directory (default)
+	$(BIN)/mops jobs submit $(abspath study-grid.json)
+	@echo "✓ Submitted grid study job with auto-pushed bundle"
 
 .PHONY: workflow
 workflow: setup bundle-init bundle-register study submit
@@ -268,6 +290,6 @@ clean-bundle:
 
 .PHONY: clean
 clean: clean-bundle clean-data
-	rm -f $(STUDY_FILE)
+	rm -f $(STUDY_FILE) study-grid.json
 	rm -rf $(VENV) .constraints.txt
 	@echo "✓ Clean complete"
