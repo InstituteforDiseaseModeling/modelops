@@ -16,11 +16,11 @@ NC='\033[0m' # No Color
 
 # Fancy banner
 print_banner() {
-    printf "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}\n"
-    printf "${CYAN}║                                                          ║${NC}\n"
-    printf "${CYAN}║     ${BOLD}ModelOps/Calabaria Installer${NC}${CYAN}             ║${NC}\n"
-    printf "${CYAN}║                                                          ║${NC}\n"
-    printf "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
+    printf "${CYAN}╔══════════════════════════════════════════════════════╗${NC}\n"
+    printf "${CYAN}║                                                      ║${NC}\n"
+    printf "${CYAN}║          ${BOLD}ModelOps/Calabaria Installer${NC}${CYAN}                ║${NC}\n"
+    printf "${CYAN}║                                                      ║${NC}\n"
+    printf "${CYAN}╚══════════════════════════════════════════════════════╝${NC}\n"
 }
 
 # Print colored messages
