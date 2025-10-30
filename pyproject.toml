@@ -66,6 +66,14 @@ allow-direct-references = true
 [tool.hatch.build]
 packages = ["src/modelops", "examples"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/modelops"]
+include = [
+    "src/modelops/**/*.py",
+    "src/modelops/**/*.yaml",
+    "src/modelops/**/*.yml",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

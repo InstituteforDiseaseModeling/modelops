@@ -36,8 +36,8 @@ class ImageConfig(BaseModel):
             # Look in current directory first
             path = Path("modelops-images.yaml")
             if not path.exists():
-                # Try parent directory (for when running from subdirs)
-                path = Path(__file__).parent.parent.parent / "modelops-images.yaml"
+                # Look in package directory (for installed package)
+                path = Path(__file__).parent / "modelops-images.yaml"
 
         if not path.exists():
             raise FileNotFoundError(f"Image configuration not found: {path}")

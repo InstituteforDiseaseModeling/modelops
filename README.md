@@ -205,7 +205,7 @@ mops bundle register-model models/sir.py --no-confirm
 # Auto-discovers all BaseModel subclasses in the file
 
 # Or register specific class with data dependencies
-mops bundle register-model models/sir.py --class StochasticSIR \
+mops bundle register-model models/sir.py --class StarsimSIR \
   --data data/demographics.csv \
   --data config/contact_matrix.csv
 
