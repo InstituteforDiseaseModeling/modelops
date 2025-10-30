@@ -331,7 +331,10 @@ Attributes: CPU/GPU shape, min/max replicas, spot/priority, image constraints, t
 ### Core Dependencies
 - Python >=3.11 (specified in pyproject.toml)
 - Kubernetes for container orchestration
-- Pulumi for infrastructure as code
+- **Pulumi CLI** (required separately from Python SDK)
+  - Install via: `brew install pulumi` (macOS), `choco install pulumi` (Windows), or `curl -fsSL https://get.pulumi.com | sh` (Linux/Universal)
+  - The Python `pulumi` package in pyproject.toml is only the SDK - the CLI binary must be installed separately
+- Pulumi Python SDK (pulumi>=3.100.0) for infrastructure as code
 - Dask (2024.8.0) for distributed computation
 - modelops-contracts (stable API contracts)
 

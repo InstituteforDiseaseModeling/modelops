@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 print_banner() {
     printf "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}\n"
     printf "${CYAN}║                                                          ║${NC}\n"
-    printf "${CYAN}║           ${BOLD}ModelOps/Calabaria Installer${NC}${CYAN}                 ║${NC}\n"
+    printf "${CYAN}║     ${BOLD}ModelOps/Calabaria Installer${NC}${CYAN}             ║${NC}\n"
     printf "${CYAN}║                                                          ║${NC}\n"
     printf "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
 }
@@ -140,6 +140,63 @@ install_uv() {
     fi
 }
 
+# Install Pulumi CLI if not present
+install_pulumi() {
+    if command_exists pulumi; then
+        success "Pulumi is already installed ($(pulumi version))"
+        return 0
+    fi
+
+    info "Installing Pulumi CLI (required for infrastructure management)..."
+
+    # Detect OS
+    local os_type=""
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        os_type="linux"
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        os_type="darwin"
+    elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "win32" ]]; then
+        os_type="windows"
+    else
+        os_type="unknown"
+    fi
+
+    # Try to install based on available package managers
+    if [[ "$os_type" == "darwin" ]] && command_exists brew; then
+        info "Installing Pulumi using Homebrew..."
+        brew install pulumi
+    elif [[ "$os_type" == "windows" ]] && command_exists choco; then
+        info "Installing Pulumi using Chocolatey..."
+        choco install pulumi
+    else
+        # Use the universal installer script
+        info "Installing Pulumi using official installer..."
+        if command_exists curl; then
+            curl -fsSL https://get.pulumi.com | sh
+        elif command_exists wget; then
+            wget -qO- https://get.pulumi.com | sh
+        else
+            error "Neither curl nor wget found. Please install one of them first."
+            exit 1
+        fi
+
+        # Add Pulumi to PATH for current session
+        export PATH="$HOME/.pulumi/bin:$PATH"
+    fi
+
+    # Verify installation
+    if command_exists pulumi; then
+        success "Pulumi CLI installed successfully!"
+
+        # Configure Pulumi for local backend (development mode)
+        info "Configuring Pulumi for local development..."
+        pulumi login --local >/dev/null 2>&1 || true
+        success "Pulumi configured for local backend"
+    else
+        warning "Pulumi installed but not yet in PATH. Will be available after PATH configuration."
+    fi
+}
+
 # Install ModelOps suite
 install_modelops() {
     info "Installing ModelOps suite with all components..."
@@ -173,11 +230,22 @@ install_modelops() {
 # Configure PATH
 configure_path() {
     local bin_dir="$HOME/.local/bin"
+    local pulumi_dir="$HOME/.pulumi/bin"
     local shell_name=$(detect_shell)
     local shell_config=$(get_shell_config "$shell_name")
+    local needs_update=false
 
-    # Check if already in PATH
-    if is_in_path "$bin_dir"; then
+    # Check if both directories are in PATH
+    if ! is_in_path "$bin_dir"; then
+        needs_update=true
+    fi
+
+    # Check if Pulumi was installed via the script (not brew/choco)
+    if [ -d "$pulumi_dir" ] && ! is_in_path "$pulumi_dir"; then
+        needs_update=true
+    fi
+
+    if [ "$needs_update" = false ]; then
         success "PATH already configured correctly"
         return 0
     fi
@@ -185,18 +253,35 @@ configure_path() {
     echo ""
     warning "PATH configuration needed"
     info "ModelOps tools are installed in: ${BOLD}$bin_dir${NC}"
+    if [ -d "$pulumi_dir" ]; then
+        info "Pulumi CLI is installed in: ${BOLD}$pulumi_dir${NC}"
+    fi
     echo ""
-    echo "To use ModelOps commands, you need to add this directory to your PATH."
+    echo "To use ModelOps commands, you need to add these directories to your PATH."
     echo ""
 
     # Generate the appropriate command for their shell
     local path_cmd=""
+    local paths_to_add=""
+
+    # Build the paths we need to add
+    if [ -d "$pulumi_dir" ] && ! is_in_path "$pulumi_dir"; then
+        paths_to_add="$pulumi_dir"
+    fi
+    if ! is_in_path "$bin_dir"; then
+        if [ -n "$paths_to_add" ]; then
+            paths_to_add="$bin_dir:$paths_to_add"
+        else
+            paths_to_add="$bin_dir"
+        fi
+    fi
+
     case "$shell_name" in
         fish)
-            path_cmd="set -U fish_user_paths $bin_dir \$fish_user_paths"
+            path_cmd="set -U fish_user_paths $paths_to_add \$fish_user_paths"
             ;;
         *)
-            path_cmd="export PATH=\"$bin_dir:\$PATH\""
+            path_cmd="export PATH=\"$paths_to_add:\$PATH\""
             ;;
     esac
 
@@ -292,15 +377,19 @@ main() {
     install_uv
     echo ""
 
-    # Step 2: Install ModelOps
+    # Step 2: Install Pulumi CLI
+    install_pulumi
+    echo ""
+
+    # Step 3: Install ModelOps
     install_modelops
     echo ""
 
-    # Step 3: Configure PATH
+    # Step 4: Configure PATH
     configure_path
     echo ""
 
-    # Step 4: Verify
+    # Step 5: Verify
     verify_installation
 }
 
