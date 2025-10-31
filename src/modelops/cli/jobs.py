@@ -320,8 +320,13 @@ def submit(
         info(f"  Environment: {env}")
         info(f"  Status: Running")
 
-        # Show how to check status
-        # job_id already contains "job-" prefix
+        # Show how to monitor the job
+        info("\n To monitor job execution:")
+        info(f"  # Port-forward to access Dask dashboard (run in separate terminals or use &)")
+        info(f"  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8787:8787 &")
+        info(f"  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786 &")
+        info(f"  # Then open http://localhost:8787 in your browser")
+
         info("\n To check job status:")
         info(f"  kubectl -n modelops-dask-dev get job {job_id}")
         info("\n To see logs:")
