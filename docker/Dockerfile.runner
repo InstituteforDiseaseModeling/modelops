@@ -37,6 +37,12 @@ RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
     python -m pip install --upgrade \
     "modelops-contracts @ git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-contracts.git@${CONTRACTS_REF}"
 
+# Install modelops-bundle (needed for bundle management)
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-bundle.git
+
+# Install modelops-calabaria for calibration support
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-calabaria.git
+
 # Verify contracts BEFORE installing modelops
 RUN python - <<'PY'
 import importlib.metadata as md, pydantic
