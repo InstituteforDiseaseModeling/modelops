@@ -4,6 +4,7 @@ FROM python:3.12-slim
 # Build arguments for authentication
 ARG GITHUB_TOKEN
 ARG CONTRACTS_REF=main
+ARG CALABARIA_CACHE_BUST=latest
 LABEL org.vsb.contracts.revision=${CONTRACTS_REF}
 
 # Install system dependencies
@@ -41,7 +42,10 @@ RUN echo "Installing modelops-contracts@${CONTRACTS_REF}" && \
 RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-bundle.git
 
 # Install modelops-calabaria for calibration support
-RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-calabaria.git
+# CALABARIA_CACHE_BUST forces rebuild when calabaria changes (default: latest)
+ARG CALABARIA_CACHE_BUST
+RUN echo "Calabaria cache bust: ${CALABARIA_CACHE_BUST}" && \
+    pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-calabaria.git
 
 # Verify contracts BEFORE installing modelops
 RUN python - <<'PY'
