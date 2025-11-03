@@ -41,6 +41,7 @@ help:
 	@echo ""
 	@echo "Bundle:"
 	@echo "  make bundle-init     - Initialize bundle metadata in this dir"
+	@echo "  make data            - Generate observed data for calibration"
 	@echo "  make bundle-register - Register models for cloud job submission"
 	@echo "  make bundle-status   - Show bundle status"
 	@echo "  make bundle-push     - Push bundle to registry (optional)"
@@ -105,6 +106,22 @@ mops-init: $(VENV)/.installed
 		fi; \
 	fi
 
+# --- Data generation ---
+
+# Generate observed data for calibration
+.PHONY: data
+data: data/observed_incidence.csv data/observed_trajectories.parquet
+
+data/observed_incidence.csv: $(VENV)/.installed generate_observed_data.py
+	@mkdir -p data
+	@echo "Generating observed data with true parameters (beta=0.08, dur_inf=5.0)..."
+	$(PY) generate_observed_data.py
+
+# Also create parquet version for compatibility
+data/observed_trajectories.parquet: data/observed_incidence.csv
+	@touch data/observed_trajectories.parquet
+	@echo "Created placeholder parquet file (real conversion would happen here)"
+
 # --- Bundle commands ---
 
 .PHONY: bundle-init
@@ -125,12 +142,7 @@ bundle-status: $(VENV)/.installed
 	$(BIN)/modelops-bundle status
 
 .PHONY: bundle-register
-bundle-register: $(VENV)/.installed
-	# Generate observed data if not present
-	@if [ ! -f data/observed_incidence.csv ]; then \
-		echo "Generating observed data with true parameters (beta=0.08, dur_inf=5.0)..."; \
-		$(PY) generate_observed_data.py; \
-	fi
+bundle-register: $(VENV)/.installed data
 	# Register the model for cloud job submission
 	$(BIN)/modelops-bundle register-model models/sir.py --no-confirm
 	# Register targets - auto-discovers decorated functions and their dependencies

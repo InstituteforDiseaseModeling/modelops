@@ -303,6 +303,23 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
     logger.info(f"Algorithm: {job.algorithm}")
     logger.info(f"Max iterations: {job.max_iterations}")
 
+    # Check if we should use the new calibration wire
+    try:
+        from modelops_calabaria.calibration.wire import calibration_wire
+
+        # Create simulation service
+        sim_service = DaskSimulationService(client)
+
+        # Use the calibration wire function
+        calibration_wire(job, sim_service)
+        return
+    except ImportError:
+        logger.warning(
+            "modelops-calabaria calibration module not available. "
+            "Using basic implementation."
+        )
+
+    # Fallback to basic implementation if calibration wire not available
     # Create simulation service
     sim_service = DaskSimulationService(client)
 
@@ -366,9 +383,27 @@ def create_adaptive_algorithm(
     Raises:
         ValueError: If algorithm is unknown
     """
-    # This would import the actual algorithm implementations
-    # For now, raise NotImplementedError
-    raise NotImplementedError(f"Algorithm {algorithm} not yet implemented")
+    # Import calibration module from modelops-calabaria
+    try:
+        from modelops_calabaria.calibration import create_algorithm_adapter
+        from modelops_calabaria.calibration.factory import parse_parameter_specs
+    except ImportError as e:
+        raise ImportError(
+            "modelops-calabaria not installed. "
+            "Please install it to use calibration features."
+        ) from e
+
+    # Parse parameter specs if provided
+    parameter_specs = {}
+    if "parameter_specs" in config:
+        parameter_specs = parse_parameter_specs(config["parameter_specs"])
+
+    # Create and return adapter
+    return create_algorithm_adapter(
+        algorithm_type=algorithm,
+        parameter_specs=parameter_specs,
+        config=config,
+    )
 
 
 def evaluate_results(sim_results, target_spec: TargetSpec):
