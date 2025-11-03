@@ -53,6 +53,12 @@ help:
 	@echo "  make submit-grid     - Submit grid study job with auto-push bundle"
 	@echo "  make workflow        - setup -> bundle -> study -> submit"
 	@echo ""
+	@echo "Calibration:"
+	@echo "  make calib-gen                    - Generate calibration spec (replicate_mean)"
+	@echo "  make calib-submit                 - Generate and submit calibration job"
+	@echo "  make calib-gen-per-replicate      - Generate spec with per_replicate target"
+	@echo "  make calib-submit-per-replicate   - Submit per_replicate calibration"
+	@echo ""
 	@echo "Monitoring:"
 	@echo "  make status          - k8s job + pods"
 	@echo "  make logs            - tail first job pod logs"
@@ -200,6 +206,48 @@ submit-grid: bundle-init bundle-register study-grid.json $(VENV)/.installed
 workflow: setup bundle-init bundle-register study submit
 	@echo "✓ Workflow complete. Try: make status"
 
+# --- Calibration ---
+
+.PHONY: calib-gen calib-submit calib-gen-per-replicate calib-submit-per-replicate
+
+# Generate calibration spec with replicate_mean target
+calib-gen: $(VENV)/.installed data
+	@echo "Generating calibration spec with incidence_replicate_mean_target..."
+	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
+	  targets.incidence:incidence_replicate_mean_target \
+	  data/observed_incidence.csv \
+	  beta:0.01:0.2,dur_inf:3:10 \
+	  --max-trials 100 \
+	  --batch-size 4 \
+	  --n-replicates 10 \
+	  --output calibration_spec.json
+	@echo "✓ Generated calibration_spec.json"
+
+# Submit calibration job
+calib-submit: bundle-init bundle-register calib-gen $(VENV)/.installed
+	@echo "Submitting calibration job..."
+	$(BIN)/mops jobs submit-calibration $(abspath calibration_spec.json)
+	@echo "✓ Calibration job submitted"
+
+# Generate calibration spec with per_replicate target (for comparison)
+calib-gen-per-replicate: $(VENV)/.installed data
+	@echo "Generating calibration spec with incidence_per_replicate_target..."
+	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
+	  targets.incidence:incidence_per_replicate_target \
+	  data/observed_incidence.csv \
+	  beta:0.01:0.2,dur_inf:3:10 \
+	  --max-trials 100 \
+	  --batch-size 4 \
+	  --n-replicates 10 \
+	  --output calibration_spec_per_replicate.json
+	@echo "✓ Generated calibration_spec_per_replicate.json"
+
+# Submit per_replicate calibration job
+calib-submit-per-replicate: bundle-init bundle-register calib-gen-per-replicate $(VENV)/.installed
+	@echo "Submitting per_replicate calibration job..."
+	$(BIN)/mops jobs submit-calibration $(abspath calibration_spec_per_replicate.json)
+	@echo "✓ Per-replicate calibration job submitted"
+
 # --- Monitoring ---
 
 .PHONY: status
@@ -302,6 +350,6 @@ clean-bundle:
 
 .PHONY: clean
 clean: clean-bundle clean-data
-	rm -f $(STUDY_FILE) study-grid.json
+	rm -f $(STUDY_FILE) study-grid.json calibration_spec.json calibration_spec_per_replicate.json
 	rm -rf $(VENV) .constraints.txt
 	@echo "✓ Clean complete"

@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "modelops-contracts @ git+https://github.com/institutefordiseasemodeling/modelops-contracts.git",
-    "modelops-calabaria @ file:///Users/vsb/projects/work/modelops-calabaria",
+    "modelops-calabaria @ git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
     "polars>=0.20.0",

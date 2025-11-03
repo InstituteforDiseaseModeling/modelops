@@ -250,6 +250,78 @@ Images are automatically built on push to main:
 - Pushes to `ghcr.io/institutefordiseasemodeling/`
 - Tagged with commit SHA and `latest`
 
+### Dependency Installation (Calabaria and Other Packages)
+
+External dependencies like `modelops-calabaria` and `modelops-bundle` are installed **at Docker image build time** via pip from GitHub repositories.
+
+**How it works:**
+
+In `docker/Dockerfile.runner` (lines 40-44):
+```dockerfile
+# Install modelops-bundle (needed for bundle management)
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-bundle.git
+
+# Install modelops-calabaria for calibration support
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-calabaria.git
+```
+
+These lines pull the latest code from the `main` branch of each repository at build time.
+
+**Deployment Workflow for Fixes:**
+
+When you make a fix to calabaria (or any other installed dependency):
+
+1. **Commit and push to calabaria repo:**
+   ```bash
+   cd modelops-calabaria
+   git add src/modelops_calabaria/calibration/wire.py
+   git commit -m "fix: handle dict results in convert_to_trial_result"
+   git push origin main
+   ```
+
+2. **Trigger image rebuild:**
+   The fix won't be in running pods until images are rebuilt with the updated dependency.
+
+   **Option A: Automatic rebuild (CI/CD)**
+   - Push any commit to the `modelops` repo (even a trivial change)
+   - GitHub Actions will trigger and rebuild all images
+   - Images are pushed to GHCR with the new calabaria code included
+
+   **Option B: Manual rebuild**
+   ```bash
+   cd modelops
+   make build-runner  # Rebuilds runner image with latest calabaria from GitHub
+   docker push ghcr.io/institutefordiseasemodeling/modelops-dask-runner:latest
+   ```
+
+3. **Restart Kubernetes pods to pull new images:**
+   ```bash
+   kubectl rollout restart deployment/dask-runner -n modelops-dask-dev
+   kubectl rollout status deployment/dask-runner -n modelops-dask-dev
+   ```
+
+**Why Image Rebuilds Are Required:**
+
+Unlike code changes to `modelops` itself (which are in the COPY layer), calabaria is installed via `pip install git+https://...`. This means:
+- The calabaria code is **baked into the image** at build time
+- Simply restarting pods won't pick up calabaria fixes
+- You must rebuild the image to get the latest code from GitHub
+- Kubernetes image pull policies may cache `:latest` tags aggressively (use digests for reliability)
+
+**Quick Fix Verification:**
+
+After deploying, verify the fix is actually running:
+```bash
+# Check that the new code is present in the pod
+kubectl exec deployment/dask-runner -n modelops-dask-dev -- \
+  grep -A5 "isinstance(result, dict)" \
+  /usr/local/lib/python3.12/site-packages/modelops_calabaria/calibration/wire.py
+
+# Or check the installed package version/commit
+kubectl exec deployment/dask-runner -n modelops-dask-dev -- \
+  pip show modelops-calabaria
+```
+
 ### Local Development Build
 
 ```bash

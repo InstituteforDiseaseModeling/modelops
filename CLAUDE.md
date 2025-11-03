@@ -107,6 +107,76 @@ while not algo.finished():
     algo.tell(trial_results)
 ```
 
+## Image Build and Deployment
+
+**CRITICAL: Understanding how calabaria gets into images**
+
+### How Dependencies are Installed
+
+The runner and worker images install `modelops-calabaria` **at Docker build time** from GitHub:
+
+```dockerfile
+# In docker/Dockerfile.runner (line 44):
+RUN pip install --no-cache-dir git+https://${GITHUB_TOKEN}@github.com/institutefordiseasemodeling/modelops-calabaria.git
+```
+
+**This means:**
+1. Calabaria is installed from the **main branch** of GitHub when the image is built
+2. Changes to calabaria source code do NOT automatically update running images
+3. Images must be **rebuilt** to pick up calabaria changes
+
+### Deployment Flow for Calabaria Changes
+
+When you fix a bug in `modelops-calabaria`:
+
+1. ✅ **Commit and push to calabaria repo**
+   ```bash
+   cd /Users/vsb/projects/work/modelops-calabaria
+   git add src/modelops_calabaria/...
+   git commit -m "fix: your fix"
+   git push origin main  # Forwards to org repo
+   ```
+
+2. ✅ **Trigger image rebuild** by pushing to modelops repo
+   ```bash
+   cd /Users/vsb/projects/work/modelops
+   # Make a trivial change to trigger CI/CD
+   git commit --allow-empty -m "chore: rebuild images for calabaria fix"
+   git push origin main
+   ```
+
+3. ⏳ **CI/CD builds new images**
+   - GitHub Actions runs in the modelops repo
+   - Rebuilds `modelops-dask-runner` and `modelops-dask-worker` images
+   - New images pushed to GHCR with latest calabaria code
+   - Takes ~5-10 minutes
+
+4. ✅ **Restart workspace to pull new images**
+   ```bash
+   uv run mops workspace down
+   uv run mops workspace up
+   ```
+
+### Image Locations
+
+All images are stored in **GitHub Container Registry (GHCR)**:
+- `ghcr.io/institutefordiseasemodeling/modelops-dask-runner:latest` - Runs calibration/sim jobs
+- `ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest` - Runs simulations
+- `ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest` - Dask scheduler
+
+**NOT** in Azure Container Registry (ACR) - ACR is only for user bundles!
+
+### Common Pitfall
+
+❌ **"I fixed a bug in calabaria but jobs still fail"**
+
+This happens when:
+- You committed the fix to calabaria ✅
+- But images weren't rebuilt ❌
+- So running jobs still use old calabaria code
+
+**Solution:** Push to modelops repo to trigger CI/CD, wait for images to build, then restart workspace.
+
 ## Development Commands
 
 ### Environment Setup

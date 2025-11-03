@@ -1,12 +1,14 @@
 # ModelOps Makefile - Development and Deployment Management
 #
-# WORKFLOW:
-# 1. Push code to GitHub → CI automatically builds images
-# 2. Pull and deploy locally: make pull-latest && make deploy
-# 3. Verify deployment: make verify-deploy
+# WORKFLOW FOR DEPLOYING NEW CODE:
+# 1. Push code to GitHub → CI automatically builds images with :latest tag
+# 2. Deploy to K8s using ONE of these methods:
+#    a) Force rollout: make rollout-images (updates existing deployment)
+#    b) Clean restart: mops workspace down && mops workspace up (recommended)
+# 3. Verify deployment: make show-deployed
 #
+# Note: K8s pulls images directly from the registry. You don't need to pull locally!
 # Images are built by GitHub Actions on every push to main.
-# Check the Actions tab for build status and image digests.
 
 # === Development Variables ===
 MOPS := uv run mops
@@ -16,10 +18,10 @@ ENV ?= dev
 NAMESPACE ?= modelops-dask-$(ENV)
 
 # === Docker Variables ===
-# Load from centralized image configuration (modelops-images.yaml)
+# Default values for GitHub Container Registry
 # These can still be overridden via environment variables or command line
-REGISTRY ?= $(shell uv run mops dev images print registry_host 2>/dev/null || echo ghcr.io)
-ORG ?= $(shell uv run mops dev images print registry_org 2>/dev/null || echo institutefordiseasemodeling)
+REGISTRY ?= ghcr.io
+ORG ?= institutefordiseasemodeling
 PROJECT ?= modelops
 
 # Version includes both modelops and contracts SHAs for immutable tags
@@ -82,13 +84,10 @@ help:
 	@echo "  make test-e2e-fresh    # Run example e2e with fresh venvs (debugging)"
 	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
 	@echo ""
-	@echo "Deployment Commands (Uses CI-built images):"
-	@echo "  make pull-latest      # Pull latest CI-built images from GHCR"
-	@echo "  make deploy           # Deploy CI-built images by digest and verify"
-	@echo "  make deploy-version VERSION=abc123  # Deploy specific version"
-	@echo "  make verify-deploy    # Verify deployed images match expected"
-	@echo "  make rollback         # Rollback to previous deployment"
+	@echo "Deployment Commands:"
+	@echo "  make rollout-images   # Force K8s to re-pull and deploy latest images"
 	@echo "  make show-deployed    # Show currently deployed versions"
+	@echo "  make verify-deploy    # Verify deployed images match expected"
 	@echo ""
 	@echo "Manual Build Commands (Usually done by CI):"
 	@echo "  make build            # Build ALL images locally (requires internet)"
@@ -284,28 +283,9 @@ build-runner: setup-buildx ghcr-login | $(BUILD_DIR)
 
 
 
-## Pull latest CI-built images from GHCR
-pull-latest:
-	@echo "Pulling latest CI-built images from GHCR..."
-	@echo "  Scheduler: $(SCHEDULER_IMAGE):$(VERSION)"
-	@docker pull $(SCHEDULER_IMAGE):$(VERSION) || docker pull $(SCHEDULER_IMAGE):latest
-	@echo "  Worker: $(WORKER_IMAGE):$(VERSION)"
-	@docker pull $(WORKER_IMAGE):$(VERSION) || docker pull $(WORKER_IMAGE):latest
-	@echo "  Runner: $(RUNNER_IMAGE):$(VERSION)"
-	@docker pull $(RUNNER_IMAGE):$(VERSION) || docker pull $(RUNNER_IMAGE):latest
-	@echo "✓ Images pulled successfully"
-
-## Pull specific version from GHCR
-pull-version:
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make pull-version VERSION=abc123"; \
-		exit 1; \
-	fi
-	@echo "Pulling version $(VERSION) from GHCR..."
-	docker pull $(SCHEDULER_IMAGE):$(VERSION)
-	docker pull $(WORKER_IMAGE):$(VERSION)
-	docker pull $(RUNNER_IMAGE):$(VERSION)
-	@echo "✓ Version $(VERSION) pulled successfully"
+# NOTE: pull-latest and pull-version were removed as they're not useful for K8s deployments.
+# Kubernetes pulls images directly from the registry, not from your local Docker daemon.
+# Use 'make rollout-images' to force K8s to re-pull and deploy latest images.
 
 ## Login to GitHub Container Registry
 ghcr-login:
@@ -582,46 +562,14 @@ test-images:
 
 # === Combined Workflows ===
 
-.PHONY: dev-setup dev-test dev-deploy deploy deploy-worker
+.PHONY: dev-setup dev-test dev-deploy
 
-## Deploy CI-built images with verification - RECOMMENDED
-deploy: pull-latest deploy-by-tag verify-deploy
-	@echo "✅ Deployed VERSION=$(VERSION) with verification"
-
-## Deploy specific version from CI
-deploy-version:
-	@if [ -z "$(VERSION)" ]; then \
-		echo "Usage: make deploy-version VERSION=abc123"; \
-		exit 1; \
-	fi
-	@$(MAKE) pull-version VERSION=$(VERSION)
-	@$(MAKE) deploy-by-tag
-	@$(MAKE) verify-deploy
-	@echo "✅ Deployed VERSION=$(VERSION)"
-
-## Deploy pulled images by tag (used by deploy targets)
-deploy-by-tag:
-	@echo "Deploying images to namespace: $(NAMESPACE)"
-	@kubectl -n $(NAMESPACE) set image deployment/$(SCHEDULER_DEPLOYMENT) \
-		$(SCHEDULER_CONTAINER)=$(SCHEDULER_IMAGE):$(VERSION) || \
-		echo "  ⚠️  Warning: Failed to set scheduler image"
-	@kubectl -n $(NAMESPACE) set image deployment/$(WORKER_DEPLOYMENT) \
-		$(WORKER_CONTAINER)=$(WORKER_IMAGE):$(VERSION) || \
-		echo "  ⚠️  Warning: Failed to set worker image"
-	@echo "Waiting for rollouts..."
-	@kubectl rollout status deployment/$(SCHEDULER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || true
-	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s 2>/dev/null || true
+# NOTE: deploy commands were removed as they relied on local Docker pulls.
+# Use 'make rollout-images' to update K8s deployments directly.
 
 ## Deploy with local build (fallback when CI is unavailable)
 deploy-local: build set-images-by-digest verify-deploy
 	@echo "✅ Deployed locally-built VERSION=$(VERSION) with digest verification"
-
-## Quick worker deployment (CI-built)
-deploy-worker: pull-latest
-	@kubectl -n $(NAMESPACE) set image deployment/$(WORKER_DEPLOYMENT) \
-		$(WORKER_CONTAINER)=$(WORKER_IMAGE):$(VERSION)
-	@kubectl rollout status deployment/$(WORKER_DEPLOYMENT) -n $(NAMESPACE) --timeout=180s
-	@echo "✓ Worker deployed! Check with: kubectl -n $(NAMESPACE) get pods"
 
 ## Build and test everything
 dev-test: test test-images
