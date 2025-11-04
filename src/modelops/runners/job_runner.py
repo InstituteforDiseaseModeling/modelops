@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Dict, Any
 
 from azure.storage.blob import BlobServiceClient
@@ -24,6 +25,7 @@ from modelops_contracts import (
     UniqueParameterSet,
 )
 from modelops_contracts.adaptive import AdaptiveAlgorithm
+from modelops.telemetry import TelemetryCollector, TelemetryStorage
 
 # Set up logging
 logging.basicConfig(

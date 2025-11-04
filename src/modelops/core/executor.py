@@ -4,8 +4,11 @@ This is the application service layer - the seam between primary
 adapters (Dask) and secondary adapters (ExecutionEnvironment).
 """
 
+from dataclasses import replace
+
 from modelops_contracts import SimTask, SimReturn
 from modelops_contracts.ports import ExecutionEnvironment
+from modelops.telemetry import TelemetryCollector
 
 
 class SimulationExecutor:
@@ -28,33 +31,54 @@ class SimulationExecutor:
     
     def __init__(self, exec_env: ExecutionEnvironment):
         """Initialize with single dependency.
-        
+
         Args:
             exec_env: Execution environment for running simulations
         """
         self.exec_env = exec_env
+        self.telemetry = TelemetryCollector()
     
     def execute(self, task: SimTask) -> SimReturn:
         """Execute a simulation task.
-        
+
         Currently just delegates to ExecutionEnvironment, but this
         is where we'll add domain logic:
         - Parameter validation
         - Result caching
         - Routing logic
         - Metrics collection
-        
+
         Args:
             task: Simulation task to execute
-            
+
         Returns:
-            SimReturn with outputs and metadata
+            SimReturn with outputs and metadata (includes telemetry in metrics field)
         """
         # Future: self._validate(task)
         # Future: if cached := self._check_cache(task): return cached
-        # Future: with metrics.timer("simulation.execute"):
-        
-        return self.exec_env.run(task)
+
+        with self.telemetry.span(
+            "simulation.execute",
+            param_id=task.params.param_id[:8],
+            seed=str(task.seed),
+        ) as span:
+            # Execute via environment
+            result = self.exec_env.run(task)
+
+            # Collect metrics
+            span.metrics["cached"] = 1.0 if result.cached else 0.0
+
+            # Attach telemetry to SimReturn.metrics field
+            result = replace(
+                result,
+                metrics={
+                    "execution_duration": span.duration(),
+                    "cached": 1.0 if result.cached else 0.0,
+                    **span.metrics,
+                },
+            )
+
+            return result
     
     def shutdown(self):
         """Clean shutdown of executor.
