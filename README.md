@@ -238,9 +238,9 @@ mops bundle register-target targets/incidence.py --no-confirm
 # - mean_of_per_replicate_mse: Compute MSE per replicate, then average
 ```
 
-### 6. Design and Submit Experiments
+### 6. Submit Simulation Jobs (Parameter Sampling)
 
-Now create a parameter sweep study and submit it for distributed execution.
+Create a parameter sweep study to explore the parameter space:
 
 ```bash
 # Generate Sobol sampling study (quasi-random parameter exploration)
@@ -260,6 +260,61 @@ mops jobs submit study.json --auto
 mops jobs list          # See all jobs
 mops jobs status <job-id>  # Detailed status
 ```
+
+This workflow is best for **exploratory analysis** - testing many parameter combinations to understand model behavior.
+
+### 6.5. Submit Calibration Jobs (Parameter Optimization)
+
+Alternatively, use calibration to **find optimal parameters** that match observed data:
+
+```bash
+# Generate calibration specification (uses Optuna TPE sampler)
+cb calibration optuna models.sir:StarsimSIR \
+  targets.incidence:incidence_replicate_mean_target \
+  data/observed_incidence.csv \
+  beta:0.01:0.2,dur_inf:3:10 \
+  --max-trials 100 \
+  --batch-size 4 \
+  --n-replicates 10 \
+  --output calibration_spec.json
+
+# Submit calibration job
+mops jobs submit-calibration calibration_spec.json --auto
+
+# Monitor progress
+mops jobs status <job-id>
+```
+
+After completion, view the optimal parameters found:
+
+```bash
+# Download results
+mops results download <job-id> --format all
+
+# View calibration summary
+cat results/<job-id>/calibration/summary.json
+```
+
+Example output:
+```json
+{
+  "job_id": "calib-c8af4c75",
+  "algorithm": "optuna",
+  "best_params": {
+    "beta": 0.0816,
+    "dur_inf": 4.828
+  },
+  "summary": {
+    "n_trials": 100,
+    "n_completed": 100,
+    "best_value": 7.555
+  }
+}
+```
+
+**Key Differences:**
+- **Simulation jobs**: Explore parameter space systematically (Sobol grid)
+- **Calibration jobs**: Optimize parameters to match data (Optuna TPE)
 
 ### 7. Download and Analyze Results
 
