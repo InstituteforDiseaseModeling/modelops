@@ -306,12 +306,28 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
     # Check if we should use the new calibration wire
     try:
         from modelops_calabaria.calibration.wire import calibration_wire
+        from modelops.services.provenance_store import ProvenanceStore
+        from pathlib import Path
 
         # Create simulation service
         sim_service = DaskSimulationService(client)
 
-        # Use the calibration wire function
-        calibration_wire(job, sim_service)
+        # Initialize ProvenanceStore with Azure backend (same pattern as simulation jobs)
+        prov_store = None
+        conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+        if conn_str:
+            try:
+                prov_store = ProvenanceStore(
+                    storage_dir=Path("/tmp/modelops/provenance"),
+                    azure_backend={"container": "results", "connection_string": conn_str}
+                )
+                logger.info("ProvenanceStore initialized with Azure backend for calibration results")
+            except Exception as e:
+                logger.warning(f"Could not initialize ProvenanceStore with Azure: {e}")
+                prov_store = None
+
+        # Use the calibration wire function with ProvenanceStore
+        calibration_wire(job, sim_service, prov_store=prov_store)
         return
     except ImportError:
         logger.warning(

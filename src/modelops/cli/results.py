@@ -479,6 +479,41 @@ def download(
             else:
                 warning("No Parquet files found for this job")
 
+        # Download calibration results (same pattern as simulation results)
+        if format in ["all"]:
+            calibration_blob = f"views/jobs/{job_id}/calibration/summary.json"
+            try:
+                blob_client = container_client.get_blob_client(calibration_blob)
+
+                # Create calibration directory
+                calib_dir = job_output_dir / "calibration"
+                calib_dir.mkdir(parents=True, exist_ok=True)
+
+                calib_path = calib_dir / "summary.json"
+                with open(calib_path, "wb") as f:
+                    download_stream = blob_client.download_blob()
+                    f.write(download_stream.readall())
+
+                success(f"Downloaded calibration summary")
+
+                # Parse and display calibration summary
+                with open(calib_path, "r") as f:
+                    calib_data = json.load(f)
+                    section("Calibration Results")
+                    info(f"  Algorithm: {calib_data.get('algorithm', 'N/A')}")
+                    summary = calib_data.get("summary", {})
+                    info(f"  Trials completed: {summary.get('n_completed', 'N/A')}/{summary.get('n_trials', 'N/A')}")
+                    info(f"  Best loss: {summary.get('best_value', 'N/A')}")
+                    if calib_data.get("best_params"):
+                        info("  Best parameters:")
+                        for param, value in calib_data["best_params"].items():
+                            info(f"    {param}: {value}")
+
+            except Exception as e:
+                if verbose:
+                    warning(f"Could not download calibration results: {e}")
+                # Not all jobs have calibration results, so this is not an error
+
         # Show summary
         section("Download complete")
         info(f"Results saved to: {job_output_dir}")
