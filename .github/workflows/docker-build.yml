@@ -100,6 +100,7 @@ jobs:
             PYTHON_VERSION=${{ env.PYTHON_VERSION }}
             GIT_SHA=${{ github.sha }}
             GITHUB_TOKEN=${{ secrets.GH_TOKEN }}
+            CALABARIA_CACHE_BUST=${{ github.run_id }}
           outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=${{ env.PROJECT }}-${{ matrix.component }}
 
       - name: Export digest
