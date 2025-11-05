@@ -1,12 +1,12 @@
 """Utilities for service layer."""
 
-from typing import Dict, List, Set, Optional, Any, Iterable
+from typing import Any, Optional
+
 import pulumi.automation as auto
-from pathlib import Path
 
 from ..core import StackNaming
-from ..core.paths import WORK_DIRS, get_backend_url
-from ..core.automation import workspace_options, get_output_value
+from ..core.automation import workspace_options
+from ..core.paths import WORK_DIRS
 
 
 def stack_exists(component: str, env: str) -> bool:
@@ -29,9 +29,7 @@ def stack_exists(component: str, env: str) -> bool:
         stack_name = StackNaming.get_stack_name(component, env)
 
         # Create workspace to check stack
-        ws = auto.LocalWorkspace(
-            **workspace_options(project_name, work_dir).__dict__
-        )
+        ws = auto.LocalWorkspace(**workspace_options(project_name, work_dir).__dict__)
 
         # Try to get the stack
         try:
@@ -45,8 +43,6 @@ def stack_exists(component: str, env: str) -> bool:
         # Log for debugging but treat as not exists
         print(f"Warning: Error checking stack {component}-{env}: {e}")
         return False
-
-
 
 
 def mask_secret_value(value: Any, mask: str = "****") -> Any:
@@ -89,10 +85,7 @@ def mask_secret_value(value: Any, mask: str = "****") -> Any:
     return value
 
 
-def get_safe_outputs(
-    outputs: Dict[str, Any],
-    show_secrets: bool = False
-) -> Dict[str, Any]:
+def get_safe_outputs(outputs: dict[str, Any], show_secrets: bool = False) -> dict[str, Any]:
     """
     Get outputs with secrets masked unless explicitly requested.
 
@@ -129,9 +122,7 @@ def get_safe_outputs(
 
 
 def validate_component_dependencies(
-    component: str,
-    env: str,
-    infra_service: Optional['InfrastructureService'] = None
+    component: str, env: str, infra_service: Optional["InfrastructureService"] = None
 ) -> None:
     """Validate all dependencies are deployed before provisioning component.
 
@@ -154,6 +145,7 @@ def validate_component_dependencies(
     # Get or create infra service to check statuses
     if not infra_service:
         from .infra_service import InfrastructureService
+
         infra_service = InfrastructureService(env)
 
     # Get dependencies for this component
@@ -225,7 +217,7 @@ def canonicalize_component_name(name: str) -> str:
 class DependencyGraph:
     """Manages component dependencies for infrastructure."""
 
-    def __init__(self, dependencies: Optional[Dict[str, Set[str]]] = None):
+    def __init__(self, dependencies: dict[str, set[str]] | None = None):
         """
         Initialize dependency graph.
 
@@ -264,7 +256,7 @@ class DependencyGraph:
         if component in self.dependencies:
             self.dependencies[component].discard(depends_on)
 
-    def get_provision_order(self, components: List[str]) -> List[str]:
+    def get_provision_order(self, components: list[str]) -> list[str]:
         """Get provision order for components using topological sort.
 
         Args:
@@ -316,7 +308,7 @@ class DependencyGraph:
 
         return result
 
-    def get_destroy_order(self, components: List[str]) -> List[str]:
+    def get_destroy_order(self, components: list[str]) -> list[str]:
         """Get destroy order for components (reverse of provision order).
 
         Args:
@@ -327,12 +319,12 @@ class DependencyGraph:
         """
         return list(reversed(self.get_provision_order(components)))
 
-    def get_dependencies(self, component: str) -> Set[str]:
+    def get_dependencies(self, component: str) -> set[str]:
         """Get direct dependencies of a component."""
         component = canonicalize_component_name(component)
         return self.dependencies.get(component, set())
 
-    def get_dependents(self, component: str) -> Set[str]:
+    def get_dependents(self, component: str) -> set[str]:
         """Get components that depend on this component."""
         component = canonicalize_component_name(component)
         dependents = set()

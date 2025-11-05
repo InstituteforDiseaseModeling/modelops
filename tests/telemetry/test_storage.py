@@ -185,8 +185,10 @@ class TestTelemetryStorage:
         storage.save_job_telemetry("job-123", collector)
 
         # Upload should not be called
-        assert not hasattr(mock_prov_store, "_upload_to_azure") or \
-               not mock_prov_store._upload_to_azure.called
+        assert (
+            not hasattr(mock_prov_store, "_upload_to_azure")
+            or not mock_prov_store._upload_to_azure.called
+        )
 
     def test_upload_failure_does_not_fail_job(self, tmp_path, caplog):
         """Azure upload failure is logged but doesn't raise."""

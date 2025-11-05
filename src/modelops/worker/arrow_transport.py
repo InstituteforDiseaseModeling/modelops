@@ -5,20 +5,21 @@ encoded in different formats for transport (e.g., base64 for JSON-RPC).
 """
 
 import base64
-from enum import Enum
-from typing import Union, Dict, Any
 import logging
+from enum import Enum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 class ArrowEncoding(Enum):
     """Encoding format for Arrow IPC data in transit."""
-    RAW_BYTES = "raw_bytes"      # Direct bytes (in-memory)
-    BASE64 = "base64"             # Base64-encoded string (JSON-RPC)
+
+    RAW_BYTES = "raw_bytes"  # Direct bytes (in-memory)
+    BASE64 = "base64"  # Base64-encoded string (JSON-RPC)
 
 
-def decode_arrow_data(data: Union[bytes, str], encoding_hint: str = None) -> bytes:
+def decode_arrow_data(data: bytes | str, encoding_hint: str = None) -> bytes:
     """Decode Arrow IPC data from various transport encodings.
 
     Args:
@@ -45,7 +46,7 @@ def decode_arrow_data(data: Union[bytes, str], encoding_hint: str = None) -> byt
         # Check if it looks like base64 (no control chars, proper padding)
         try:
             decoded = base64.b64decode(data, validate=True)
-            if decoded.startswith(b'ARROW'):
+            if decoded.startswith(b"ARROW"):
                 return decoded
         except Exception:
             pass
@@ -59,7 +60,7 @@ def decode_arrow_data(data: Union[bytes, str], encoding_hint: str = None) -> byt
     raise TypeError(f"Arrow data must be bytes or str, got {type(data)}")
 
 
-def extract_arrow_from_artifact(artifact: Union[Dict[str, Any], bytes]) -> bytes:
+def extract_arrow_from_artifact(artifact: dict[str, Any] | bytes) -> bytes:
     """Extract Arrow IPC bytes from a TableArtifact-like structure.
 
     Args:
@@ -78,26 +79,23 @@ def extract_arrow_from_artifact(artifact: Union[Dict[str, Any], bytes]) -> bytes
     # Dict-like artifact
     if isinstance(artifact, dict):
         # Check for 'inline' field (standard TableArtifact)
-        if 'inline' in artifact:
+        if "inline" in artifact:
             return decode_arrow_data(
-                artifact['inline'],
-                encoding_hint="base64"  # Serialization always uses base64
+                artifact["inline"],
+                encoding_hint="base64",  # Serialization always uses base64
             )
 
         # Check for 'data' field (alternative format)
-        if 'data' in artifact:
+        if "data" in artifact:
             return decode_arrow_data(
-                artifact['data'],
-                encoding_hint="base64"  # Assume base64 for consistency
+                artifact["data"],
+                encoding_hint="base64",  # Assume base64 for consistency
             )
 
         # Invalid structure
         available_keys = list(artifact.keys())
         raise ValueError(
-            f"TableArtifact missing 'inline' or 'data' field. "
-            f"Available keys: {available_keys}"
+            f"TableArtifact missing 'inline' or 'data' field. Available keys: {available_keys}"
         )
 
-    raise TypeError(
-        f"Artifact must be dict or bytes, got {type(artifact)}"
-    )
+    raise TypeError(f"Artifact must be dict or bytes, got {type(artifact)}")

@@ -5,8 +5,8 @@ timing and performance metrics.
 """
 
 from modelops.telemetry.collector import (
-    NoopSpan,
     NOOP_SPAN,
+    NoopSpan,
     TelemetryCollector,
     TelemetrySpan,
 )

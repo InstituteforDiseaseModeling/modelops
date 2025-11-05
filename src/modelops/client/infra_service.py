@@ -1,22 +1,19 @@
 """Unified infrastructure orchestration service."""
 
-from typing import Dict, List, Optional, Any, Set
-import os
 import json
+import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from .base import InfraResult, ComponentState, ComponentStatus
-from .utils import (
-    stack_exists,
-    DependencyGraph
-)
+from ..components.specs.infra import UnifiedInfraSpec
+from .base import ComponentState, ComponentStatus, InfraResult
 from .cluster_service import ClusterService
-from .workspace_service import WorkspaceService
-from .storage_service import StorageService
 from .registry_service import RegistryService
 from .resource_group_service import ResourceGroupService
-from ..components.specs.infra import UnifiedInfraSpec
+from .storage_service import StorageService
+from .utils import DependencyGraph, stack_exists
+from .workspace_service import WorkspaceService
 
 
 class InfrastructureService:
@@ -27,7 +24,7 @@ class InfrastructureService:
     a single-command infrastructure provisioning experience.
     """
 
-    def __init__(self, env: Optional[str] = None):
+    def __init__(self, env: str | None = None):
         """
         Initialize infrastructure service.
 
@@ -53,10 +50,10 @@ class InfrastructureService:
     def provision(
         self,
         spec: UnifiedInfraSpec,
-        components: Optional[List[str]] = None,
+        components: list[str] | None = None,
         verbose: bool = False,
         force: bool = False,
-        dry_run: bool = False
+        dry_run: bool = False,
     ) -> InfraResult:
         """
         Provision infrastructure components.
@@ -82,15 +79,14 @@ class InfrastructureService:
             components={},
             outputs={},
             errors={},
-            logs_path=self._get_log_path()
+            logs_path=self._get_log_path(),
         )
 
         # Check existing state for idempotency
         if not force:
             existing = self.get_component_states()
             components_to_provision = [
-                c for c in components
-                if existing.get(c) != ComponentState.READY
+                c for c in components if existing.get(c) != ComponentState.READY
             ]
 
             if not components_to_provision:
@@ -138,69 +134,80 @@ class InfrastructureService:
                     # Extract config from cluster or use defaults
                     rg_config = {}
                     if spec.cluster:
-                        cluster_dict = spec.cluster if isinstance(spec.cluster, dict) else spec.cluster.model_dump()
+                        cluster_dict = (
+                            spec.cluster
+                            if isinstance(spec.cluster, dict)
+                            else spec.cluster.model_dump()
+                        )
                         rg_config = {
                             "location": cluster_dict.get("location", "eastus2"),
                             "subscription_id": cluster_dict.get("subscription_id"),
-                            "username": cluster_dict.get("username")
+                            "username": cluster_dict.get("username"),
                         }
                     else:
                         # Use defaults if no cluster config
                         rg_config = {
                             "location": "eastus2",
                             "subscription_id": os.environ.get("AZURE_SUBSCRIPTION_ID"),
-                            "username": os.environ.get("USER")
+                            "username": os.environ.get("USER"),
                         }
 
                     outputs = self.resource_group_service.provision(
-                        config=rg_config,
-                        verbose=verbose
+                        config=rg_config, verbose=verbose
                     )
 
                 elif component == "registry" and spec.registry:
                     if verbose:
-                        print(f"[DEBUG] Provisioning registry component...")
+                        print("[DEBUG] Provisioning registry component...")
                     # Registry needs Azure settings - inherit from cluster if available
                     registry_config = spec.registry.copy()
                     if spec.cluster:
                         # Handle both dict and AzureProviderConfig objects
-                        cluster_dict = spec.cluster if isinstance(spec.cluster, dict) else spec.cluster.model_dump()
+                        cluster_dict = (
+                            spec.cluster
+                            if isinstance(spec.cluster, dict)
+                            else spec.cluster.model_dump()
+                        )
                         # Copy Azure settings from cluster config
-                        for key in ["subscription_id", "location", "resource_group", "username"]:
+                        for key in [
+                            "subscription_id",
+                            "location",
+                            "resource_group",
+                            "username",
+                        ]:
                             if key in cluster_dict and key not in registry_config:
                                 registry_config[key] = cluster_dict[key]
 
                     outputs = self.registry_service.create(
                         name=registry_config.get("name", "modelops-registry"),
                         config=registry_config,
-                        verbose=verbose
+                        verbose=verbose,
                     )
 
                     if verbose:
                         import json
-                        print(f"[DEBUG] Registry outputs from create(): {json.dumps(outputs, indent=2, default=str)}")
+
+                        print(
+                            f"[DEBUG] Registry outputs from create(): {json.dumps(outputs, indent=2, default=str)}"
+                        )
 
                 elif component == "cluster" and spec.cluster:
-                    outputs = self.cluster_service.provision(
-                        config=spec.cluster,
-                        verbose=verbose
-                    )
+                    outputs = self.cluster_service.provision(config=spec.cluster, verbose=verbose)
 
                 elif component == "storage" and spec.storage:
                     if verbose:
-                        print(f"[DEBUG] Provisioning storage component...")
+                        print("[DEBUG] Provisioning storage component...")
                     # Storage should be standalone if cluster isn't being provisioned
                     standalone_storage = "cluster" not in components or not spec.cluster
                     outputs = self.storage_service.provision(
                         config=spec.storage,
                         standalone=standalone_storage,
-                        verbose=verbose
+                        verbose=verbose,
                     )
 
                 elif component == "workspace" and spec.workspace:
                     outputs = self.workspace_service.provision(
-                        config=spec.workspace,
-                        verbose=verbose
+                        config=spec.workspace, verbose=verbose
                     )
                 else:
                     continue
@@ -210,21 +217,24 @@ class InfrastructureService:
 
                 if verbose:
                     import json
-                    print(f"[DEBUG] Storing outputs for {component}: {json.dumps(outputs or {}, indent=2, default=str)}")
+
+                    print(
+                        f"[DEBUG] Storing outputs for {component}: {json.dumps(outputs or {}, indent=2, default=str)}"
+                    )
 
                 # VALIDATION: Ensure critical components have outputs
                 # Without outputs, dependent components and bundle operations will fail
                 if component == "registry" and not outputs:
                     raise RuntimeError(
-                        f"Registry provisioned but has no outputs! "
-                        f"This prevents bundle push/pull operations. "
-                        f"Check if registry was actually created in Azure."
+                        "Registry provisioned but has no outputs! "
+                        "This prevents bundle push/pull operations. "
+                        "Check if registry was actually created in Azure."
                     )
                 if component == "storage" and not outputs:
                     raise RuntimeError(
-                        f"Storage provisioned but has no outputs! "
-                        f"This prevents bundle storage operations. "
-                        f"Check if storage account was actually created in Azure."
+                        "Storage provisioned but has no outputs! "
+                        "This prevents bundle storage operations. "
+                        "Check if storage account was actually created in Azure."
                     )
 
                 print(f"  ✓ {component} provisioned successfully")
@@ -238,13 +248,14 @@ class InfrastructureService:
                 # Check for Pulumi lock error and provide helpful hint
                 if "lock" in error_msg.lower() and "pulumi cancel" in error_msg.lower():
                     print(f"  ✗ {component} failed: Stack is locked by another process")
-                    print(f"\n  Hint: Clear the lock with:")
+                    print("\n  Hint: Clear the lock with:")
 
                     # Extract stack name from error if possible
                     if "modelops-" in error_msg:
                         # Try to extract the stack name
                         import re
-                        stack_match = re.search(r'(modelops-[a-z]+-[a-z]+)', error_msg)
+
+                        stack_match = re.search(r"(modelops-[a-z]+-[a-z]+)", error_msg)
                         if stack_match:
                             stack_name = stack_match.group(1)
                             print(f"    cd ~/.modelops/pulumi/{component} && pulumi cancel")
@@ -252,7 +263,7 @@ class InfrastructureService:
                     else:
                         print(f"    cd ~/.modelops/pulumi/{component} && pulumi cancel")
 
-                    print(f"\n  Then retry the operation.")
+                    print("\n  Then retry the operation.")
                 else:
                     # Show the full error for other cases
                     print(f"  ✗ {component} failed: {error_msg}")
@@ -265,6 +276,7 @@ class InfrastructureService:
         # Reconcile bundle environment file with Pulumi stack truth
         # This is the ONLY place that triggers bundle env writes/deletes
         from ..core.env_reconcile import reconcile_bundle_env
+
         path = reconcile_bundle_env(self.env, dry_run=dry_run)
         if path:
             print(f"  ✓ Bundle environment ready: {path}")
@@ -275,7 +287,7 @@ class InfrastructureService:
 
     def destroy(
         self,
-        components: Optional[List[str]] = None,
+        components: list[str] | None = None,
         verbose: bool = False,
         force: bool = False,
         with_deps: bool = False,
@@ -284,7 +296,7 @@ class InfrastructureService:
         destroy_registry: bool = False,
         destroy_all: bool = False,
         delete_rg: bool = False,
-        yes_confirmed: bool = False
+        yes_confirmed: bool = False,
     ) -> InfraResult:
         """
         Destroy infrastructure components.
@@ -336,8 +348,7 @@ class InfrastructureService:
             for comp in components:
                 dependents = self.dep_graph.get_dependents(comp)
                 existing_dependents = [
-                    d for d in dependents
-                    if stack_exists(d, self.env) and d not in components
+                    d for d in dependents if stack_exists(d, self.env) and d not in components
                 ]
                 if existing_dependents:
                     return InfraResult(
@@ -346,12 +357,14 @@ class InfrastructureService:
                         outputs={},
                         errors={
                             comp: f"Has dependent components: {', '.join(existing_dependents)}"
-                        }
+                        },
                     )
 
         # Add warnings for destructive data operations
         if "storage" in components:
-            print("\n⚠️  WARNING: Destroying storage will permanently delete all stored results and artifacts!")
+            print(
+                "\n⚠️  WARNING: Destroying storage will permanently delete all stored results and artifacts!"
+            )
         if "registry" in components:
             print("⚠️  WARNING: Destroying registry will permanently delete all container images!")
 
@@ -367,7 +380,7 @@ class InfrastructureService:
             components={},
             outputs={},
             errors={},
-            logs_path=self._get_log_path()
+            logs_path=self._get_log_path(),
         )
 
         for component in destroy_order:
@@ -379,10 +392,7 @@ class InfrastructureService:
                 elif component == "storage":
                     self.storage_service.destroy(verbose=verbose)
                 elif component == "cluster":
-                    self.cluster_service.destroy(
-                        force=force,
-                        verbose=verbose
-                    )
+                    self.cluster_service.destroy(force=force, verbose=verbose)
                 elif component == "registry":
                     self.registry_service.destroy(verbose=verbose)
                 elif component == "resource_group":
@@ -402,6 +412,7 @@ class InfrastructureService:
         # Reconcile bundle environment after destroy to remove stale file
         if result.success:
             from ..core.env_reconcile import reconcile_bundle_env
+
             reconcile_bundle_env(self.env, dry_run=dry_run)
 
             # If destroy-all was specified, also remove the empty Pulumi stacks
@@ -411,7 +422,13 @@ class InfrastructureService:
                 from ..core import automation
 
                 # Remove stacks in reverse order of dependencies
-                stacks_to_remove = ["workspace", "storage", "cluster", "registry", "resource_group"]
+                stacks_to_remove = [
+                    "workspace",
+                    "storage",
+                    "cluster",
+                    "registry",
+                    "resource_group",
+                ]
                 for stack_name in stacks_to_remove:
                     try:
                         # Check if stack exists first
@@ -424,7 +441,7 @@ class InfrastructureService:
 
         return result
 
-    def get_status(self) -> Dict[str, ComponentStatus]:
+    def get_status(self) -> dict[str, ComponentStatus]:
         """
         Get status of all infrastructure components.
 
@@ -439,7 +456,7 @@ class InfrastructureService:
             "workspace": self.workspace_service.status(),
         }
 
-    def get_component_states(self) -> Dict[str, ComponentState]:
+    def get_component_states(self) -> dict[str, ComponentState]:
         """
         Get simplified component states.
 
@@ -450,10 +467,8 @@ class InfrastructureService:
         return {k: v.phase for k, v in status.items()}
 
     def get_outputs(
-        self,
-        component: Optional[str] = None,
-        show_secrets: bool = False
-    ) -> Dict[str, Any]:
+        self, component: str | None = None, show_secrets: bool = False
+    ) -> dict[str, Any]:
         """
         Get outputs for components.
 
@@ -487,10 +502,8 @@ class InfrastructureService:
         return all_outputs
 
     def preview(
-        self,
-        spec: UnifiedInfraSpec,
-        components: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        self, spec: UnifiedInfraSpec, components: list[str] | None = None
+    ) -> dict[str, Any]:
         """
         Preview changes without applying.
 
@@ -506,11 +519,7 @@ class InfrastructureService:
         components = components or spec.get_components()
         existing = self.get_component_states()
 
-        preview = {
-            "to_create": [],
-            "to_update": [],
-            "no_change": []
-        }
+        preview = {"to_create": [], "to_update": [], "no_change": []}
 
         for comp in components:
             state = existing.get(comp, ComponentState.NOT_DEPLOYED)
@@ -534,12 +543,16 @@ class InfrastructureService:
         """Write operation logs to file."""
         if result.logs_path:
             try:
-                Path(result.logs_path).write_text(json.dumps({
-                    "timestamp": datetime.now().isoformat(),
-                    "success": result.success,
-                    "components": {k: v.value for k, v in result.components.items()},
-                    "errors": result.errors
-                }, indent=2))
+                Path(result.logs_path).write_text(
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now().isoformat(),
+                            "success": result.success,
+                            "components": {k: v.value for k, v in result.components.items()},
+                            "errors": result.errors,
+                        },
+                        indent=2,
+                    )
+                )
             except:
                 pass  # Don't fail on log writing errors
-

@@ -1,27 +1,25 @@
 """Workspace configuration models with validation."""
 
-from typing import Dict, Any, Optional, List, Literal
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from ..config_base import ConfigModel
 
 
 class AutoscalingConfig(BaseModel):
     """Configuration for Dask worker autoscaling."""
+
     enabled: bool = Field(True, description="Enable autoscaling")
     type: Literal["hpa", "dask-adaptive"] = Field(
-        "hpa",
-        description="Autoscaling type (HPA for now, dask-adaptive later)"
+        "hpa", description="Autoscaling type (HPA for now, dask-adaptive later)"
     )
     min_workers: int = Field(2, ge=0, description="Minimum number of workers")
     max_workers: int = Field(20, ge=1, description="Maximum number of workers")
     target_cpu: int = Field(
-        70, ge=10, le=100,
-        description="Target CPU utilization percentage for HPA"
+        70, ge=10, le=100, description="Target CPU utilization percentage for HPA"
     )
-    scale_down_delay: int = Field(
-        300, ge=0,
-        description="Delay in seconds before scaling down"
-    )
+    scale_down_delay: int = Field(300, ge=0, description="Delay in seconds before scaling down")
 
     @field_validator("max_workers")
     @classmethod
@@ -36,26 +34,27 @@ class AutoscalingConfig(BaseModel):
 class WorkspaceConfig(ConfigModel):
     """
     Dask workspace configuration.
-    
+
     Validates top-level structure but keeps spec flexible for forward compatibility.
     The DaskWorkspace component handles detailed parsing of scheduler/worker configs.
     """
+
     apiVersion: str = Field("modelops/v1", alias="api_version")
     kind: Literal["Workspace"] = "Workspace"
-    metadata: Dict[str, Any]  # name, namespace, labels, etc.
-    spec: Dict[str, Any]  # scheduler, workers, tolerations, etc.
-    
+    metadata: dict[str, Any]  # name, namespace, labels, etc.
+    spec: dict[str, Any]  # scheduler, workers, tolerations, etc.
+
     model_config = ConfigDict(
         populate_by_name=True,  # Accept both field names and aliases
-        extra="allow"  # Allow additional fields for forward compatibility
+        extra="allow",  # Allow additional fields for forward compatibility
     )
-    
+
     @field_validator("apiVersion", mode="before")
     @classmethod
     def normalize_api_version(cls, v):
         """Accept both apiVersion and api_version."""
         return v or "modelops/v1"
-    
+
     @field_validator("metadata")
     @classmethod
     def validate_metadata(cls, v):
@@ -65,7 +64,7 @@ class WorkspaceConfig(ConfigModel):
         if "name" not in v:
             raise ValueError("metadata.name is required")
         return v
-    
+
     @field_validator("spec")
     @classmethod
     def validate_spec(cls, v):
@@ -85,25 +84,26 @@ class WorkspaceConfig(ConfigModel):
             raise ValueError("spec.workers.image is required - no default images allowed")
 
         return v
-    
+
     def get_namespace(self, env: str) -> str:
         """Get namespace from metadata or generate default."""
         if "namespace" in self.metadata:
             return self.metadata["namespace"]
-        
+
         # Use centralized naming convention
         from ...core import StackNaming
+
         return StackNaming.get_namespace("dask", env)
-    
-    def get_scheduler_config(self) -> Dict[str, Any]:
+
+    def get_scheduler_config(self) -> dict[str, Any]:
         """Extract scheduler configuration from spec."""
         return self.spec.get("scheduler", {})
-    
-    def get_workers_config(self) -> Dict[str, Any]:
+
+    def get_workers_config(self) -> dict[str, Any]:
         """Extract workers configuration from spec."""
         return self.spec.get("workers", {})
-    
-    def get_tolerations(self) -> List[Dict[str, Any]]:
+
+    def get_tolerations(self) -> list[dict[str, Any]]:
         """Extract tolerations from spec."""
         return self.spec.get("tolerations", [])
 

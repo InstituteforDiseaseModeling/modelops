@@ -8,9 +8,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from dataclasses import asdict
 
-from modelops.services.job_state import JobState, JobStatus, now_iso, validate_transition, is_terminal
+from modelops.services.job_state import (
+    JobState,
+    JobStatus,
+    now_iso,
+    validate_transition,
+    is_terminal,
+)
 from modelops.services.job_registry import JobRegistry, ValidationResult
-from modelops.services.output_manifest import OutputSpec, generate_output_manifest, reconstruct_task_from_spec
+from modelops.services.output_manifest import (
+    OutputSpec,
+    generate_output_manifest,
+    reconstruct_task_from_spec,
+)
 from modelops.services.provenance_store import ProvenanceStore
 from modelops.services.provenance_schema import ProvenanceSchema
 from modelops.services.storage.memory import InMemoryVersionedStore
@@ -59,7 +69,7 @@ class TestOutputManifest:
             parameter_sets=[
                 SimpleNamespace(param_id="p1", params={"x": 1}, replicate_count=2),
                 SimpleNamespace(param_id="p2", params={"y": 2}, replicate_count=3),
-            ]
+            ],
         )
 
         schema = ProvenanceSchema()
@@ -88,7 +98,7 @@ class TestOutputManifest:
             bundle_digest="sha256:" + "0" * 64,  # Valid sha256 format
             replicate_count=5,
             provenance_path="some/path",
-            param_values={"alpha": 0.1, "beta": 0.2}
+            param_values={"alpha": 0.1, "beta": 0.2},
         )
 
         task = reconstruct_task_from_spec(spec)
@@ -113,9 +123,7 @@ class TestJobRegistryValidation:
         provenance_store = ProvenanceStore(provenance_dir, schema)
 
         registry = JobRegistry(
-            versioned_store,
-            provenance_store=provenance_store,
-            provenance_schema=schema
+            versioned_store, provenance_store=provenance_store, provenance_schema=schema
         )
 
         return registry, provenance_dir
@@ -144,17 +152,10 @@ class TestJobRegistryValidation:
         # Register job with expected outputs
         job_spec = SimpleNamespace(
             metadata={"bundle_digest": "test123"},
-            parameter_sets=[
-                SimpleNamespace(param_id="p1", params={"x": 1}, replicate_count=2)
-            ]
+            parameter_sets=[SimpleNamespace(param_id="p1", params={"x": 1}, replicate_count=2)],
         )
 
-        state = registry.register_job(
-            "test-job",
-            "k8s-job",
-            "namespace",
-            job_spec=job_spec
-        )
+        state = registry.register_job("test-job", "k8s-job", "namespace", job_spec=job_spec)
 
         # Create all expected output files
         for output_dict in state.expected_outputs:
@@ -177,17 +178,10 @@ class TestJobRegistryValidation:
         # Register job
         job_spec = SimpleNamespace(
             metadata={"bundle_digest": "test456"},
-            parameter_sets=[
-                SimpleNamespace(param_id="p2", params={"y": 2}, replicate_count=4)
-            ]
+            parameter_sets=[SimpleNamespace(param_id="p2", params={"y": 2}, replicate_count=4)],
         )
 
-        state = registry.register_job(
-            "partial-job",
-            "k8s-job",
-            "namespace",
-            job_spec=job_spec
-        )
+        state = registry.register_job("partial-job", "k8s-job", "namespace", job_spec=job_spec)
 
         # Create only 2 of 4 outputs
         for output_dict in state.expected_outputs[:2]:
@@ -215,11 +209,7 @@ class TestJobRegistryValidation:
         registry.transition_to_validating("job1")
 
         # Finalize with complete validation
-        validation = ValidationResult(
-            status="complete",
-            verified_count=5,
-            missing_count=0
-        )
+        validation = ValidationResult(status="complete", verified_count=5, missing_count=0)
 
         final = registry.finalize_with_validation("job1", validation)
         assert final.status == JobStatus.SUCCEEDED
@@ -233,10 +223,7 @@ class TestJobRegistryValidation:
         registry.transition_to_validating("job2")
 
         validation_partial = ValidationResult(
-            status="partial",
-            verified_count=3,
-            missing_count=2,
-            missing_outputs=["path1", "path2"]
+            status="partial", verified_count=3, missing_count=2, missing_outputs=["path1", "path2"]
         )
 
         final2 = registry.finalize_with_validation("job2", validation_partial)
@@ -252,15 +239,10 @@ class TestJobRegistryValidation:
             metadata={"bundle_digest": "sha256:" + "0" * 64},  # Valid sha256 format
             parameter_sets=[
                 SimpleNamespace(param_id="p1", params={"x": 1, "y": 2}, replicate_count=3)
-            ]
+            ],
         )
 
-        state = registry.register_job(
-            "resume-job",
-            "k8s-job",
-            "namespace",
-            job_spec=job_spec
-        )
+        state = registry.register_job("resume-job", "k8s-job", "namespace", job_spec=job_spec)
 
         # Move to PARTIAL_SUCCESS
         registry.update_status("resume-job", JobStatus.SUBMITTING)
@@ -274,7 +256,7 @@ class TestJobRegistryValidation:
             status="partial",
             verified_count=2,
             missing_count=1,
-            missing_outputs=[missing_spec.provenance_path]
+            missing_outputs=[missing_spec.provenance_path],
         )
 
         registry.finalize_with_validation("resume-job", validation)
@@ -303,7 +285,7 @@ class TestJobStateFields:
             missing_outputs=["path2"],
             tasks_verified=10,
             validation_started_at=now_iso(),
-            validation_attempts=3
+            validation_attempts=3,
         )
 
         # Should serialize correctly
@@ -325,7 +307,7 @@ class TestJobStateFields:
             "created_at": now_iso(),
             "updated_at": now_iso(),
             "tasks_total": 5,
-            "tasks_completed": 5
+            "tasks_completed": 5,
         }
 
         state = JobState.from_dict(old_data)

@@ -6,25 +6,26 @@ Arrow IPC bytes as required by the modelops-contracts SimReturn type.
 Uses Polars DataFrames exclusively for the MVP (no pandas).
 """
 
-from typing import Any, Dict, Mapping
 import io
+from collections.abc import Mapping
+from typing import Any
 
-import pyarrow as pa
 import polars as pl
+import pyarrow as pa
 
 
-def to_ipc_tables(data: Dict[str, Any]) -> Mapping[str, bytes]:
+def to_ipc_tables(data: dict[str, Any]) -> Mapping[str, bytes]:
     """Convert simulation outputs to IPC bytes format.
-    
+
     Converts each value in the dictionary to Arrow IPC bytes.
     This ensures compliance with the SimReturn = Mapping[str, TableIPC] contract.
-    
+
     Args:
         data: Dictionary of named outputs from simulation
-        
+
     Returns:
         Dictionary mapping names to IPC bytes
-        
+
     Raises:
         ValueError: If data cannot be converted
     """
@@ -37,7 +38,7 @@ def to_ipc_tables(data: Dict[str, Any]) -> Mapping[str, bytes]:
         elif isinstance(value, pa.Table):
             # Already an Arrow table
             table = value
-        elif hasattr(value, '__dataframe__'):
+        elif hasattr(value, "__dataframe__"):
             # Handle pandas DataFrame (anything following DataFrame protocol)
             table = pa.Table.from_pandas(value)
         elif isinstance(value, dict):
@@ -53,28 +54,28 @@ def to_ipc_tables(data: Dict[str, Any]) -> Mapping[str, bytes]:
             # For scalar types, create a single-value table
             df = pl.DataFrame({"value": [value]})
             table = df.to_arrow()
-        
+
         # Convert to IPC bytes
         sink = pa.BufferOutputStream()
         with pa.ipc.new_stream(sink, table.schema) as writer:
             writer.write_table(table)
-        
+
         result[name] = sink.getvalue().to_pybytes()
-    
+
     return result
 
 
-def from_ipc_tables(data: Mapping[str, bytes]) -> Dict[str, Any]:
+def from_ipc_tables(data: Mapping[str, bytes]) -> dict[str, Any]:
     """Convert IPC bytes back to Python objects.
-    
+
     Converts Arrow IPC bytes back to Polars DataFrames.
-    
+
     Args:
         data: Dictionary mapping names to IPC bytes
-        
+
     Returns:
         Dictionary of Polars DataFrames
-        
+
     Raises:
         ValueError: If bytes cannot be decoded
     """
@@ -84,35 +85,35 @@ def from_ipc_tables(data: Mapping[str, bytes]) -> Dict[str, Any]:
             # Read Arrow IPC bytes
             reader = pa.ipc.open_stream(io.BytesIO(ipc_bytes))
             table = reader.read_all()
-            
+
             # Convert to Polars DataFrame
             result[name] = pl.from_arrow(table)
         except Exception as e:
             raise ValueError(f"Failed to decode {name}: {e}")
-    
+
     return result
 
 
 def validate_sim_return(data: Any) -> Mapping[str, bytes]:
     """Validate and convert simulation return to contract-compliant format.
-    
+
     Ensures the return value conforms to SimReturn = Mapping[str, TableIPC].
-    
+
     Args:
         data: Raw return value from simulation function
-        
+
     Returns:
         Validated Mapping[str, bytes]
-        
+
     Raises:
         TypeError: If data is not a dict or cannot be converted
     """
     if not isinstance(data, dict):
         raise TypeError(f"Simulation must return dict, got {type(data).__name__}")
-    
+
     # If already bytes, assume it's valid IPC
     if all(isinstance(v, bytes) for v in data.values()):
         return data
-    
+
     # Otherwise convert to IPC
     return to_ipc_tables(data)

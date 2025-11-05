@@ -13,6 +13,7 @@ import pytest
 
 class MockTargetEvaluation:
     """Mock Calabaria TargetEvaluation."""
+
     def __init__(self, loss, diagnostics=None, name="test_target", weight=1.0):
         self.loss = loss
         self.name = name
@@ -25,6 +26,7 @@ class MockTargetEvaluation:
 def df_to_ipc_bytes(df: pl.DataFrame) -> bytes:
     """Convert DataFrame to Arrow IPC bytes."""
     import io
+
     buf = io.BytesIO()
     df.write_ipc(buf)
     return buf.getvalue()
@@ -35,37 +37,25 @@ def test_aggregate_data_conversion():
     from modelops.worker.subprocess_runner import SubprocessRunner
 
     # Create test data
-    df = pl.DataFrame({
-        "day": [0, 1, 2],
-        "infected": [10, 15, 20]
-    })
+    df = pl.DataFrame({"day": [0, 1, 2], "infected": [10, 15, 20]})
     arrow_bytes = df_to_ipc_bytes(df)
 
     # Mock runner with minimal setup
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Create mock target
     mock_target = Mock()
     mock_target.model_output = "prevalence"
     test_diagnostics = {"mean_mse": 0.123, "n_evaluated": 100}
-    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
-        loss=0.123,
-        diagnostics=test_diagnostics
-    ))
+    mock_target.evaluate = Mock(
+        return_value=MockTargetEvaluation(loss=0.123, diagnostics=test_diagnostics)
+    )
 
     # Simulate sim_returns with proper deep copy to avoid aliasing
-    base_return = {
-        "outputs": {
-            "prevalence": {
-                "data": arrow_bytes
-            }
-        }
-    }
+    base_return = {"outputs": {"prevalence": {"data": arrow_bytes}}}
     sim_returns = [deepcopy(base_return) for _ in range(3)]
 
     # Use unique module name to avoid collisions
@@ -85,8 +75,7 @@ def test_aggregate_data_conversion():
     try:
         # Call aggregate with positional arguments using test module
         result = runner.aggregate(
-            target_entrypoint=f"{modname}:prevalence_target",
-            sim_returns=sim_returns
+            target_entrypoint=f"{modname}:prevalence_target", sim_returns=sim_returns
         )
 
         # Verify results
@@ -119,19 +108,16 @@ def test_aggregate_formats_parametrized(fmt_key):
     df = pl.DataFrame({"day": [0], "infected": [5]})
     arrow_bytes = df_to_ipc_bytes(df)
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     mock_target = Mock()
     mock_target.model_output = "test"
-    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
-        loss=0.456,
-        diagnostics={"format_used": fmt_key}
-    ))
+    mock_target.evaluate = Mock(
+        return_value=MockTargetEvaluation(loss=0.456, diagnostics={"format_used": fmt_key})
+    )
 
     # Format the outputs based on parameter
     if fmt_key == "bytes":
@@ -155,10 +141,7 @@ def test_aggregate_formats_parametrized(fmt_key):
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(
-            target_entrypoint=f"{modname}:target",
-            sim_returns=sim_returns
-        )
+        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
         assert result["loss"] == 0.456
         # Custom diagnostics from mock are not preserved
@@ -175,11 +158,9 @@ def test_aggregate_error_handling():
     """Test error handling for invalid data formats."""
     from modelops.worker.subprocess_runner import SubprocessRunner
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Invalid format - missing both data and inline
@@ -188,7 +169,7 @@ def test_aggregate_error_handling():
             "outputs": {
                 "test": {
                     "size": 100,
-                    "checksum": "abc"
+                    "checksum": "abc",
                     # Missing 'data' or 'inline' - this should trigger error
                 }
             }
@@ -209,10 +190,7 @@ def test_aggregate_error_handling():
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(
-            target_entrypoint=f"{modname}:target",
-            sim_returns=sim_returns
-        )
+        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
         # Should return error
         assert "error" in result
@@ -231,11 +209,9 @@ def test_aggregate_multiple_outputs():
     """Test aggregation with multiple output tables."""
     from modelops.worker.subprocess_runner import SubprocessRunner
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Create multiple outputs with different content
@@ -244,16 +220,17 @@ def test_aggregate_multiple_outputs():
 
     mock_target = Mock()
     mock_target.model_output = "prevalence"
-    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
-        loss=0.789,
-        diagnostics={"n_outputs": 2, "tables": ["prevalence", "susceptible"]}
-    ))
+    mock_target.evaluate = Mock(
+        return_value=MockTargetEvaluation(
+            loss=0.789, diagnostics={"n_outputs": 2, "tables": ["prevalence", "susceptible"]}
+        )
+    )
 
     sim_returns = [
         {
             "outputs": {
                 "prevalence": {"data": df_to_ipc_bytes(df1)},
-                "susceptible": {"data": df_to_ipc_bytes(df2)}
+                "susceptible": {"data": df_to_ipc_bytes(df2)},
             }
         }
     ]
@@ -269,10 +246,7 @@ def test_aggregate_multiple_outputs():
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(
-            target_entrypoint=f"{modname}:target",
-            sim_returns=sim_returns
-        )
+        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
         assert result["loss"] == 0.789
         # Custom diagnostics from mock are not preserved
@@ -296,11 +270,9 @@ def test_aggregate_base64_inline_data():
     from modelops.worker.subprocess_runner import SubprocessRunner
     import base64
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Create test data
@@ -308,14 +280,13 @@ def test_aggregate_base64_inline_data():
     arrow_bytes = df_to_ipc_bytes(df)
 
     # Encode as base64 string (simulates what happens during serialization)
-    base64_str = base64.b64encode(arrow_bytes).decode('utf-8')
+    base64_str = base64.b64encode(arrow_bytes).decode("utf-8")
 
     mock_target = Mock()
     mock_target.model_output = "test"
-    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
-        loss=0.456,
-        diagnostics={"format": "base64"}
-    ))
+    mock_target.evaluate = Mock(
+        return_value=MockTargetEvaluation(loss=0.456, diagnostics={"format": "base64"})
+    )
 
     # Test with base64-encoded string
     sim_returns = [{"outputs": {"test": {"inline": base64_str}}}]
@@ -326,10 +297,7 @@ def test_aggregate_base64_inline_data():
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(
-            target_entrypoint=f"{modname}:target",
-            sim_returns=sim_returns
-        )
+        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
         assert result["loss"] == 0.456
         # Custom diagnostics from mock are not preserved
@@ -346,32 +314,26 @@ def test_aggregate_replicate_independence():
     """Test that replicates are handled independently without aliasing."""
     from modelops.worker.subprocess_runner import SubprocessRunner
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Create different data for each replicate
     dfs = [
         pl.DataFrame({"value": [1, 2, 3]}),
         pl.DataFrame({"value": [4, 5, 6]}),
-        pl.DataFrame({"value": [7, 8, 9]})
+        pl.DataFrame({"value": [7, 8, 9]}),
     ]
 
     mock_target = Mock()
     mock_target.model_output = "output"
-    mock_target.evaluate = Mock(return_value=MockTargetEvaluation(
-        loss=0.333,
-        diagnostics={"n_unique_replicates": 3}
-    ))
+    mock_target.evaluate = Mock(
+        return_value=MockTargetEvaluation(loss=0.333, diagnostics={"n_unique_replicates": 3})
+    )
 
     # Each replicate gets unique data
-    sim_returns = [
-        {"outputs": {"output": {"data": df_to_ipc_bytes(df)}}}
-        for df in dfs
-    ]
+    sim_returns = [{"outputs": {"output": {"data": df_to_ipc_bytes(df)}}} for df in dfs]
 
     modname = "_test_targets_replicate"
     mock_module = MagicMock()
@@ -379,10 +341,7 @@ def test_aggregate_replicate_independence():
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(
-            target_entrypoint=f"{modname}:target",
-            sim_returns=sim_returns
-        )
+        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
         assert result["loss"] == 0.333
 
@@ -439,20 +398,15 @@ def prevalence_target():
     df = pl.DataFrame({"day": [0, 1], "infected": [5, 10]})
     arrow_bytes = df_to_ipc_bytes(df)
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     # Use the real module path
     result = runner.aggregate(
         target_entrypoint="mytargets.prevalence:prevalence_target",
-        sim_returns=[
-            {"outputs": {"prevalence": {"data": arrow_bytes}}}
-            for _ in range(2)
-        ]
+        sim_returns=[{"outputs": {"prevalence": {"data": arrow_bytes}}} for _ in range(2)],
     )
 
     # 2 replicates * 2 rows each = 4 total rows * 0.1 = 0.4
@@ -462,13 +416,19 @@ def prevalence_target():
     assert "target_type" in result["diagnostics"]
 
 
-@pytest.mark.parametrize("entrypoint_format", [
-    "simple:func",           # simple module
-    "pkg.mod:func",         # package.module format
-    pytest.param("pkg.sub.mod:func", marks=pytest.mark.xfail(
-        reason="Deep nesting (3+ levels) has import issues in test environment"
-    )),     # nested package format
-])
+@pytest.mark.parametrize(
+    "entrypoint_format",
+    [
+        "simple:func",  # simple module
+        "pkg.mod:func",  # package.module format
+        pytest.param(
+            "pkg.sub.mod:func",
+            marks=pytest.mark.xfail(
+                reason="Deep nesting (3+ levels) has import issues in test environment"
+            ),
+        ),  # nested package format
+    ],
+)
 def test_entrypoint_formats(entrypoint_format, tmp_path, monkeypatch):
     """Test various entrypoint format support."""
     from modelops.worker.subprocess_runner import SubprocessRunner
@@ -500,16 +460,14 @@ def {func_name}():
     df = pl.DataFrame({"value": [1]})
     arrow_bytes = df_to_ipc_bytes(df)
 
-    with patch('modelops.worker.subprocess_runner.SubprocessRunner._setup'):
+    with patch("modelops.worker.subprocess_runner.SubprocessRunner._setup"):
         runner = SubprocessRunner(
-            bundle_path=Path("/tmp/test"),
-            venv_path=Path("/tmp/venv"),
-            bundle_digest="test123"
+            bundle_path=Path("/tmp/test"), venv_path=Path("/tmp/venv"), bundle_digest="test123"
         )
 
     result = runner.aggregate(
         target_entrypoint=entrypoint_format,
-        sim_returns=[{"outputs": {"test": {"data": arrow_bytes}}}]
+        sim_returns=[{"outputs": {"test": {"data": arrow_bytes}}}],
     )
 
     assert result["loss"] == 0.25

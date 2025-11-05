@@ -8,18 +8,18 @@ def test_ipc_roundtrip_dict():
     """Test IPC roundtrip with dict data."""
     data = {
         "results": {"x": [1, 2, 3], "y": [4, 5, 6]},
-        "metrics": {"loss": [0.5], "accuracy": [0.95]}
+        "metrics": {"loss": [0.5], "accuracy": [0.95]},
     }
-    
+
     # Convert to IPC
     ipc_data = to_ipc_tables(data)
-    
+
     # All values should be bytes
     assert all(isinstance(v, bytes) for v in ipc_data.values())
-    
+
     # Round trip back
     recovered = from_ipc_tables(ipc_data)
-    
+
     # Check structure is preserved
     assert set(recovered.keys()) == set(data.keys())
 
@@ -30,26 +30,35 @@ def test_ipc_roundtrip_pandas():
         import pandas as pd
     except ImportError:
         pytest.skip("pandas not installed")
-    
+
     data = {
         "df1": pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]}),
-        "df2": pd.DataFrame({"x": [7.0, 8.0], "y": [9.0, 10.0]})
+        "df2": pd.DataFrame({"x": [7.0, 8.0], "y": [9.0, 10.0]}),
     }
-    
+
     # Convert to IPC
     ipc_data = to_ipc_tables(data)
-    
+
     # All values should be bytes
     assert all(isinstance(v, bytes) for v in ipc_data.values())
-    
+
     # Round trip back (returns polars DataFrames)
     recovered = from_ipc_tables(ipc_data)
-    
+
     # Convert polars back to pandas for comparison
     import polars as pl
-    recovered_df1 = recovered["df1"].to_pandas() if isinstance(recovered["df1"], pl.DataFrame) else recovered["df1"]
-    recovered_df2 = recovered["df2"].to_pandas() if isinstance(recovered["df2"], pl.DataFrame) else recovered["df2"]
-    
+
+    recovered_df1 = (
+        recovered["df1"].to_pandas()
+        if isinstance(recovered["df1"], pl.DataFrame)
+        else recovered["df1"]
+    )
+    recovered_df2 = (
+        recovered["df2"].to_pandas()
+        if isinstance(recovered["df2"], pl.DataFrame)
+        else recovered["df2"]
+    )
+
     # Check DataFrames are equivalent
     pd.testing.assert_frame_equal(recovered_df1, data["df1"])
     pd.testing.assert_frame_equal(recovered_df2, data["df2"])
@@ -61,21 +70,21 @@ def test_ipc_roundtrip_polars():
         import polars as pl
     except ImportError:
         pytest.skip("polars not installed")
-    
+
     data = {
         "df1": pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]}),
-        "df2": pl.DataFrame({"x": [7.0, 8.0], "y": [9.0, 10.0]})
+        "df2": pl.DataFrame({"x": [7.0, 8.0], "y": [9.0, 10.0]}),
     }
-    
+
     # Convert to IPC
     ipc_data = to_ipc_tables(data)
-    
+
     # All values should be bytes
     assert all(isinstance(v, bytes) for v in ipc_data.values())
-    
+
     # Round trip back (will be pandas or dict)
     recovered = from_ipc_tables(ipc_data)
-    
+
     # Check structure is preserved
     assert set(recovered.keys()) == set(data.keys())
 
@@ -87,14 +96,12 @@ def test_validate_sim_return_dict():
     validated = validate_sim_return(data)
     assert isinstance(validated, dict)
     assert all(isinstance(v, bytes) for v in validated.values())
-    
+
     # Already IPC bytes should pass through
     ipc_data = {"results": b"some_bytes"}
     validated = validate_sim_return(ipc_data)
     assert validated == ipc_data
-    
+
     # Non-dict should raise
     with pytest.raises(TypeError, match="must return dict"):
         validate_sim_return([1, 2, 3])
-
-

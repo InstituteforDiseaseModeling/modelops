@@ -29,45 +29,40 @@ class TestJSONRPCProtocol:
         # Create in-memory streams
         input_stream = BytesIO()
         output_stream = BytesIO()
-        
+
         # Write a message
         protocol = JSONRPCProtocol(input_stream, output_stream)
         message = {"jsonrpc": "2.0", "method": "test", "params": {}, "id": 1}
         protocol._write_message(message)
-        
+
         # Reset streams
         output_stream.seek(0)
         input_stream = BytesIO(output_stream.read())
         input_stream.seek(0)
-        
+
         # Read the message back
         protocol2 = JSONRPCProtocol(input_stream, BytesIO())
         read_message = protocol2.read_message()
-        
+
         assert read_message == message
 
     def test_read_large_message(self):
         """Test reading messages larger than typical buffer size."""
         # Create a large message (>65KB)
         large_data = "x" * 100000
-        message = {
-            "jsonrpc": "2.0",
-            "method": "test",
-            "params": {"data": large_data},
-            "id": 1
-        }
-        
+        message = {"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}, "id": 1}
+
         # Write message
         output_stream = BytesIO()
         protocol = JSONRPCProtocol(None, output_stream)
         protocol._write_message(message)
-        
+
         # Read it back
         output_stream.seek(0)
         input_stream = BytesIO(output_stream.read())
         protocol2 = JSONRPCProtocol(input_stream, None)
         read_message = protocol2.read_message()
-        
+
         assert read_message == message
         assert len(read_message["params"]["data"]) == 100000
 
@@ -76,7 +71,7 @@ class TestJSONRPCProtocol:
         # Create stream with incomplete header
         input_stream = BytesIO(b"Content-Len")
         protocol = JSONRPCProtocol(input_stream, None)
-        
+
         with pytest.raises(JSONRPCError) as exc_info:
             protocol.read_message()
         assert exc_info.value.code == -32700
@@ -86,7 +81,7 @@ class TestJSONRPCProtocol:
         # Create stream without Content-Length
         input_stream = BytesIO(b"Some-Header: value\r\n\r\n")
         protocol = JSONRPCProtocol(input_stream, None)
-        
+
         with pytest.raises(JSONRPCError) as exc_info:
             protocol.read_message()
         assert "Content-Length" in str(exc_info.value)
@@ -95,7 +90,7 @@ class TestJSONRPCProtocol:
         """Test handling of invalid Content-Length value."""
         input_stream = BytesIO(b"Content-Length: invalid\r\n\r\n")
         protocol = JSONRPCProtocol(input_stream, None)
-        
+
         with pytest.raises(JSONRPCError) as exc_info:
             protocol.read_message()
         assert exc_info.value.code == -32700
@@ -105,7 +100,7 @@ class TestJSONRPCProtocol:
         # Say we have 100 bytes but only provide 50
         input_stream = BytesIO(b"Content-Length: 100\r\n\r\n" + b"x" * 50)
         protocol = JSONRPCProtocol(input_stream, None)
-        
+
         with pytest.raises(JSONRPCError) as exc_info:
             protocol.read_message()
         assert "Incomplete message" in str(exc_info.value)
@@ -116,7 +111,7 @@ class TestJSONRPCProtocol:
         header = f"Content-Length: {len(invalid_json)}\r\n\r\n".encode()
         input_stream = BytesIO(header + invalid_json)
         protocol = JSONRPCProtocol(input_stream, None)
-        
+
         with pytest.raises(JSONRPCError) as exc_info:
             protocol.read_message()
         assert "Invalid JSON" in str(exc_info.value)
@@ -125,27 +120,24 @@ class TestJSONRPCProtocol:
         """Test that concurrent writes don't corrupt messages."""
         output_stream = BytesIO()
         protocol = JSONRPCProtocol(None, output_stream)
-        
+
         # We need to add locking to prevent corruption
         # For now, this test documents the issue
         messages = []
         for i in range(10):
-            messages.append({
-                "jsonrpc": "2.0",
-                "method": f"test_{i}",
-                "params": {"index": i},
-                "id": i
-            })
-        
+            messages.append(
+                {"jsonrpc": "2.0", "method": f"test_{i}", "params": {"index": i}, "id": i}
+            )
+
         # Write all messages
         for msg in messages:
             protocol._write_message(msg)
-        
+
         # Read them back
         output_stream.seek(0)
         input_stream = BytesIO(output_stream.read())
         protocol2 = JSONRPCProtocol(input_stream, None)
-        
+
         for expected in messages:
             read_msg = protocol2.read_message()
             assert read_msg == expected
@@ -159,48 +151,41 @@ class TestJSONRPCClient:
         # Create mock streams
         input_stream = BytesIO()
         output_stream = BytesIO()
-        
+
         # Prepare response
-        response = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"success": True}
-        }
+        response = {"jsonrpc": "2.0", "id": 1, "result": {"success": True}}
         response_bytes = json.dumps(response).encode()
         input_stream.write(f"Content-Length: {len(response_bytes)}\r\n\r\n".encode())
         input_stream.write(response_bytes)
         input_stream.seek(0)
-        
+
         # Make call
         client = JSONRPCClient(output_stream, input_stream)
-        
+
         # Set the next ID to 1 to match response
         client.protocol._next_id = 1
         result = client.call("test_method", {"param": "value"})
-        
+
         assert result == {"success": True}
 
     def test_call_error_response(self):
         """Test handling of error response."""
         input_stream = BytesIO()
         output_stream = BytesIO()
-        
+
         # Prepare error response
         response = {
             "jsonrpc": "2.0",
             "id": 1,
-            "error": {
-                "code": -32601,
-                "message": "Method not found"
-            }
+            "error": {"code": -32601, "message": "Method not found"},
         }
         response_bytes = json.dumps(response).encode()
         input_stream.write(f"Content-Length: {len(response_bytes)}\r\n\r\n".encode())
         input_stream.write(response_bytes)
         input_stream.seek(0)
-        
+
         client = JSONRPCClient(output_stream, input_stream)
-        
+
         # Set the next ID to 1 to match response
         client.protocol._next_id = 1
         with pytest.raises(JSONRPCError) as exc_info:
@@ -214,7 +199,7 @@ class TestSubprocessCommunication:
     @staticmethod
     def create_echo_subprocess() -> str:
         """Create a simple echo subprocess for testing."""
-        script = '''
+        script = """
 import sys
 import json
 
@@ -276,37 +261,37 @@ class EchoServer:
 if __name__ == "__main__":
     server = EchoServer()
     server.run()
-'''
+"""
         fd, path = tempfile.mkstemp(suffix=".py", prefix="echo_server_")
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(script)
         return path
 
     def test_subprocess_basic_communication(self):
         """Test basic communication with subprocess."""
         script_path = self.create_echo_subprocess()
-        
+
         try:
             proc = subprocess.Popen(
                 [sys.executable, script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0  # Unbuffered
+                bufsize=0,  # Unbuffered
             )
-            
+
             client = JSONRPCClient(proc.stdin, proc.stdout)
-            
+
             # Test echo
             result = client.call("echo", {"message": "test"})
             assert result == {"message": "test"}
-            
+
             # Shutdown
             result = client.call("shutdown", {})
             assert result == {"ok": True}
-            
+
             proc.wait(timeout=1)
-            
+
         finally:
             os.unlink(script_path)
             if proc.poll() is None:
@@ -315,59 +300,59 @@ if __name__ == "__main__":
     def test_subprocess_large_messages(self):
         """Test large message handling with subprocess."""
         script_path = self.create_echo_subprocess()
-        
+
         try:
             proc = subprocess.Popen(
                 [sys.executable, script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0
+                bufsize=0,
             )
-            
+
             client = JSONRPCClient(proc.stdin, proc.stdout)
-            
+
             # Test with 100KB message
             large_data = "x" * 100000
             result = client.call("echo", {"data": large_data})
             assert result["data"] == large_data
-            
+
             client.call("shutdown", {})
             proc.wait(timeout=1)
-            
+
         finally:
             os.unlink(script_path)
             if proc.poll() is None:
                 proc.terminate()
-    
+
     def test_subprocess_70kb_issue(self):
         """Test subprocess handling of 70KB message (reproduces integration test issue)."""
         script_path = self.create_echo_subprocess()
-        
+
         try:
             proc = subprocess.Popen(
                 [sys.executable, script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0  # Unbuffered like in process_manager.py
+                bufsize=0,  # Unbuffered like in process_manager.py
             )
-            
+
             client = JSONRPCClient(proc.stdin, proc.stdout)
-            
+
             # Test with 70KB message like in the failing test
             large_data = "x" * 70000
             result = client.call("echo", {"data": large_data})
             assert result["data"] == large_data
-            
+
             # Test even larger - 100KB
-            large_data = "x" * 100000  
+            large_data = "x" * 100000
             result = client.call("echo", {"data": large_data})
             assert result["data"] == large_data
-            
+
             client.call("shutdown", {})
             proc.wait(timeout=1)
-            
+
         finally:
             os.unlink(script_path)
             if proc.poll() is None:
@@ -376,26 +361,26 @@ if __name__ == "__main__":
     def test_subprocess_concurrent_calls(self):
         """Test multiple rapid calls to subprocess."""
         script_path = self.create_echo_subprocess()
-        
+
         try:
             proc = subprocess.Popen(
                 [sys.executable, script_path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0
+                bufsize=0,
             )
-            
+
             client = JSONRPCClient(proc.stdin, proc.stdout)
-            
+
             # Send 20 rapid calls
             for i in range(20):
                 result = client.call("echo", {"index": i})
                 assert result["index"] == i
-            
+
             client.call("shutdown", {})
             proc.wait(timeout=1)
-            
+
         finally:
             os.unlink(script_path)
             if proc.poll() is None:
@@ -404,57 +389,49 @@ if __name__ == "__main__":
 
 class TestStressScenarios:
     """Stress tests to find edge cases."""
-    
+
     def test_exactly_65kb_boundary(self):
         """Test message exactly at 65KB boundary (common buffer size)."""
         # Create message exactly at 65KB boundary
         target_size = 65536
-        padding_size = target_size - len('{"jsonrpc":"2.0","method":"test","params":{"data":""},"id":1}')
+        padding_size = target_size - len(
+            '{"jsonrpc":"2.0","method":"test","params":{"data":""},"id":1}'
+        )
         large_data = "x" * padding_size
-        
-        message = {
-            "jsonrpc": "2.0",
-            "method": "test",
-            "params": {"data": large_data},
-            "id": 1
-        }
-        
+
+        message = {"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}, "id": 1}
+
         # Write message
         output_stream = BytesIO()
         protocol = JSONRPCProtocol(None, output_stream)
         protocol._write_message(message)
-        
+
         # Read it back
         output_stream.seek(0)
         input_stream = BytesIO(output_stream.read())
         protocol2 = JSONRPCProtocol(input_stream, None)
         read_message = protocol2.read_message()
-        
+
         assert read_message == message
         assert len(json.dumps(read_message).encode()) >= 65536
-    
+
     def test_70kb_message_handling(self):
         """Test message at 70KB (reproduces integration test failure)."""
         # Create 70KB message like in integration test
         large_data = "x" * 70000
-        message = {
-            "jsonrpc": "2.0",
-            "method": "test",
-            "params": {"data": large_data},
-            "id": 1
-        }
-        
+        message = {"jsonrpc": "2.0", "method": "test", "params": {"data": large_data}, "id": 1}
+
         # Write message
         output_stream = BytesIO()
         protocol = JSONRPCProtocol(None, output_stream)
         protocol._write_message(message)
-        
+
         # Read it back - this should fail with current implementation
         output_stream.seek(0)
         input_stream = BytesIO(output_stream.read())
         protocol2 = JSONRPCProtocol(input_stream, None)
         read_message = protocol2.read_message()
-        
+
         assert read_message == message
         assert len(read_message["params"]["data"]) == 70000
 
@@ -466,7 +443,7 @@ class TestStressScenarios:
 
     def test_stderr_interference(self):
         """Test that stderr output doesn't interfere with protocol."""
-        script = '''
+        script = """
 import sys
 import json
 
@@ -479,32 +456,32 @@ body = json.dumps(msg).encode()
 sys.stdout.buffer.write(f"Content-Length: {len(body)}\\r\\n\\r\\n".encode())
 sys.stdout.buffer.write(body)
 sys.stdout.buffer.flush()
-'''
-        
+"""
+
         fd, path = tempfile.mkstemp(suffix=".py")
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(script)
-        
+
         try:
             proc = subprocess.Popen(
                 [sys.executable, path],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                bufsize=0
+                bufsize=0,
             )
-            
+
             # Read stderr separately
             stderr_output = proc.stderr.read(100)
             assert b"stderr output" in stderr_output
-            
+
             # Protocol should still work
             protocol = JSONRPCProtocol(proc.stdout, proc.stdin)
             msg = protocol.read_message()
             assert msg["result"]["ok"] == True
-            
+
             proc.wait(timeout=1)
-            
+
         finally:
             os.unlink(path)
             if proc.poll() is None:
@@ -513,7 +490,7 @@ sys.stdout.buffer.flush()
     def test_rapid_process_restart(self):
         """Test rapid process death and restart."""
         script_path = TestSubprocessCommunication.create_echo_subprocess()
-        
+
         try:
             for _ in range(5):
                 proc = subprocess.Popen(
@@ -521,16 +498,16 @@ sys.stdout.buffer.flush()
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    bufsize=0
+                    bufsize=0,
                 )
-                
+
                 client = JSONRPCClient(proc.stdin, proc.stdout)
                 result = client.call("echo", {"test": "data"})
                 assert result == {"test": "data"}
-                
+
                 # Kill abruptly
                 proc.terminate()
                 proc.wait()
-                
+
         finally:
             os.unlink(script_path)

@@ -45,7 +45,9 @@ class TestPulumiPassphrase:
             mock_pulumi = MagicMock()
             mock_pulumi.backend_url = f"file://{tmpdir}"
             mock_config.pulumi = mock_pulumi
-            with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+            with patch(
+                "modelops.core.config.ModelOpsConfig.get_instance", return_value=mock_config
+            ):
                 # Call workspace_options
                 opts = automation.workspace_options("test-project", work_dir)
 
@@ -77,7 +79,9 @@ class TestPulumiPassphrase:
                 mock_pulumi = MagicMock()
                 mock_pulumi.backend_url = f"file://{tmpdir}"
                 mock_config.pulumi = mock_pulumi
-                with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+                with patch(
+                    "modelops.core.config.ModelOpsConfig.get_instance", return_value=mock_config
+                ):
                     # Call workspace_options
                     opts = automation.workspace_options("test-project", work_dir)
 
@@ -104,7 +108,7 @@ class TestPulumiPassphrase:
             # Mock the home directory to use temp dir
             mock_passphrase_file = Path(tmpdir) / ".modelops" / "secrets" / "pulumi-passphrase"
 
-            with patch.object(Path, 'home', return_value=Path(tmpdir)):
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
                 # First call - creates file
                 automation._ensure_passphrase()
                 assert mock_passphrase_file.exists()
@@ -141,6 +145,7 @@ class TestPulumiPassphrase:
 
                     # Generate and write passphrase
                     import secrets
+
                     passphrase = secrets.token_urlsafe(32)
                     mock_passphrase_file.write_text(passphrase)
                     passphrases_created.append(passphrase)
@@ -165,14 +170,16 @@ class TestPulumiPassphrase:
 
     def test_select_stack_calls_ensure_passphrase(self):
         """Verify that select_stack always ensures passphrase is configured."""
-        with patch('modelops.core.automation._ensure_passphrase') as mock_ensure:
-            with patch('modelops.core.automation.auto.create_or_select_stack') as mock_create:
+        with patch("modelops.core.automation._ensure_passphrase") as mock_ensure:
+            with patch("modelops.core.automation.auto.create_or_select_stack") as mock_create:
                 # Mock the config to avoid needing config file
                 mock_config = MagicMock(spec=ModelOpsConfig)
                 mock_pulumi = MagicMock()
                 mock_pulumi.backend_url = "file:///tmp/test"
                 mock_config.pulumi = mock_pulumi
-                with patch('modelops.core.config.ModelOpsConfig.get_instance', return_value=mock_config):
+                with patch(
+                    "modelops.core.config.ModelOpsConfig.get_instance", return_value=mock_config
+                ):
                     mock_create.return_value = MagicMock()
 
                     # Call select_stack with a valid component

@@ -16,7 +16,7 @@ def pytest_addoption(parser):
         action="store",
         default=None,
         help="Connect to an existing Dask scheduler instead of creating a LocalCluster "
-             "(e.g., tcp://localhost:8786)."
+        "(e.g., tcp://localhost:8786).",
     )
 
 
@@ -60,8 +60,8 @@ def dask_cluster(request):
             pytest.fail(f"External Dask scheduler not reachable at {addr} (port closed)")
 
         try:
-            client = Client(addr, timeout="2s")         # short connect timeout
-            client.wait_for_workers(1, timeout="5s")    # verify it's alive
+            client = Client(addr, timeout="2s")  # short connect timeout
+            client.wait_for_workers(1, timeout="5s")  # verify it's alive
             print(f"Connected to external Dask cluster at {addr}")
         except Exception as e:
             pytest.fail(f"Failed to connect to external Dask at {addr}: {e}")
@@ -87,7 +87,7 @@ def dask_cluster(request):
             threads_per_worker=threads_per_worker,
             processes=True,
             silence_logs=logging.ERROR,
-            dashboard_address=None,     # avoid port conflicts in CI
+            dashboard_address=None,  # avoid port conflicts in CI
             memory_limit=memory_limit,
             death_timeout="5s",
         )

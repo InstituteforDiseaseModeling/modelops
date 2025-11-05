@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch, MagicMock
 from modelops.client.utils import (
     DependencyGraph,
     validate_component_dependencies,
-    canonicalize_component_name
+    canonicalize_component_name,
 )
 from modelops.client.base import ComponentStatus, ComponentState
 
@@ -87,7 +87,7 @@ class TestValidateComponentDependencies:
 
         # Should complete without error
 
-    @patch('modelops.client.infra_service.InfrastructureService')
+    @patch("modelops.client.infra_service.InfrastructureService")
     def test_validate_all_dependencies_ready(self, mock_infra_service_class):
         """Test validation passes when all dependencies are ready."""
         # Mock the infrastructure service
@@ -97,26 +97,16 @@ class TestValidateComponentDependencies:
         # Mock all dependencies as ready
         mock_service.get_status.return_value = {
             "resource_group": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
+                deployed=True, phase=ComponentState.READY, details={}
             ),
-            "cluster": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
-            ),
-            "storage": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
-            ),
+            "cluster": ComponentStatus(deployed=True, phase=ComponentState.READY, details={}),
+            "storage": ComponentStatus(deployed=True, phase=ComponentState.READY, details={}),
         }
 
         # Should pass without error
         validate_component_dependencies("workspace", "dev", mock_service)
 
-    @patch('modelops.client.infra_service.InfrastructureService')
+    @patch("modelops.client.infra_service.InfrastructureService")
     def test_validate_missing_dependencies(self, mock_infra_service_class):
         """Test validation fails when dependencies are missing."""
         # Mock the infrastructure service
@@ -126,20 +116,12 @@ class TestValidateComponentDependencies:
         # Mock cluster as not deployed
         mock_service.get_status.return_value = {
             "resource_group": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
+                deployed=True, phase=ComponentState.READY, details={}
             ),
             "cluster": ComponentStatus(
-                deployed=False,
-                phase=ComponentState.NOT_DEPLOYED,
-                details={}
+                deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
             ),
-            "storage": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
-            ),
+            "storage": ComponentStatus(deployed=True, phase=ComponentState.READY, details={}),
         }
 
         # Should raise ValueError
@@ -151,7 +133,7 @@ class TestValidateComponentDependencies:
         assert "cluster" in error_msg
         assert "mops infra up" in error_msg
 
-    @patch('modelops.client.infra_service.InfrastructureService')
+    @patch("modelops.client.infra_service.InfrastructureService")
     def test_validate_dependencies_not_ready(self, mock_infra_service_class):
         """Test validation fails when dependencies exist but aren't ready."""
         # Mock the infrastructure service
@@ -161,20 +143,14 @@ class TestValidateComponentDependencies:
         # Mock cluster as deployed but not ready
         mock_service.get_status.return_value = {
             "resource_group": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
+                deployed=True, phase=ComponentState.READY, details={}
             ),
             "cluster": ComponentStatus(
                 deployed=True,
                 phase=ComponentState.DEPLOYING,  # Not ready
-                details={}
+                details={},
             ),
-            "storage": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
-            ),
+            "storage": ComponentStatus(deployed=True, phase=ComponentState.READY, details={}),
         }
 
         # Should raise ValueError
@@ -185,7 +161,7 @@ class TestValidateComponentDependencies:
         assert "Cannot deploy workspace" in error_msg
         assert "cluster (deploying)" in error_msg.lower()
 
-    @patch('modelops.client.infra_service.InfrastructureService')
+    @patch("modelops.client.infra_service.InfrastructureService")
     def test_validate_cluster_dependencies(self, mock_infra_service_class):
         """Test cluster validation requires resource_group and registry."""
         # Mock the infrastructure service
@@ -195,14 +171,10 @@ class TestValidateComponentDependencies:
         # Mock registry as not deployed
         mock_service.get_status.return_value = {
             "resource_group": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
+                deployed=True, phase=ComponentState.READY, details={}
             ),
             "registry": ComponentStatus(
-                deployed=False,
-                phase=ComponentState.NOT_DEPLOYED,
-                details={}
+                deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
             ),
         }
 
@@ -220,9 +192,7 @@ class TestValidateComponentDependencies:
         mock_service = Mock()
         mock_service.get_status.return_value = {
             "resource_group": ComponentStatus(
-                deployed=True,
-                phase=ComponentState.READY,
-                details={}
+                deployed=True, phase=ComponentState.READY, details={}
             ),
         }
 
@@ -236,9 +206,9 @@ class TestValidateComponentDependencies:
 class TestCLIIntegration:
     """Test that CLIs properly use dependency validation."""
 
-    @patch('modelops.cli.workspace.resolve_env', return_value='dev')
-    @patch('modelops.client.utils.validate_component_dependencies')
-    @patch('modelops.cli.workspace.WorkspaceService')
+    @patch("modelops.cli.workspace.resolve_env", return_value="dev")
+    @patch("modelops.client.utils.validate_component_dependencies")
+    @patch("modelops.cli.workspace.WorkspaceService")
     def test_workspace_cli_validates(self, mock_service, mock_validate, mock_resolve_env):
         """Test workspace CLI validates dependencies."""
         from typer.testing import CliRunner
@@ -248,15 +218,14 @@ class TestCLIIntegration:
         mock_validate.return_value = None
         mock_service_instance = Mock()
         mock_service.return_value = mock_service_instance
-        mock_service_instance.provision.return_value = {
-            "scheduler_address": "tcp://localhost:8786"
-        }
+        mock_service_instance.provision.return_value = {"scheduler_address": "tcp://localhost:8786"}
 
         runner = CliRunner()
 
         # Create a valid config file
         import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.yaml', mode='w', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write("""metadata:
   name: test-workspace
 spec:
@@ -275,10 +244,11 @@ spec:
 
         finally:
             import os
+
             os.unlink(config_path)
 
-    @patch('modelops.cli.workspace.resolve_env', return_value='dev')
-    @patch('modelops.client.utils.validate_component_dependencies')
+    @patch("modelops.cli.workspace.resolve_env", return_value="dev")
+    @patch("modelops.client.utils.validate_component_dependencies")
     def test_workspace_cli_fails_on_validation_error(self, mock_validate, mock_resolve_env):
         """Test workspace CLI exits when validation fails."""
         from typer.testing import CliRunner
@@ -291,7 +261,8 @@ spec:
 
         # Create a valid config file
         import tempfile
-        with tempfile.NamedTemporaryFile(suffix='.yaml', mode='w', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
             f.write("""metadata:
   name: test-workspace
 spec:
@@ -311,6 +282,7 @@ spec:
 
         finally:
             import os
+
             os.unlink(config_path)
 
 

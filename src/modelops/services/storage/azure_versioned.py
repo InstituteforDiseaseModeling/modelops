@@ -5,16 +5,15 @@ concurrent updates with automatic retry on conflicts.
 """
 
 import logging
-from typing import Optional
 
 from azure.core.exceptions import (
+    ResourceExistsError,
     ResourceModifiedError,
     ResourceNotFoundError,
-    ResourceExistsError
 )
 from azure.storage.blob import BlobServiceClient
 
-from .versioned import VersionedStore, VersionToken
+from .versioned import VersionToken
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ class AzureVersionedStore:
         except Exception as e:
             logger.warning(f"Container check for {self.container}: {e}")
 
-    def get(self, key: str) -> Optional[tuple[bytes, VersionToken]]:
+    def get(self, key: str) -> tuple[bytes, VersionToken] | None:
         """Get current value and ETag version."""
         try:
             blob_client = self.client.get_blob_client(self.container, key)
@@ -83,7 +82,7 @@ class AzureVersionedStore:
                 value,
                 overwrite=True,
                 if_match=version.value,  # ETag for conditional update
-                content_type="application/json"
+                content_type="application/json",
             )
 
             logger.debug(f"Updated {key} with CAS (etag: {version.value})")
@@ -110,11 +109,7 @@ class AzureVersionedStore:
             blob_client = self.client.get_blob_client(self.container, key)
 
             # overwrite=False ensures it fails if exists
-            blob_client.upload_blob(
-                value,
-                overwrite=False,
-                content_type="application/json"
-            )
+            blob_client.upload_blob(value, overwrite=False, content_type="application/json")
 
             logger.debug(f"Created {key}")
             return True

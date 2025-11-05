@@ -3,29 +3,32 @@
 Deploys Dask scheduler and workers on existing Kubernetes cluster.
 """
 
+import os
+from typing import Any
+
 import pulumi
 import pulumi_kubernetes as k8s
-from typing import Dict, Any, Optional, List
-import json
-import base64
-import os
+
 from ...core import StackNaming
-from ...versions import DASK_IMAGE
 from .smoke_test import SmokeTest
 
 
 class DaskWorkspace(pulumi.ComponentResource):
     """Stack 2: Workspace plane - deploys Dask on existing cluster.
-    
+
     Uses kubeconfig from infrastructure stack to deploy Dask components.
     Exports scheduler address for adaptive plane consumption.
     """
-    
-    def __init__(self, name: str, infra_stack_ref: str,
-                 config: Optional[Dict[str, Any]] = None,
-                 storage_stack_ref: Optional[str] = None,
-                 registry_stack_ref: Optional[str] = None,
-                 opts: Optional[pulumi.ResourceOptions] = None):
+
+    def __init__(
+        self,
+        name: str,
+        infra_stack_ref: str,
+        config: dict[str, Any] | None = None,
+        storage_stack_ref: str | None = None,
+        registry_stack_ref: str | None = None,
+        opts: pulumi.ResourceOptions | None = None,
+    ):
         """Initialize Dask workspace deployment.
 
         Args:
@@ -37,7 +40,7 @@ class DaskWorkspace(pulumi.ComponentResource):
             opts: Optional Pulumi resource options
         """
         super().__init__("modelops:workspace:dask", name, None, opts)
-        
+
         # Create all stack references once at the top to avoid duplicates
         infra = pulumi.StackReference(infra_stack_ref)
         registry = pulumi.StackReference(registry_stack_ref) if registry_stack_ref else None
@@ -79,16 +82,16 @@ class DaskWorkspace(pulumi.ComponentResource):
         k8s_provider = k8s.Provider(
             f"{name}-k8s",
             kubeconfig=kubeconfig,
-            opts=pulumi.ResourceOptions(parent=self)
+            opts=pulumi.ResourceOptions(parent=self),
         )
-        
+
         # Default configuration
         config = config or {}
-        
+
         # Extract environment from config (passed from CLI)
         # Don't try to parse from stack ref as it contains full path
         env = config.get("environment", "dev")
-        
+
         # Parse metadata and spec if structured
         if "metadata" in config and "spec" in config:
             metadata = config["metadata"]
@@ -102,7 +105,7 @@ class DaskWorkspace(pulumi.ComponentResource):
             namespace = config.get("namespace", StackNaming.get_namespace("dask", env))
             scheduler_config = config
             workers_config = config
-        
+
         # Extract configuration values - images are REQUIRED, no defaults
         scheduler_image = scheduler_config.get("image")
         if not scheduler_image:
@@ -113,48 +116,54 @@ class DaskWorkspace(pulumi.ComponentResource):
         worker_count = workers_config.get("replicas", config.get("worker_count", 3))
         worker_processes = workers_config.get("processes", 1)  # Default to 1 process
         worker_threads = workers_config.get("threads", 2)  # Default to 2 threads
-        
+
         # Convert K8s memory format to Dask format
         # Dask expects GiB/MiB/GB/MB notation
         memory_limit = workers_config.get("resources", {}).get("limits", {}).get("memory", "4Gi")
-        
+
         # Handle various memory format suffixes
         memory_conversions = {
-            "Gi": "GiB",   # K8s Gi -> Dask GiB
-            "Mi": "MiB",   # K8s Mi -> Dask MiB  
-            "Ki": "KiB",   # K8s Ki -> Dask KiB
-            "G": "GB",     # G -> GB (already Dask compatible)
-            "M": "MB",     # M -> MB (already Dask compatible)
-            "K": "KB",     # K -> KB (already Dask compatible)
+            "Gi": "GiB",  # K8s Gi -> Dask GiB
+            "Mi": "MiB",  # K8s Mi -> Dask MiB
+            "Ki": "KiB",  # K8s Ki -> Dask KiB
+            "G": "GB",  # G -> GB (already Dask compatible)
+            "M": "MB",  # M -> MB (already Dask compatible)
+            "K": "KB",  # K -> KB (already Dask compatible)
         }
-        
+
         for k8s_suffix, dask_suffix in memory_conversions.items():
             if memory_limit.endswith(k8s_suffix):
-                memory_limit = memory_limit[:-len(k8s_suffix)] + dask_suffix
+                memory_limit = memory_limit[: -len(k8s_suffix)] + dask_suffix
                 break
-        
+
         # Adjust memory limit per process if using multiple processes
         if worker_processes > 1:
             # Parse memory value and unit
             import re
-            match = re.match(r'^(\d+(?:\.\d+)?)\s*([A-Za-z]+)$', memory_limit)
+
+            match = re.match(r"^(\d+(?:\.\d+)?)\s*([A-Za-z]+)$", memory_limit)
             if match:
                 value, unit = match.groups()
                 per_process_value = float(value) / worker_processes
                 memory_limit = f"{per_process_value:.1f}{unit}"
-        
+
         # Node selectors
         scheduler_node_selector = scheduler_config.get("nodeSelector", {})
         worker_node_selector = workers_config.get("nodeSelector", {})
-        
+
         # Tolerations for tainted nodes
         tolerations = config.get("spec", {}).get("tolerations", [])
         # Add default toleration for modelops.io/role taint
         if not tolerations:
             tolerations = [
-                {"key": "modelops.io/role", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+                {
+                    "key": "modelops.io/role",
+                    "operator": "Equal",
+                    "value": "cpu",
+                    "effect": "NoSchedule",
+                }
             ]
-        
+
         # Create namespace
         ns = k8s.core.v1.Namespace(
             f"{name}-namespace",
@@ -162,12 +171,12 @@ class DaskWorkspace(pulumi.ComponentResource):
                 name=namespace,
                 labels={
                     "modelops.io/component": "workspace",
-                    "modelops.io/workspace": name
-                }
+                    "modelops.io/workspace": name,
+                },
             ),
-            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self),
         )
-        
+
         # Initialize variables for conditional resources
         has_registry = bool(registry_stack_ref)
         has_storage = bool(storage_stack_ref)
@@ -204,19 +213,12 @@ class DaskWorkspace(pulumi.ComponentResource):
             # Create storage secret (kept for backward compatibility)
             k8s.core.v1.Secret(
                 f"{name}-storage-secret",
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name="modelops-storage",
-                    namespace=namespace
-                ),
+                metadata=k8s.meta.v1.ObjectMetaArgs(name="modelops-storage", namespace=namespace),
                 string_data={
                     "AZURE_STORAGE_CONNECTION_STRING": storage_conn_str,
-                    "AZURE_STORAGE_ACCOUNT": storage_account
+                    "AZURE_STORAGE_ACCOUNT": storage_account,
                 },
-                opts=pulumi.ResourceOptions(
-                    provider=k8s_provider,
-                    parent=self,
-                    depends_on=[ns]
-                )
+                opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self, depends_on=[ns]),
             )
 
         # Create bundle credentials secret if registry is available AND has credentials
@@ -249,16 +251,9 @@ class DaskWorkspace(pulumi.ComponentResource):
             # Create the secret directly - Pulumi accepts Output[str] in string_data
             bundle_secret = k8s.core.v1.Secret(
                 f"{name}-bundle-credentials",
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name="bundle-credentials",
-                    namespace=namespace
-                ),
+                metadata=k8s.meta.v1.ObjectMetaArgs(name="bundle-credentials", namespace=namespace),
                 string_data=secret_data,
-                opts=pulumi.ResourceOptions(
-                    provider=k8s_provider,
-                    parent=self,
-                    depends_on=[ns]
-                )
+                opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self, depends_on=[ns]),
             )
 
         # Create GitHub credentials secret for private repo access (e.g., modelops-calabaria)
@@ -266,10 +261,7 @@ class DaskWorkspace(pulumi.ComponentResource):
         if github_token:
             github_secret = k8s.core.v1.Secret(
                 f"{name}-github-credentials",
-                metadata=k8s.meta.v1.ObjectMetaArgs(
-                    name="github-credentials",
-                    namespace=namespace
-                ),
+                metadata=k8s.meta.v1.ObjectMetaArgs(name="github-credentials", namespace=namespace),
                 string_data={
                     "GITHUB_TOKEN": github_token,
                     # For git operations via HTTPS
@@ -278,11 +270,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                     # For UV to use when installing from private GitHub repos
                     "UV_EXTRA_INDEX_URL": f"git+https://x-access-token:{github_token}@github.com/",
                 },
-                opts=pulumi.ResourceOptions(
-                    provider=k8s_provider,
-                    parent=self,
-                    depends_on=[ns]
-                )
+                opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self, depends_on=[ns]),
             )
 
         # No image pull secrets needed for public GHCR images
@@ -297,57 +285,67 @@ class DaskWorkspace(pulumi.ComponentResource):
         scheduler_env = []
         worker_env = []
         if bundle_registry is not None:
-            scheduler_env.append(k8s.core.v1.EnvVarArgs(
-                name="MODELOPS_BUNDLE_REGISTRY",
-                value=bundle_registry
-            ))
-            worker_env.append(k8s.core.v1.EnvVarArgs(
-                name="MODELOPS_BUNDLE_REGISTRY",
-                value=bundle_registry
-            ))
+            scheduler_env.append(
+                k8s.core.v1.EnvVarArgs(name="MODELOPS_BUNDLE_REGISTRY", value=bundle_registry)
+            )
+            worker_env.append(
+                k8s.core.v1.EnvVarArgs(name="MODELOPS_BUNDLE_REGISTRY", value=bundle_registry)
+            )
 
         # Add user-configured env vars
-        scheduler_env.extend([k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])])
+        scheduler_env.extend(
+            [k8s.core.v1.EnvVarArgs(**env) for env in scheduler_config.get("env", [])]
+        )
         worker_env.extend([k8s.core.v1.EnvVarArgs(**env) for env in workers_config.get("env", [])])
 
         scheduler_env_from = []
         worker_env_from = []
         if has_storage:
-            scheduler_env_from.append(k8s.core.v1.EnvFromSourceArgs(
-                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                    name="modelops-storage",
-                    optional=True  # Storage might not be configured
+            scheduler_env_from.append(
+                k8s.core.v1.EnvFromSourceArgs(
+                    secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                        name="modelops-storage",
+                        optional=True,  # Storage might not be configured
+                    )
                 )
-            ))
-            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
-                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                    name="modelops-storage",
-                    optional=True  # Storage might not be configured
+            )
+            worker_env_from.append(
+                k8s.core.v1.EnvFromSourceArgs(
+                    secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                        name="modelops-storage",
+                        optional=True,  # Storage might not be configured
+                    )
                 )
-            ))
+            )
 
         if bundle_secret is not None:
-            scheduler_env_from.append(k8s.core.v1.EnvFromSourceArgs(
-                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                    name="bundle-credentials"
-                    # No optional=True - fail fast if missing when expected
+            scheduler_env_from.append(
+                k8s.core.v1.EnvFromSourceArgs(
+                    secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                        name="bundle-credentials"
+                        # No optional=True - fail fast if missing when expected
+                    )
                 )
-            ))
-            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
-                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                    name="bundle-credentials"
-                    # No optional=True - fail fast if missing when expected
+            )
+            worker_env_from.append(
+                k8s.core.v1.EnvFromSourceArgs(
+                    secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                        name="bundle-credentials"
+                        # No optional=True - fail fast if missing when expected
+                    )
                 )
-            ))
+            )
 
         # Add GitHub credentials for private repo access
         if github_token:
-            worker_env_from.append(k8s.core.v1.EnvFromSourceArgs(
-                secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                    name="github-credentials",
-                    optional=True  # Optional since not all bundles need private deps
+            worker_env_from.append(
+                k8s.core.v1.EnvFromSourceArgs(
+                    secret_ref=k8s.core.v1.SecretEnvSourceArgs(
+                        name="github-credentials",
+                        optional=True,  # Optional since not all bundles need private deps
+                    )
                 )
-            ))
+            )
 
         # Compute annotations for pod checksums
         scheduler_annotations = {}
@@ -362,43 +360,38 @@ class DaskWorkspace(pulumi.ComponentResource):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 namespace=namespace,
                 name="dask-scheduler",
-                labels={
-                    "modelops.io/component": "scheduler",
-                    "app": "dask-scheduler"
-                }
+                labels={"modelops.io/component": "scheduler", "app": "dask-scheduler"},
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
                 replicas=1,
-                selector=k8s.meta.v1.LabelSelectorArgs(
-                    match_labels={"app": "dask-scheduler"}
-                ),
+                selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-scheduler"}),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels={
                             "app": "dask-scheduler",
-                            "modelops.io/component": "scheduler"
+                            "modelops.io/component": "scheduler",
                         },
                         annotations={
                             **(scheduler_annotations if scheduler_annotations else {}),
                             # CRITICAL: Prevent cluster autoscaler from evicting scheduler
                             # Without this, scheduler can be killed during node scale-down,
                             # causing total loss of all job progress and task state
-                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false"
-                        }
+                            "cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
+                        },
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # Security: Run containers as non-root to prevent privilege escalation
                         # Default K8s behavior runs as root (uid 0), enabling container escape attacks
                         security_context=k8s.core.v1.PodSecurityContextArgs(
-                            run_as_non_root=True,
-                            run_as_user=1000,
-                            fs_group=1000
+                            run_as_non_root=True, run_as_user=1000, fs_group=1000
                         ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="scheduler",
                                 image=scheduler_image,
-                                image_pull_policy="Always" if scheduler_image.endswith(":latest") else "IfNotPresent",
+                                image_pull_policy="Always"
+                                if scheduler_image.endswith(":latest")
+                                else "IfNotPresent",
                                 command=["dask-scheduler"],
                                 # Security: Drop all Linux capabilities to minimize attack surface
                                 # Dask doesn't need special kernel capabilities for normal operation
@@ -406,73 +399,60 @@ class DaskWorkspace(pulumi.ComponentResource):
                                     allow_privilege_escalation=False,
                                     run_as_non_root=True,
                                     run_as_user=1000,
-                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"]),
                                 ),
                                 ports=[
                                     k8s.core.v1.ContainerPortArgs(
-                                        container_port=8786,
-                                        name="scheduler"
+                                        container_port=8786, name="scheduler"
                                     ),
                                     k8s.core.v1.ContainerPortArgs(
-                                        container_port=8787,
-                                        name="dashboard"
-                                    )
+                                        container_port=8787, name="dashboard"
+                                    ),
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests=scheduler_config.get("resources", {}).get("requests", {
-                                        "memory": "2Gi",
-                                        "cpu": "1"
-                                    }),
-                                    limits=scheduler_config.get("resources", {}).get("limits", {
-                                        "memory": "2Gi",
-                                        "cpu": "1"
-                                    })
+                                    requests=scheduler_config.get("resources", {}).get(
+                                        "requests", {"memory": "2Gi", "cpu": "1"}
+                                    ),
+                                    limits=scheduler_config.get("resources", {}).get(
+                                        "limits", {"memory": "2Gi", "cpu": "1"}
+                                    ),
                                 ),
                                 env=scheduler_env if scheduler_env else None,
-                                env_from=scheduler_env_from if scheduler_env_from else None
+                                env_from=scheduler_env_from if scheduler_env_from else None,
                             )
                         ],
                         node_selector=scheduler_node_selector if scheduler_node_selector else None,
                         image_pull_secrets=pull_secrets if pull_secrets else None,
-                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations] if tolerations else None
-                    )
-                )
+                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations]
+                        if tolerations
+                        else None,
+                    ),
+                ),
             ),
             opts=pulumi.ResourceOptions(
                 provider=k8s_provider,
                 parent=self,
-                depends_on=[ns] + ([bundle_secret] if bundle_secret else [])
-            )
+                depends_on=[ns] + ([bundle_secret] if bundle_secret else []),
+            ),
         )
-        
+
         # Create scheduler service
         scheduler_svc = k8s.core.v1.Service(
             f"{name}-scheduler-svc",
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 namespace=namespace,
                 name="dask-scheduler",
-                labels={
-                    "modelops.io/component": "scheduler",
-                    "app": "dask-scheduler"
-                }
+                labels={"modelops.io/component": "scheduler", "app": "dask-scheduler"},
             ),
             spec=k8s.core.v1.ServiceSpecArgs(
                 selector={"app": "dask-scheduler"},
                 ports=[
-                    k8s.core.v1.ServicePortArgs(
-                        port=8786,
-                        target_port=8786,
-                        name="scheduler"
-                    ),
-                    k8s.core.v1.ServicePortArgs(
-                        port=8787,
-                        target_port=8787,
-                        name="dashboard"
-                    )
+                    k8s.core.v1.ServicePortArgs(port=8786, target_port=8786, name="scheduler"),
+                    k8s.core.v1.ServicePortArgs(port=8787, target_port=8787, name="dashboard"),
                 ],
-                type="ClusterIP"
+                type="ClusterIP",
             ),
-            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self),
         )
 
         # Create PodDisruptionBudget for scheduler to prevent disruption
@@ -482,18 +462,13 @@ class DaskWorkspace(pulumi.ComponentResource):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 namespace=namespace,
                 name="dask-scheduler-pdb",
-                labels={
-                    "modelops.io/component": "scheduler",
-                    "app": "dask-scheduler"
-                }
+                labels={"modelops.io/component": "scheduler", "app": "dask-scheduler"},
             ),
             spec=k8s.policy.v1.PodDisruptionBudgetSpecArgs(
                 min_available=1,  # Always keep scheduler running
-                selector=k8s.meta.v1.LabelSelectorArgs(
-                    match_labels={"app": "dask-scheduler"}
-                )
+                selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-scheduler"}),
             ),
-            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self)
+            opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self),
         )
 
         # Extract autoscaling config if using structured config
@@ -509,7 +484,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                 "enabled": True,
                 "min_workers": 2,
                 "max_workers": 20,
-                "target_cpu": 70
+                "target_cpu": 70,
             }
 
         # Create Dask workers deployment
@@ -518,78 +493,79 @@ class DaskWorkspace(pulumi.ComponentResource):
             metadata=k8s.meta.v1.ObjectMetaArgs(
                 namespace=namespace,
                 name="dask-workers",
-                labels={
-                    "modelops.io/component": "workers",
-                    "app": "dask-worker"
-                }
+                labels={"modelops.io/component": "workers", "app": "dask-worker"},
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
-                replicas=worker_count if not autoscaling_config.get("enabled", True) else autoscaling_config.get("min_workers", 2),
-                selector=k8s.meta.v1.LabelSelectorArgs(
-                    match_labels={"app": "dask-worker"}
-                ),
+                replicas=worker_count
+                if not autoscaling_config.get("enabled", True)
+                else autoscaling_config.get("min_workers", 2),
+                selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-worker"}),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(
                         labels={
                             "app": "dask-worker",
-                            "modelops.io/component": "worker"
+                            "modelops.io/component": "worker",
                         },
-                        annotations=worker_annotations if worker_annotations else None
+                        annotations=worker_annotations if worker_annotations else None,
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
                         # Security: Run containers as non-root to prevent privilege escalation
                         # Workers process untrusted code, so security isolation is critical
                         security_context=k8s.core.v1.PodSecurityContextArgs(
-                            run_as_non_root=True,
-                            run_as_user=1000,
-                            fs_group=1000
+                            run_as_non_root=True, run_as_user=1000, fs_group=1000
                         ),
                         containers=[
                             k8s.core.v1.ContainerArgs(
                                 name="worker",
                                 image=worker_image,
-                                image_pull_policy="Always" if worker_image.endswith(":latest") else "IfNotPresent",
+                                image_pull_policy="Always"
+                                if worker_image.endswith(":latest")
+                                else "IfNotPresent",
                                 # Security: Drop all capabilities and prevent privilege escalation
                                 # Workers don't need kernel capabilities for computation tasks
                                 security_context=k8s.core.v1.SecurityContextArgs(
                                     allow_privilege_escalation=False,
                                     run_as_non_root=True,
                                     run_as_user=1000,
-                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"])
+                                    capabilities=k8s.core.v1.CapabilitiesArgs(drop=["ALL"]),
                                 ),
                                 command=[
                                     "dask-worker",
                                     "tcp://dask-scheduler:8786",
-                                    "--nworkers", str(worker_processes),
-                                    "--nthreads", str(worker_threads),
-                                    "--memory-limit", memory_limit,
-                                    "--resources", "aggregation=1"  # Each worker gets aggregation resource
+                                    "--nworkers",
+                                    str(worker_processes),
+                                    "--nthreads",
+                                    str(worker_threads),
+                                    "--memory-limit",
+                                    memory_limit,
+                                    "--resources",
+                                    "aggregation=1",  # Each worker gets aggregation resource
                                 ],
                                 resources=k8s.core.v1.ResourceRequirementsArgs(
-                                    requests=workers_config.get("resources", {}).get("requests", {
-                                        "memory": "4Gi",
-                                        "cpu": "2"
-                                    }),
-                                    limits=workers_config.get("resources", {}).get("limits", {
-                                        "memory": "4Gi",
-                                        "cpu": "2"
-                                    })
+                                    requests=workers_config.get("resources", {}).get(
+                                        "requests", {"memory": "4Gi", "cpu": "2"}
+                                    ),
+                                    limits=workers_config.get("resources", {}).get(
+                                        "limits", {"memory": "4Gi", "cpu": "2"}
+                                    ),
                                 ),
                                 env=worker_env if worker_env else None,
-                                env_from=worker_env_from if worker_env_from else None
+                                env_from=worker_env_from if worker_env_from else None,
                             )
                         ],
                         node_selector=worker_node_selector if worker_node_selector else None,
                         image_pull_secrets=pull_secrets if pull_secrets else None,
-                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations] if tolerations else None
-                    )
-                )
+                        tolerations=[k8s.core.v1.TolerationArgs(**t) for t in tolerations]
+                        if tolerations
+                        else None,
+                    ),
+                ),
             ),
             opts=pulumi.ResourceOptions(
                 provider=k8s_provider,
                 parent=self,
-                depends_on=[scheduler] + ([bundle_secret] if bundle_secret else [])
-            )
+                depends_on=[scheduler] + ([bundle_secret] if bundle_secret else []),
+            ),
         )
 
         # Create HorizontalPodAutoscaler if autoscaling is enabled
@@ -600,16 +576,11 @@ class DaskWorkspace(pulumi.ComponentResource):
                 metadata=k8s.meta.v1.ObjectMetaArgs(
                     namespace=namespace,
                     name="dask-workers-hpa",
-                    labels={
-                        "modelops.io/component": "workers",
-                        "app": "dask-worker"
-                    }
+                    labels={"modelops.io/component": "workers", "app": "dask-worker"},
                 ),
                 spec=k8s.autoscaling.v2.HorizontalPodAutoscalerSpecArgs(
                     scale_target_ref=k8s.autoscaling.v2.CrossVersionObjectReferenceArgs(
-                        api_version="apps/v1",
-                        kind="Deployment",
-                        name="dask-workers"
+                        api_version="apps/v1", kind="Deployment", name="dask-workers"
                     ),
                     min_replicas=autoscaling_config.get("min_workers", 2),
                     max_replicas=autoscaling_config.get("max_workers", 20),
@@ -620,39 +591,35 @@ class DaskWorkspace(pulumi.ComponentResource):
                                 name="cpu",
                                 target=k8s.autoscaling.v2.MetricTargetArgs(
                                     type="Utilization",
-                                    average_utilization=autoscaling_config.get("target_cpu", 70)
-                                )
-                            )
+                                    average_utilization=autoscaling_config.get("target_cpu", 70),
+                                ),
+                            ),
                         )
                     ],
                     behavior=k8s.autoscaling.v2.HorizontalPodAutoscalerBehaviorArgs(
                         scale_down=k8s.autoscaling.v2.HPAScalingRulesArgs(
-                            stabilization_window_seconds=autoscaling_config.get("scale_down_delay", 300),
+                            stabilization_window_seconds=autoscaling_config.get(
+                                "scale_down_delay", 300
+                            ),
                             policies=[
                                 k8s.autoscaling.v2.HPAScalingPolicyArgs(
                                     type="Percent",
                                     value=50,  # Scale down by 50% at most
-                                    period_seconds=60
+                                    period_seconds=60,
                                 )
-                            ]
+                            ],
                         )
-                    )
+                    ),
                 ),
                 opts=pulumi.ResourceOptions(
-                    provider=k8s_provider,
-                    parent=self,
-                    depends_on=[workers]
-                )
+                    provider=k8s_provider, parent=self, depends_on=[workers]
+                ),
             )
 
         # Build connection strings
-        scheduler_address = pulumi.Output.concat(
-            "tcp://dask-scheduler.", namespace, ":8786"
-        )
-        dashboard_url = pulumi.Output.concat(
-            "http://dask-scheduler.", namespace, ":8787"
-        )
-        
+        scheduler_address = pulumi.Output.concat("tcp://dask-scheduler.", namespace, ":8786")
+        dashboard_url = pulumi.Output.concat("http://dask-scheduler.", namespace, ":8787")
+
         # Run smoke tests if configured (opt-in to prevent deployment failures)
         run_smoke_tests = config.get("smoke_tests", config.get("run_smoke_tests", False))
         if run_smoke_tests:
@@ -660,27 +627,21 @@ class DaskWorkspace(pulumi.ComponentResource):
             tests = ["dask"]  # Always test Dask connectivity
             if storage_stack_ref:
                 tests.append("storage")  # Test storage if configured
-            
+
             # Environment for smoke test
-            test_env = [
-                k8s.core.v1.EnvVarArgs(
-                    name="DASK_SCHEDULER",
-                    value=scheduler_address
-                )
-            ]
-            
+            test_env = [k8s.core.v1.EnvVarArgs(name="DASK_SCHEDULER", value=scheduler_address)]
+
             # Add storage env if available
             test_env_from = None
             if storage_stack_ref:
                 test_env_from = [
                     k8s.core.v1.EnvFromSourceArgs(
                         secret_ref=k8s.core.v1.SecretEnvSourceArgs(
-                            name="modelops-storage",
-                            optional=True
+                            name="modelops-storage", optional=True
                         )
                     )
                 ]
-            
+
             smoke_test = SmokeTest(
                 "workspace",
                 namespace=namespace,
@@ -690,26 +651,29 @@ class DaskWorkspace(pulumi.ComponentResource):
                 env_from=test_env_from,
                 timeout_seconds=60,
                 opts=pulumi.ResourceOptions(
-                    parent=self,
-                    depends_on=[scheduler, scheduler_svc, workers]
-                )
+                    parent=self, depends_on=[scheduler, scheduler_svc, workers]
+                ),
             )
-            
+
             # Add smoke test outputs
             self.smoke_test_job = smoke_test.job_name
             self.smoke_test_status = pulumi.Output.from_input("created")
-        
+
         # Store outputs for reference
         self.scheduler_address = scheduler_address
         self.dashboard_url = dashboard_url
         self.namespace = pulumi.Output.from_input(namespace)
-        self.worker_count = pulumi.Output.from_input(worker_count if not autoscaling_config.get("enabled", True) else f"{autoscaling_config.get('min_workers', 2)}-{autoscaling_config.get('max_workers', 20)}")
+        self.worker_count = pulumi.Output.from_input(
+            worker_count
+            if not autoscaling_config.get("enabled", True)
+            else f"{autoscaling_config.get('min_workers', 2)}-{autoscaling_config.get('max_workers', 20)}"
+        )
         self.worker_processes = pulumi.Output.from_input(worker_processes)
         self.worker_threads = pulumi.Output.from_input(worker_threads)
         self.autoscaling_enabled = pulumi.Output.from_input(autoscaling_config.get("enabled", True))
         self.autoscaling_min = pulumi.Output.from_input(autoscaling_config.get("min_workers", 2))
         self.autoscaling_max = pulumi.Output.from_input(autoscaling_config.get("max_workers", 20))
-        
+
         # Register outputs for Stack 3 to use via StackReference
         outputs_dict = {
             "scheduler_address": scheduler_address,
@@ -727,12 +691,12 @@ class DaskWorkspace(pulumi.ComponentResource):
             # Autoscaling info
             "autoscaling_enabled": self.autoscaling_enabled,
             "autoscaling_min": self.autoscaling_min,
-            "autoscaling_max": self.autoscaling_max
+            "autoscaling_max": self.autoscaling_max,
         }
-        
+
         # Add smoke test outputs if created
         if run_smoke_tests:
             outputs_dict["smoke_test_job"] = self.smoke_test_job
             outputs_dict["smoke_test_status"] = self.smoke_test_status
-        
+
         self.register_outputs(outputs_dict)

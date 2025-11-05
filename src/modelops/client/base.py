@@ -1,16 +1,18 @@
 """Base classes for service layer with unified contracts."""
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, asdict
-from enum import Enum
-from typing import Dict, Any, Optional, List, Callable
-import time
-import random
 import json
+import random
+import time
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from enum import Enum
+from typing import Any
 
 
 class ComponentState(str, Enum):
     """Unified state for infrastructure components."""
+
     NOT_DEPLOYED = "NotDeployed"
     DEPLOYING = "Deploying"
     READY = "Ready"
@@ -21,16 +23,17 @@ class ComponentState(str, Enum):
 @dataclass
 class ComponentStatus:
     """Unified status contract for all services."""
+
     deployed: bool
     phase: ComponentState
-    details: Dict[str, Any]
+    details: dict[str, Any]
 
     def to_json(self) -> dict:
         """JSON-serializable representation."""
         return {
             "deployed": self.deployed,
             "phase": self.phase.value,
-            "details": self.details
+            "details": self.details,
         }
 
     def to_dict(self) -> dict:
@@ -41,11 +44,12 @@ class ComponentStatus:
 @dataclass
 class InfraResult:
     """Result of infrastructure operations."""
+
     success: bool
-    components: Dict[str, ComponentState]
-    outputs: Dict[str, Dict[str, Any]]
-    errors: Dict[str, str]
-    logs_path: Optional[str] = None
+    components: dict[str, ComponentState]
+    outputs: dict[str, dict[str, Any]]
+    errors: dict[str, str]
+    logs_path: str | None = None
 
     def to_json(self) -> str:
         """JSON representation for CLI output."""
@@ -54,7 +58,7 @@ class InfraResult:
             "components": {k: v.value for k, v in self.components.items()},
             "outputs": self.outputs,
             "errors": self.errors,
-            "logs_path": self.logs_path
+            "logs_path": self.logs_path,
         }
         return json.dumps(data, indent=2, default=str)
 
@@ -67,7 +71,7 @@ class BaseService(ABC):
         self.env = env
 
     @abstractmethod
-    def provision(self, config: Any, verbose: bool = False) -> Dict[str, Any]:
+    def provision(self, config: Any, verbose: bool = False) -> dict[str, Any]:
         """Provision the component."""
         pass
 
@@ -81,12 +85,7 @@ class BaseService(ABC):
         """Get component status with unified contract."""
         pass
 
-    def with_retry(
-        self,
-        func: Callable,
-        max_retries: int = 3,
-        base_delay: float = 1.0
-    ) -> Any:
+    def with_retry(self, func: Callable, max_retries: int = 3, base_delay: float = 1.0) -> Any:
         """
         Retry wrapper for transient failures.
 
@@ -129,8 +128,10 @@ class BaseService(ABC):
 
                 if attempt < max_retries:
                     # Exponential backoff with jitter
-                    wait_time = (base_delay * (2 ** attempt)) + random.uniform(0, 1)
-                    print(f"  Retrying after {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                    wait_time = (base_delay * (2**attempt)) + random.uniform(0, 1)
+                    print(
+                        f"  Retrying after {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(wait_time)
                 else:
                     # Final attempt failed
@@ -147,7 +148,7 @@ class OutputCapture:
     def __init__(
         self,
         verbose: bool = False,
-        progress_callback: Optional[Callable[[str], None]] = None
+        progress_callback: Callable[[str], None] | None = None,
     ):
         """
         Initialize output capture.
@@ -188,7 +189,7 @@ class OutputCapture:
             "Provisioning",
             "Configuring",
             "Installing",
-            "Deploying"
+            "Deploying",
         ]
         return any(indicator in msg for indicator in progress_indicators)
 
@@ -203,7 +204,7 @@ class OutputCapture:
             "FAILED",
             "warning:",
             "Warning:",
-            "WARNING"
+            "WARNING",
         ]
         return any(imp in msg for imp in important)
 
@@ -213,8 +214,7 @@ class OutputCapture:
         current_time = time.time()
 
         # Show dot every 10 operations or every 2 seconds
-        if (self._progress_count % 10 == 0 or
-            current_time - self._last_progress_time > 2):
+        if self._progress_count % 10 == 0 or current_time - self._last_progress_time > 2:
             print(".", end="", flush=True)
             self._last_progress_time = current_time
 
@@ -222,6 +222,6 @@ class OutputCapture:
         """Get captured output as string."""
         return "".join(self.buffer)
 
-    def get_lines(self) -> List[str]:
+    def get_lines(self) -> list[str]:
         """Get captured output as lines."""
         return self.buffer.copy()

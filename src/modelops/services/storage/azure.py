@@ -1,8 +1,8 @@
 """Azure Blob Storage backend implementation."""
 
-import os
 import logging
-from typing import Optional, List
+import os
+
 from .cloud import CloudBlobBackend
 
 logger = logging.getLogger(__name__)
@@ -10,21 +10,20 @@ logger = logging.getLogger(__name__)
 
 class AzureBlobBackend(CloudBlobBackend):
     """Azure blob storage backend.
-    
+
     Uses connection info from BlobStorage Pulumi outputs via environment
     variables or Kubernetes secrets.
-    
+
     Environment setup:
         # After provisioning with Pulumi
         mops storage up examples/storage.yaml
         mops storage connection-string > ~/.modelops/storage.env
         source ~/.modelops/storage.env
     """
-    
-    def __init__(self, container: str = "cache", 
-                 connection_string: Optional[str] = None):
+
+    def __init__(self, container: str = "cache", connection_string: str | None = None):
         """Initialize Azure blob backend.
-        
+
         Args:
             container: Container name (default: "cache")
             connection_string: Optional explicit connection string.
@@ -32,21 +31,21 @@ class AzureBlobBackend(CloudBlobBackend):
         """
         self.connection_string = connection_string
         super().__init__(container=container)
-    
+
     def _detect_provider(self) -> str:
         """Detect Azure from environment."""
         conn_str = self.connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-        
+
         if conn_str:
             return "azure"
-        
+
         raise ValueError(
             "Azure storage connection not found. Either:\n"
             "1. Pass connection_string parameter\n"
             "2. Set AZURE_STORAGE_CONNECTION_STRING environment variable\n"
             "3. Run: mops storage connection-string > ~/.modelops/storage.env && source ~/.modelops/storage.env"
         )
-    
+
     def _initialize_client(self) -> None:
         """Initialize Azure blob client."""
         try:
@@ -56,16 +55,16 @@ class AzureBlobBackend(CloudBlobBackend):
                 "azure-storage-blob package not installed. "
                 "Install with: pip install azure-storage-blob"
             )
-        
+
         # Get connection string
         conn_str = self.connection_string or os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-        
+
         try:
             self.client = BlobServiceClient.from_connection_string(conn_str)
             self.ensure_container()
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Azure blob client: {e}")
-    
+
     def ensure_container(self) -> None:
         """Ensure container exists."""
         try:
@@ -78,9 +77,9 @@ class AzureBlobBackend(CloudBlobBackend):
         except Exception as e:
             # Container might already exist or we might not have permissions
             logger.debug(f"Container check/create for {self.container}: {e}")
-    
+
     # Azure-specific implementations
-    
+
     def _azure_exists(self, key: str) -> bool:
         """Azure implementation of exists."""
         try:
@@ -89,7 +88,7 @@ class AzureBlobBackend(CloudBlobBackend):
         except Exception as e:
             logger.error(f"Error checking existence of {key}: {e}")
             return False
-    
+
     def _azure_load(self, key: str) -> bytes:
         """Azure implementation of load."""
         try:
@@ -97,7 +96,7 @@ class AzureBlobBackend(CloudBlobBackend):
             return blob_client.download_blob().readall()
         except Exception as e:
             raise KeyError(f"Failed to load key '{key}': {e}")
-    
+
     def _azure_save(self, key: str, data: bytes) -> None:
         """Azure implementation of save."""
         try:
@@ -106,7 +105,7 @@ class AzureBlobBackend(CloudBlobBackend):
             logger.debug(f"Saved {len(data)} bytes to {key}")
         except Exception as e:
             raise RuntimeError(f"Failed to save key '{key}': {e}")
-    
+
     def _azure_delete(self, key: str) -> None:
         """Azure implementation of delete."""
         try:
@@ -115,8 +114,8 @@ class AzureBlobBackend(CloudBlobBackend):
             logger.debug(f"Deleted key: {key}")
         except Exception as e:
             raise KeyError(f"Failed to delete key '{key}': {e}")
-    
-    def _azure_list_keys(self, prefix: str) -> List[str]:
+
+    def _azure_list_keys(self, prefix: str) -> list[str]:
         """Azure implementation of list_keys."""
         try:
             container_client = self.client.get_container_client(self.container)

@@ -36,11 +36,12 @@ PROVIDER_DIR = MODELOPS_HOME / "providers"
 
 def get_backend_url() -> str:
     """Get backend URL from config or use default local path.
-    
+
     Returns:
         Backend URL string, either from config or default file:// path
     """
     from .config import ModelOpsConfig
+
     config = ModelOpsConfig.get_instance()
     if config.pulumi.backend_url:
         return config.pulumi.backend_url
@@ -50,19 +51,21 @@ def get_backend_url() -> str:
 
 def ensure_work_dir(component: str) -> Path:
     """Ensure working directory exists for a component.
-    
+
     Args:
         component: Component name (infra, workspace, adaptive, registry)
-    
+
     Returns:
         Path to the working directory
-    
+
     Raises:
         ValueError: If component is not recognized
     """
     if component not in WORK_DIRS:
-        raise ValueError(f"Unknown component: {component}. Must be one of: {list(WORK_DIRS.keys())}")
-    
+        raise ValueError(
+            f"Unknown component: {component}. Must be one of: {list(WORK_DIRS.keys())}"
+        )
+
     work_dir = WORK_DIRS[component]
     work_dir.mkdir(parents=True, exist_ok=True)
     return work_dir
@@ -70,7 +73,7 @@ def ensure_work_dir(component: str) -> Path:
 
 def ensure_backend() -> Path:
     """Ensure backend directory exists.
-    
+
     Returns:
         Path to the backend directory
     """

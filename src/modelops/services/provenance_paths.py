@@ -7,7 +7,7 @@ including simulations, aggregations, and job-scoped views.
 import hashlib
 from typing import TYPE_CHECKING
 
-from modelops_contracts.utils import bundle12, canonical_task_id
+from modelops_contracts.utils import bundle12
 
 if TYPE_CHECKING:
     from modelops_contracts.simulation import SimTask

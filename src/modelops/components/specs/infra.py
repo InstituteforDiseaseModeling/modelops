@@ -1,9 +1,10 @@
 """Unified infrastructure specification."""
 
-from typing import Optional, Dict, Any, List
-from pydantic import Field
-import yaml
 from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import Field
 
 from ..config_base import ConfigModel
 from .azure import AzureProviderConfig
@@ -44,41 +45,29 @@ class UnifiedInfraSpec(ConfigModel):
     schema_version: int = Field(1, ge=1, le=1, alias="schemaVersion")
 
     # Optional registry configuration
-    registry: Optional[Dict[str, Any]] = Field(
-        None,
-        description="Container registry configuration"
-    )
+    registry: dict[str, Any] | None = Field(None, description="Container registry configuration")
 
     # Cluster configuration (was "infra")
-    cluster: Optional[AzureProviderConfig] = Field(
-        None,
-        description="Kubernetes cluster configuration"
+    cluster: AzureProviderConfig | None = Field(
+        None, description="Kubernetes cluster configuration"
     )
 
     # Storage configuration
-    storage: Optional[StorageConfig] = Field(
-        None,
-        description="Blob storage configuration"
-    )
+    storage: StorageConfig | None = Field(None, description="Blob storage configuration")
 
     # Workspace configuration
-    workspace: Optional[WorkspaceConfig] = Field(
-        None,
-        description="Dask workspace configuration"
-    )
+    workspace: WorkspaceConfig | None = Field(None, description="Dask workspace configuration")
 
     # Control behavior
     continue_on_error: bool = Field(
         False,
         alias="continueOnError",
-        description="Continue provisioning even if a component fails"
+        description="Continue provisioning even if a component fails",
     )
 
     # Optional explicit dependencies
-    depends_on: Optional[Dict[str, List[str]]] = Field(
-        None,
-        alias="dependsOn",
-        description="Explicit component dependencies"
+    depends_on: dict[str, list[str]] | None = Field(
+        None, alias="dependsOn", description="Explicit component dependencies"
     )
 
     @classmethod
@@ -112,7 +101,7 @@ class UnifiedInfraSpec(ConfigModel):
         """Create an empty spec with defaults."""
         return cls(schema_version=1)
 
-    def get_components(self) -> List[str]:
+    def get_components(self) -> list[str]:
         """
         Get list of defined components.
 
@@ -136,7 +125,7 @@ class UnifiedInfraSpec(ConfigModel):
             components.append("workspace")
         return components
 
-    def to_yaml(self, path: Optional[str] = None) -> str:
+    def to_yaml(self, path: str | None = None) -> str:
         """
         Export to YAML format.
 

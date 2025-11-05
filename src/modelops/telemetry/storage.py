@@ -7,7 +7,7 @@ local-first with optional Azure Blob Storage upload.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from modelops.services.provenance_store import ProvenanceStore
@@ -89,9 +89,9 @@ class TelemetryStorage:
         self,
         telemetry: "TelemetryCollector",
         job_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compute aggregate metrics from spans."""
-        spans_by_name: Dict[str, list] = {}
+        spans_by_name: dict[str, list] = {}
         for span in telemetry.spans:
             if span.name not in spans_by_name:
                 spans_by_name[span.name] = []
@@ -116,7 +116,7 @@ class TelemetryStorage:
             }
 
             # Aggregate metrics from all spans of this type
-            all_metrics: Dict[str, List[float]] = {}
+            all_metrics: dict[str, list[float]] = {}
             for span in spans:
                 for key, value in span.metrics.items():
                     if key not in all_metrics:

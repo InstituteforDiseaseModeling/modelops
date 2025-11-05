@@ -6,14 +6,13 @@ Pulumi stacks. It's the single source of writes/deletes for these files.
 
 import os
 import tempfile
-from typing import Optional
 from pathlib import Path
 
 from ..core import automation
 from ..core.env_config import get_environments_dir
 
 
-def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False) -> Optional[Path]:
+def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False) -> Path | None:
     """Reconcile bundle env file with Pulumi stack truth.
 
     This is the ONLY function that writes/deletes bundle environment files.
@@ -49,12 +48,12 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
 
     # Check minimum required outputs
     has_registry = bool(
-        automation.get_output_value(reg_outputs, "login_server") or
-        automation.get_output_value(reg_outputs, "registry_name")
+        automation.get_output_value(reg_outputs, "login_server")
+        or automation.get_output_value(reg_outputs, "registry_name")
     )
     has_storage = bool(
-        automation.get_output_value(sto_outputs, "connection_string") or
-        automation.get_output_value(sto_outputs, "primary_endpoint")
+        automation.get_output_value(sto_outputs, "connection_string")
+        or automation.get_output_value(sto_outputs, "primary_endpoint")
     )
 
     env_dir = get_environments_dir()
@@ -62,17 +61,12 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
 
     if has_registry and has_storage:
         # Both present - write atomically
-        from ..core.env_config import save_environment_config
 
         env_dir.mkdir(parents=True, exist_ok=True)
 
         # Write to temp file first for atomicity
         with tempfile.NamedTemporaryFile(
-            mode='w',
-            dir=str(env_dir),
-            prefix=f".{env}.",
-            suffix=".tmp",
-            delete=False
+            mode="w", dir=str(env_dir), prefix=f".{env}.", suffix=".tmp", delete=False
         ) as tmp:
             tmp_path = Path(tmp.name)
 
@@ -80,19 +74,20 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
             # Write the actual config to temp file
             # Note: We need to modify save_environment_config to support this
             # For now, we'll write directly and then rename
+            from datetime import datetime
+
+            import yaml
             from modelops_contracts.bundle_environment import (
                 BundleEnvironment,
                 RegistryConfig,
                 StorageConfig,
             )
-            from datetime import datetime
-            import yaml
 
             # Build registry config
             registry = RegistryConfig(
                 provider="acr",  # Azure Container Registry
                 login_server=automation.get_output_value(reg_outputs, "login_server", ""),
-                requires_auth=automation.get_output_value(reg_outputs, "requires_auth", True)
+                requires_auth=automation.get_output_value(reg_outputs, "requires_auth", True),
             )
 
             # Build storage config
@@ -117,15 +112,17 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
             if not container_names:
                 container_names = ["bundle-blobs"]
 
-            primary_container = "bundle-blobs" if "bundle-blobs" in container_names else (
-                container_names[0] if container_names else "bundle-blobs"
+            primary_container = (
+                "bundle-blobs"
+                if "bundle-blobs" in container_names
+                else (container_names[0] if container_names else "bundle-blobs")
             )
 
             storage = StorageConfig(
                 provider="azure",
                 container=primary_container,
                 connection_string=automation.get_output_value(sto_outputs, "connection_string"),
-                endpoint=automation.get_output_value(sto_outputs, "primary_endpoint")
+                endpoint=automation.get_output_value(sto_outputs, "primary_endpoint"),
             )
 
             # Create bundle environment
@@ -133,23 +130,23 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
                 environment=env,
                 registry=registry,
                 storage=storage,
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.utcnow().isoformat(),
             )
 
             # Write to temp file
-            with open(tmp_path, 'w') as f:
+            with open(tmp_path, "w") as f:
                 yaml.safe_dump(
                     bundle_env.model_dump(exclude_none=True),
                     f,
                     default_flow_style=False,
-                    sort_keys=False
+                    sort_keys=False,
                 )
 
             # Atomic replace
             tmp_path.replace(env_file)
 
             # Set permissions (skip on Windows)
-            if os.name != 'nt':
+            if os.name != "nt":
                 env_file.chmod(0o600)
 
             if verbose:
@@ -157,7 +154,7 @@ def reconcile_bundle_env(env: str, dry_run: bool = False, verbose: bool = False)
 
             return env_file
 
-        except Exception as e:
+        except Exception:
             # Clean up temp file on error
             if tmp_path.exists():
                 tmp_path.unlink()

@@ -4,11 +4,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 
 from modelops.client.base import ComponentState, ComponentStatus, InfraResult
-from modelops.client.utils import (
-    stack_exists,
-    get_safe_outputs,
-    DependencyGraph
-)
+from modelops.client.utils import stack_exists, get_safe_outputs, DependencyGraph
 from modelops.components.specs import UnifiedInfraSpec
 
 
@@ -93,9 +89,7 @@ class TestComponentStatus:
     def test_component_status_creation(self):
         """Test ComponentStatus creation and serialization."""
         status = ComponentStatus(
-            deployed=True,
-            phase=ComponentState.READY,
-            details={"cluster_name": "test-cluster"}
+            deployed=True, phase=ComponentState.READY, details={"cluster_name": "test-cluster"}
         )
 
         assert status.deployed is True
@@ -127,7 +121,7 @@ class TestInfraResult:
             components={"cluster": ComponentState.READY},
             outputs={"cluster": {"name": "test"}},
             errors={},
-            logs_path="/path/to/logs"
+            logs_path="/path/to/logs",
         )
 
         assert result.success is True
@@ -141,7 +135,7 @@ class TestInfraResult:
             success=False,
             components={"cluster": ComponentState.FAILED},
             outputs={},
-            errors={"cluster": "Provisioning failed"}
+            errors={"cluster": "Provisioning failed"},
         )
 
         json_str = result.to_json()
@@ -160,7 +154,7 @@ class TestOutputSafety:
             "connection_string": "secret-connection-string",
             "password": "super-secret",
             "token": "auth-token-12345",
-            "kubeconfig": "sensitive-kubeconfig-data"
+            "kubeconfig": "sensitive-kubeconfig-data",
         }
 
         safe = get_safe_outputs(outputs, show_secrets=False)
@@ -173,10 +167,7 @@ class TestOutputSafety:
 
     def test_get_safe_outputs_shows_when_requested(self):
         """Test that secrets are shown when explicitly requested."""
-        outputs = {
-            "connection_string": "secret-connection-string",
-            "password": "super-secret"
-        }
+        outputs = {"connection_string": "secret-connection-string", "password": "super-secret"}
 
         safe = get_safe_outputs(outputs, show_secrets=True)
 
@@ -191,11 +182,7 @@ class TestUnifiedInfraSpec:
         """Test creating UnifiedInfraSpec."""
         # Test with None values (all optional)
         spec = UnifiedInfraSpec(
-            schema_version=1,
-            cluster=None,
-            storage=None,
-            workspace=None,
-            registry=None
+            schema_version=1, cluster=None, storage=None, workspace=None, registry=None
         )
 
         assert spec.schema_version == 1
@@ -211,7 +198,7 @@ class TestUnifiedInfraSpec:
             cluster=None,
             storage=None,
             workspace=None,
-            registry={"provider": "azure", "name": "test"}
+            registry={"provider": "azure", "name": "test"},
         )
 
         components = spec.get_components()
@@ -231,16 +218,12 @@ class TestUnifiedInfraSpec:
             metadata={"name": "test"},
             spec={
                 "scheduler": {"image": "dask:latest"},
-                "workers": {"image": "dask:latest", "replicas": 2}
-            }
+                "workers": {"image": "dask:latest", "replicas": 2},
+            },
         )
 
         # Workspace without cluster should fail
-        spec = UnifiedInfraSpec(
-            schema_version=1,
-            workspace=workspace_config,
-            cluster=None
-        )
+        spec = UnifiedInfraSpec(schema_version=1, workspace=workspace_config, cluster=None)
 
         with pytest.raises(ValueError, match="Workspace requires cluster"):
             spec.validate_dependencies()
@@ -258,15 +241,9 @@ class TestUnifiedInfraSpec:
                 name="test-aks",
                 kubernetes_version="1.27",
                 node_pools=[
-                    NodePool(
-                        name="default",
-                        vm_size="Standard_B2s",
-                        mode="System",
-                        min=1,
-                        max=3
-                    )
-                ]
-            )
+                    NodePool(name="default", vm_size="Standard_B2s", mode="System", min=1, max=3)
+                ],
+            ),
         )
         spec.cluster = cluster_config
         assert spec.validate_dependencies() is True

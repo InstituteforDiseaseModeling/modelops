@@ -6,18 +6,19 @@ Unlike the main config.yaml which stores user preferences, these environment
 configs cache deployed infrastructure details.
 """
 
-from typing import Optional, Dict, Any, List
-from pathlib import Path
-from datetime import datetime
-import yaml
 import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
 
 # Import from modelops-contracts
 from modelops_contracts.bundle_environment import (
+    ENVIRONMENTS_DIR,
     BundleEnvironment,
     RegistryConfig,
     StorageConfig,
-    ENVIRONMENTS_DIR
 )
 
 
@@ -32,8 +33,8 @@ def get_environments_dir() -> Path:
 
 def save_environment_config(
     env: str,
-    registry_outputs: Optional[Dict[str, Any]] = None,
-    storage_outputs: Optional[Dict[str, Any]] = None
+    registry_outputs: dict[str, Any] | None = None,
+    storage_outputs: dict[str, Any] | None = None,
 ) -> Path:
     """Save environment configuration to ~/.modelops/bundle-env/<env>.yaml.
 
@@ -58,7 +59,7 @@ def save_environment_config(
             login_server=registry_outputs.get("login_server", ""),
             username=None,  # Will be fetched from Azure CLI when needed
             password=None,  # Will be fetched from Azure CLI when needed
-            requires_auth=registry_outputs.get("requires_auth", True)
+            requires_auth=registry_outputs.get("requires_auth", True),
         )
 
     storage = None
@@ -71,13 +72,17 @@ def save_environment_config(
             container_names = containers
 
         # Use the primary container (bundle-blobs) for the singular container field
-        primary_container = "bundle-blobs" if "bundle-blobs" in container_names else (container_names[0] if container_names else "bundle-blobs")
+        primary_container = (
+            "bundle-blobs"
+            if "bundle-blobs" in container_names
+            else (container_names[0] if container_names else "bundle-blobs")
+        )
 
         storage = StorageConfig(
             provider="azure",  # Default for now
             container=primary_container,
             connection_string=storage_outputs.get("sas_connection_string"),  # Use read-only SAS
-            endpoint=storage_outputs.get("primary_endpoint")
+            endpoint=storage_outputs.get("primary_endpoint"),
         )
 
     # BundleEnvironment requires both registry and storage for bundle operations
@@ -102,7 +107,7 @@ def save_environment_config(
         environment=env,
         registry=registry,
         storage=storage,
-        timestamp=datetime.utcnow().isoformat()
+        timestamp=datetime.utcnow().isoformat(),
     )
 
     # Save using Pydantic's serialization
@@ -111,7 +116,12 @@ def save_environment_config(
 
     # Use Pydantic's model_dump for clean serialization
     with open(config_path, "w") as f:
-        yaml.safe_dump(config.model_dump(exclude_none=True), f, default_flow_style=False, sort_keys=False)
+        yaml.safe_dump(
+            config.model_dump(exclude_none=True),
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
 
     # Restrict permissions for security (connection strings)
     os.chmod(config_path, 0o600)
@@ -119,7 +129,7 @@ def save_environment_config(
     return config_path
 
 
-def load_environment_config(env: str) -> Optional[BundleEnvironment]:
+def load_environment_config(env: str) -> BundleEnvironment | None:
     """Load environment configuration from ~/.modelops/bundle-env/<env>.yaml.
 
     Args:
@@ -140,7 +150,7 @@ def load_environment_config(env: str) -> Optional[BundleEnvironment]:
         return None
 
 
-def list_environments() -> List[str]:
+def list_environments() -> list[str]:
     """List available environment configurations.
 
     Returns:
@@ -167,11 +177,7 @@ def create_local_dev_config() -> Path:
         Path to created config file
     """
     # Create local dev config using contract models
-    registry = RegistryConfig(
-        provider="docker",
-        login_server="localhost:5555",
-        requires_auth=False
-    )
+    registry = RegistryConfig(provider="docker", login_server="localhost:5555", requires_auth=False)
 
     storage = StorageConfig(
         provider="azure",  # Azurite is Azure-compatible
@@ -182,21 +188,26 @@ def create_local_dev_config() -> Path:
             "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
             "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1"
         ),
-        endpoint="http://127.0.0.1:10000/devstoreaccount1"
+        endpoint="http://127.0.0.1:10000/devstoreaccount1",
     )
 
     config = BundleEnvironment(
         environment="local",
         registry=registry,
         storage=storage,
-        timestamp=datetime.utcnow().isoformat()
+        timestamp=datetime.utcnow().isoformat(),
     )
 
     config_path = get_environments_dir() / "local.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(config_path, "w") as f:
-        yaml.safe_dump(config.model_dump(exclude_none=True), f, default_flow_style=False, sort_keys=False)
+        yaml.safe_dump(
+            config.model_dump(exclude_none=True),
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
 
     os.chmod(config_path, 0o600)
 
@@ -217,7 +228,7 @@ def detect_local_containers() -> bool:
             ["docker", "ps", "--format", "{{.Names}}"],
             capture_output=True,
             text=True,
-            timeout=2
+            timeout=2,
         )
 
         if result.returncode == 0:
@@ -231,7 +242,7 @@ def detect_local_containers() -> bool:
     return False
 
 
-def ensure_local_dev_config() -> Optional[Path]:
+def ensure_local_dev_config() -> Path | None:
     """Ensure local dev config exists if Docker containers are running.
 
     Returns:

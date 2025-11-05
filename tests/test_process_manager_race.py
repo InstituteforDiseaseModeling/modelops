@@ -43,7 +43,7 @@ def process_manager(tmp_path):
     manager = WarmProcessManager(
         venvs_dir=venvs_dir,
         max_processes=5,  # Small pool to force reuse
-        force_fresh_venv=False
+        force_fresh_venv=False,
     )
 
     yield manager
@@ -106,7 +106,9 @@ def test_concurrent_process_reuse_race_condition(process_manager, test_bundle_pa
 
     # The test should initially fail due to race condition
     # After fix, we should have no header corruption errors
-    header_corruption_errors = [e for e in errors if "Invalid header" in e or "Missing Content-Length" in e]
+    header_corruption_errors = [
+        e for e in errors if "Invalid header" in e or "Missing Content-Length" in e
+    ]
 
     # Since the race condition is intermittent and process manager handles errors internally,
     # let's check if we got any JSONRPCError at all or if multiple processes were unnecessarily created
@@ -128,8 +130,12 @@ def test_concurrent_process_reuse_race_condition(process_manager, test_bundle_pa
     # Should have no header corruption errors after the fix
     no_corruption = len(header_corruption_errors) == 0
 
-    assert no_corruption, f"Still getting header corruption errors after fix: {header_corruption_errors}"
-    assert efficient_reuse, f"Not reusing processes efficiently after fix: created {unique_processes} processes"
+    assert no_corruption, (
+        f"Still getting header corruption errors after fix: {header_corruption_errors}"
+    )
+    assert efficient_reuse, (
+        f"Not reusing processes efficiently after fix: created {unique_processes} processes"
+    )
 
 
 def test_sequential_process_reuse_works(process_manager, test_bundle_path):
@@ -146,6 +152,7 @@ def test_sequential_process_reuse_works(process_manager, test_bundle_path):
 
 def test_multiple_processes_no_reuse_works(process_manager, test_bundle_path):
     """Test that using different bundle digests (no reuse) works fine."""
+
     # Different bundle digests should work fine concurrently
     def try_different_bundle(digest_suffix):
         bundle_digest = f"test-{digest_suffix}"

@@ -5,28 +5,31 @@ built on top of the VersionedStore for cloud-agnostic storage.
 """
 
 import logging
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from modelops_contracts import SimJob, SimTask, UniqueParameterSet
+from modelops_contracts import SimJob, SimTask
 
-from .storage.versioned import VersionedStore
-from .storage.retry import update_with_retry, create_with_retry, get_json
 from .job_state import (
+    InvalidTransitionError,
+    JobExistsError,
     JobState,
     JobStatus,
+    TerminalStateError,
+    is_terminal,
     now_iso,
     validate_transition,
-    is_terminal,
-    InvalidTransitionError,
-    TerminalStateError,
-    JobExistsError
 )
-from .output_manifest import OutputSpec, generate_output_manifest, reconstruct_task_from_spec
-from .provenance_store import ProvenanceStore
+from .output_manifest import (
+    OutputSpec,
+    generate_output_manifest,
+    reconstruct_task_from_spec,
+)
 from .provenance_schema import ProvenanceSchema
+from .provenance_store import ProvenanceStore
+from .storage.retry import create_with_retry, get_json, update_with_retry
+from .storage.versioned import VersionedStore
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +41,13 @@ class ValidationResult:
     Tracks which outputs exist and which are missing,
     along with overall completion status.
     """
+
     status: str  # "complete", "partial", "failed", "unavailable"
     verified_count: int = 0
     missing_count: int = 0
-    verified_outputs: Optional[List[str]] = None
-    missing_outputs: Optional[List[str]] = None
-    error: Optional[str] = None
+    verified_outputs: list[str] | None = None
+    missing_outputs: list[str] | None = None
+    error: str | None = None
 
 
 class JobRegistry:
@@ -57,8 +61,8 @@ class JobRegistry:
         self,
         store: VersionedStore,
         prefix: str = "jobs",
-        provenance_store: Optional[ProvenanceStore] = None,
-        provenance_schema: Optional[ProvenanceSchema] = None
+        provenance_store: ProvenanceStore | None = None,
+        provenance_schema: ProvenanceSchema | None = None,
     ):
         """Initialize registry.
 
@@ -82,8 +86,8 @@ class JobRegistry:
         job_id: str,
         k8s_name: str,
         namespace: str,
-        job_spec: Optional[SimJob] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        job_spec: SimJob | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> JobState:
         """Register a new job with pending status.
 
@@ -118,22 +122,19 @@ class JobRegistry:
             k8s_namespace=namespace,
             expected_outputs=expected_outputs,
             tasks_total=len(expected_outputs),
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         key = self._make_key(job_id)
         if not create_with_retry(self.store, key, state.to_dict()):
             raise JobExistsError(f"Job {job_id} already registered")
 
-        logger.info(f"Registered job {job_id} in namespace {namespace} with {len(expected_outputs)} expected outputs")
+        logger.info(
+            f"Registered job {job_id} in namespace {namespace} with {len(expected_outputs)} expected outputs"
+        )
         return state
 
-    def update_status(
-        self,
-        job_id: str,
-        new_status: JobStatus,
-        **kwargs
-    ) -> JobState:
+    def update_status(self, job_id: str, new_status: JobStatus, **kwargs) -> JobState:
         """Update job status with validation.
 
         Args:
@@ -158,9 +159,7 @@ class JobRegistry:
             if state.is_terminal:
                 if state.status == new_status:
                     return state_dict  # No-op if same status
-                raise TerminalStateError(
-                    f"Cannot modify terminal state {state.status}"
-                )
+                raise TerminalStateError(f"Cannot modify terminal state {state.status}")
 
             # Validate transition
             if not validate_transition(state.status, new_status):
@@ -169,24 +168,31 @@ class JobRegistry:
                 )
 
             # Apply updates
-            updates = {
-                'status': new_status.value,
-                'updated_at': now_iso()
-            }
+            updates = {"status": new_status.value, "updated_at": now_iso()}
 
             # Add any additional fields
             for key, value in kwargs.items():
-                if key in {'error_message', 'error_code', 'results_path',
-                          'tasks_completed', 'tasks_total', 'k8s_uid',
-                          'validation_started_at', 'validation_completed_at',
-                          'validation_attempts', 'last_validation_error',
-                          'tasks_verified', 'verified_outputs', 'missing_outputs'}:
+                if key in {
+                    "error_message",
+                    "error_code",
+                    "results_path",
+                    "tasks_completed",
+                    "tasks_total",
+                    "k8s_uid",
+                    "validation_started_at",
+                    "validation_completed_at",
+                    "validation_attempts",
+                    "last_validation_error",
+                    "tasks_verified",
+                    "verified_outputs",
+                    "missing_outputs",
+                }:
                     updates[key] = value
-                elif key == 'metadata' and isinstance(value, dict):
+                elif key == "metadata" and isinstance(value, dict):
                     # Merge metadata
-                    current_metadata = state_dict.get('metadata', {})
+                    current_metadata = state_dict.get("metadata", {})
                     current_metadata.update(value)
-                    updates['metadata'] = current_metadata
+                    updates["metadata"] = current_metadata
 
             state_dict.update(updates)
             return state_dict
@@ -198,8 +204,8 @@ class JobRegistry:
     def update_progress(
         self,
         job_id: str,
-        tasks_completed: Optional[int] = None,
-        tasks_total: Optional[int] = None
+        tasks_completed: int | None = None,
+        tasks_total: int | None = None,
     ) -> JobState:
         """Update job progress counters.
 
@@ -218,10 +224,10 @@ class JobRegistry:
 
         def update_fn(state_dict: dict) -> dict:
             if tasks_completed is not None:
-                state_dict['tasks_completed'] = tasks_completed
+                state_dict["tasks_completed"] = tasks_completed
             if tasks_total is not None:
-                state_dict['tasks_total'] = tasks_total
-            state_dict['updated_at'] = now_iso()
+                state_dict["tasks_total"] = tasks_total
+            state_dict["updated_at"] = now_iso()
             return state_dict
 
         updated = update_with_retry(self.store, key, update_fn, max_attempts=3)
@@ -231,7 +237,7 @@ class JobRegistry:
 
         return JobState.from_dict(updated)
 
-    def get_job(self, job_id: str) -> Optional[JobState]:
+    def get_job(self, job_id: str) -> JobState | None:
         """Get current job state.
 
         Args:
@@ -251,9 +257,9 @@ class JobRegistry:
     def list_jobs(
         self,
         limit: int = 100,
-        status_filter: Optional[List[JobStatus]] = None,
-        since: Optional[datetime] = None
-    ) -> List[JobState]:
+        status_filter: list[JobStatus] | None = None,
+        since: datetime | None = None,
+    ) -> list[JobState]:
         """List jobs with optional filtering.
 
         Args:
@@ -304,8 +310,8 @@ class JobRegistry:
         self,
         job_id: str,
         final_status: JobStatus,
-        results_path: Optional[str] = None,
-        error_info: Optional[Dict[str, str]] = None
+        results_path: str | None = None,
+        error_info: dict[str, str] | None = None,
     ) -> JobState:
         """Finalize a job with terminal status.
 
@@ -331,14 +337,14 @@ class JobRegistry:
 
         kwargs = {}
         if results_path:
-            kwargs['results_path'] = results_path
+            kwargs["results_path"] = results_path
         if error_info:
-            kwargs['error_message'] = error_info.get('message')
-            kwargs['error_code'] = error_info.get('code')
+            kwargs["error_message"] = error_info.get("message")
+            kwargs["error_code"] = error_info.get("code")
 
         return self.update_status(job_id, final_status, **kwargs)
 
-    def cancel_job(self, job_id: str, reason: Optional[str] = None) -> JobState:
+    def cancel_job(self, job_id: str, reason: str | None = None) -> JobState:
         """Cancel a job.
 
         Args:
@@ -350,11 +356,11 @@ class JobRegistry:
         """
         kwargs = {}
         if reason:
-            kwargs['error_message'] = f"Cancelled: {reason}"
+            kwargs["error_message"] = f"Cancelled: {reason}"
 
         return self.update_status(job_id, JobStatus.CANCELLED, **kwargs)
 
-    def count_jobs_by_status(self) -> Dict[JobStatus, int]:
+    def count_jobs_by_status(self) -> dict[JobStatus, int]:
         """Get count of jobs grouped by status.
 
         Returns:
@@ -368,7 +374,7 @@ class JobRegistry:
 
         return counts
 
-    def get_active_jobs(self) -> List[JobState]:
+    def get_active_jobs(self) -> list[JobState]:
         """Get all non-terminal jobs.
 
         Returns:
@@ -379,11 +385,11 @@ class JobRegistry:
             JobStatus.SUBMITTING,
             JobStatus.SCHEDULED,
             JobStatus.RUNNING,
-            JobStatus.VALIDATING
+            JobStatus.VALIDATING,
         ]
         return self.list_jobs(status_filter=active_statuses)
 
-    def get_recent_jobs(self, hours: int = 24) -> List[JobState]:
+    def get_recent_jobs(self, hours: int = 24) -> list[JobState]:
         """Get jobs created in the last N hours.
 
         Args:
@@ -392,7 +398,7 @@ class JobRegistry:
         Returns:
             List of recent JobState objects
         """
-        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        since = datetime.now(UTC) - timedelta(hours=hours)
         return self.list_jobs(since=since)
 
     def validate_outputs(self, job_id: str) -> ValidationResult:
@@ -407,26 +413,17 @@ class JobRegistry:
         # Check if we have ProvenanceStore configured
         if not self.provenance:
             logger.warning(f"ProvenanceStore not configured for job {job_id} validation")
-            return ValidationResult(
-                status="unavailable",
-                error="ProvenanceStore not configured"
-            )
+            return ValidationResult(status="unavailable", error="ProvenanceStore not configured")
 
         # Get job state
         job_state = self.get_job(job_id)
         if not job_state:
-            return ValidationResult(
-                status="failed",
-                error=f"Job {job_id} not found"
-            )
+            return ValidationResult(status="failed", error=f"Job {job_id} not found")
 
         # Check if we have expected outputs
         if not job_state.expected_outputs:
             logger.info(f"Job {job_id} has no expected outputs, skipping validation")
-            return ValidationResult(
-                status="unavailable",
-                error="No expected outputs defined"
-            )
+            return ValidationResult(status="unavailable", error="No expected outputs defined")
 
         # Check each expected output
         verified_outputs = []
@@ -444,7 +441,7 @@ class JobRegistry:
 
             except Exception as e:
                 logger.warning(f"Error checking output: {e}")
-                missing_outputs.append(output_dict.get('provenance_path', 'unknown'))
+                missing_outputs.append(output_dict.get("provenance_path", "unknown"))
 
         # Determine overall status
         if len(missing_outputs) == 0:
@@ -459,7 +456,7 @@ class JobRegistry:
             verified_count=len(verified_outputs),
             missing_count=len(missing_outputs),
             verified_outputs=verified_outputs,
-            missing_outputs=missing_outputs
+            missing_outputs=missing_outputs,
         )
 
     def transition_to_validating(self, job_id: str) -> JobState:
@@ -479,10 +476,12 @@ class JobRegistry:
             job_id,
             JobStatus.VALIDATING,
             validation_started_at=now_iso(),
-            validation_attempts=1
+            validation_attempts=1,
         )
 
-    def finalize_with_validation(self, job_id: str, validation_result: ValidationResult) -> JobState:
+    def finalize_with_validation(
+        self, job_id: str, validation_result: ValidationResult
+    ) -> JobState:
         """Finalize job based on validation results.
 
         Args:
@@ -512,15 +511,15 @@ class JobRegistry:
                 return state_dict
 
             # Apply updates
-            state_dict['status'] = final_status.value
-            state_dict['updated_at'] = now_iso()
-            state_dict['validation_completed_at'] = now_iso()
-            state_dict['tasks_verified'] = validation_result.verified_count
-            state_dict['verified_outputs'] = validation_result.verified_outputs or []
-            state_dict['missing_outputs'] = validation_result.missing_outputs or []
+            state_dict["status"] = final_status.value
+            state_dict["updated_at"] = now_iso()
+            state_dict["validation_completed_at"] = now_iso()
+            state_dict["tasks_verified"] = validation_result.verified_count
+            state_dict["verified_outputs"] = validation_result.verified_outputs or []
+            state_dict["missing_outputs"] = validation_result.missing_outputs or []
 
             if validation_result.error:
-                state_dict['last_validation_error'] = validation_result.error
+                state_dict["last_validation_error"] = validation_result.error
 
             return state_dict
 
@@ -531,7 +530,7 @@ class JobRegistry:
         )
         return JobState.from_dict(updated)
 
-    def get_resumable_tasks(self, job_id: str) -> List[SimTask]:
+    def get_resumable_tasks(self, job_id: str) -> list[SimTask]:
         """Get list of tasks that need to be re-run.
 
         Args:
@@ -546,7 +545,9 @@ class JobRegistry:
 
         # Only resume partial success jobs
         if job_state.status != JobStatus.PARTIAL_SUCCESS:
-            logger.warning(f"Job {job_id} is not in PARTIAL_SUCCESS state, cannot get resumable tasks")
+            logger.warning(
+                f"Job {job_id} is not in PARTIAL_SUCCESS state, cannot get resumable tasks"
+            )
             return []
 
         resumable_tasks = []

@@ -1,20 +1,20 @@
 """Developer tools and testing utilities."""
 
-import typer
 import json
-import tempfile
-import subprocess
 import os
-import sys
+import subprocess
+import tempfile
 from pathlib import Path
-from typing import Optional
+
+import typer
 from dask.distributed import Client
 from modelops_contracts import SimTask
+
+from ..core import automation
+from ..images import get_image_config
 from ..services.dask_simulation import DaskSimulationService
 from ..worker.config import RuntimeConfig
-from ..core import automation
-from .display import console, success, error, info, warning
-from ..images import get_image_config
+from .display import console, error, info, success, warning
 
 app = typer.Typer(help=" Developer tools and testing utilities")
 
@@ -28,7 +28,9 @@ def get_test_bundle() -> Path:
     Uses the permanent test fixture if available, otherwise creates temporary.
     """
     # First try to use the permanent test fixture
-    fixture_path = Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "smoke_bundle"
+    fixture_path = (
+        Path(__file__).parent.parent.parent.parent / "tests" / "fixtures" / "smoke_bundle"
+    )
     if fixture_path.exists():
         return fixture_path
 
@@ -56,7 +58,7 @@ def simulate(params, seed):
     manifest = {
         "name": "smoke-test",
         "version": "1.0.0",
-        "entrypoint": "simulate:simulate"
+        "entrypoint": "simulate:simulate",
     }
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
@@ -87,27 +89,38 @@ def push_bundle(bundle_dir: Path, registry: str) -> str:
     # Check if already initialized (has .modelops-bundle directory)
     if not (bundle_dir / ".modelops-bundle").exists():
         # Initialize the bundle directory
-        init_result = subprocess.run([
-            bundle_python, "-m", "modelops_bundle.cli", "init"
-        ], capture_output=True, text=True, cwd=str(bundle_dir), env=env)
+        init_result = subprocess.run(
+            [bundle_python, "-m", "modelops_bundle.cli", "init"],
+            capture_output=True,
+            text=True,
+            cwd=str(bundle_dir),
+            env=env,
+        )
 
         if init_result.returncode != 0:
             raise ValueError(f"Failed to initialize bundle: {init_result.stderr}")
 
     # Add all files to tracking
     # modelops-bundle needs files to be explicitly added
-    add_result = subprocess.run([
-        bundle_python, "-m", "modelops_bundle.cli", "add", "."
-    ], capture_output=True, text=True, cwd=str(bundle_dir), env=env)
+    add_result = subprocess.run(
+        [bundle_python, "-m", "modelops_bundle.cli", "add", "."],
+        capture_output=True,
+        text=True,
+        cwd=str(bundle_dir),
+        env=env,
+    )
 
     if add_result.returncode != 0:
         raise ValueError(f"Failed to add files: {add_result.stderr}")
 
     # Run push from the bundle directory
-    result = subprocess.run([
-        bundle_python, "-m", "modelops_bundle.cli", "push",
-        "--tag", "smoke-test"
-    ], capture_output=True, text=True, cwd=str(bundle_dir), env=env)
+    result = subprocess.run(
+        [bundle_python, "-m", "modelops_bundle.cli", "push", "--tag", "smoke-test"],
+        capture_output=True,
+        text=True,
+        cwd=str(bundle_dir),
+        env=env,
+    )
 
     # Check if push succeeded (even if nothing changed)
     if result.returncode != 0:
@@ -115,6 +128,7 @@ def push_bundle(bundle_dir: Path, registry: str) -> str:
 
     # Extract digest from output if present
     import re
+
     for line in result.stdout.split("\n"):
         if "sha256:" in line:
             match = re.search(r"sha256:[a-f0-9]{64}", line)
@@ -123,10 +137,20 @@ def push_bundle(bundle_dir: Path, registry: str) -> str:
 
     # If no digest in push output (e.g., everything up to date),
     # get it from manifest command
-    manifest_result = subprocess.run([
-        bundle_python, "-m", "modelops_bundle.cli", "manifest",
-        "smoke-test", "--full"
-    ], capture_output=True, text=True, cwd=str(bundle_dir), env=env)
+    manifest_result = subprocess.run(
+        [
+            bundle_python,
+            "-m",
+            "modelops_bundle.cli",
+            "manifest",
+            "smoke-test",
+            "--full",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(bundle_dir),
+        env=env,
+    )
 
     if manifest_result.returncode == 0:
         for line in manifest_result.stdout.split("\n"):
@@ -161,6 +185,7 @@ def get_registry_url(env: str) -> str:
     bundle_env_path = Path.home() / ".modelops" / "bundle-env" / f"{env}.yaml"
     if bundle_env_path.exists():
         import yaml
+
         with open(bundle_env_path) as f:
             bundle_env = yaml.safe_load(f)
             registry = bundle_env.get("registry", {}).get("login_server")
@@ -185,36 +210,31 @@ def get_registry_url(env: str) -> str:
 
 @app.command()
 def smoke_test(
-    bundle_path: Optional[Path] = typer.Option(
+    bundle_path: Path | None = typer.Option(
         None,
-        "--bundle", "-b",
-        help="Path to test bundle directory (creates minimal if not provided)"
+        "--bundle",
+        "-b",
+        help="Path to test bundle directory (creates minimal if not provided)",
     ),
-    registry: Optional[str] = typer.Option(
+    registry: str | None = typer.Option(
         None,
-        "--registry", "-r",
-        help="Registry URL (uses environment/stack if not provided)"
+        "--registry",
+        "-r",
+        help="Registry URL (uses environment/stack if not provided)",
     ),
-    env: str = typer.Option(
-        "dev",
-        "--env", "-e",
-        help="Environment name"
-    ),
-    scheduler: Optional[str] = typer.Option(
+    env: str = typer.Option("dev", "--env", "-e", help="Environment name"),
+    scheduler: str | None = typer.Option(
         None,
-        "--scheduler", "-s",
-        help="Dask scheduler URL (uses environment if not provided)"
+        "--scheduler",
+        "-s",
+        help="Dask scheduler URL (uses environment if not provided)",
     ),
-    timeout: int = typer.Option(
-        30,
-        "--timeout", "-t",
-        help="Timeout in seconds"
-    ),
+    timeout: int = typer.Option(30, "--timeout", "-t", help="Timeout in seconds"),
     skip_port_forward: bool = typer.Option(
         False,
         "--skip-port-forward",
-        help="Skip automatic port-forwarding (if already set up)"
-    )
+        help="Skip automatic port-forwarding (if already set up)",
+    ),
 ):
     """Run smoke test for OCI bundle fetching on workers.
 
@@ -276,7 +296,7 @@ def smoke_test(
             subprocess.run(
                 ["pkill", "-f", "kubectl port-forward.*dask-scheduler"],
                 capture_output=True,
-                check=False
+                check=False,
             )
 
             # Wait for Dask deployment to be ready
@@ -287,9 +307,18 @@ def smoke_test(
             max_wait = 60  # seconds
             for i in range(max_wait // 5):
                 result = subprocess.run(
-                    ["kubectl", "get", "deployment", "dask-scheduler", "-n", namespace, "-o", "jsonpath={.status.readyReplicas}"],
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        "dask-scheduler",
+                        "-n",
+                        namespace,
+                        "-o",
+                        "jsonpath={.status.readyReplicas}",
+                    ],
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 if result.returncode == 0 and result.stdout.strip() == "1":
                     success("Dask scheduler deployment is ready")
@@ -297,6 +326,7 @@ def smoke_test(
                 if i == 0:
                     info("Waiting for Dask scheduler deployment to be ready...")
                 import time
+
                 time.sleep(5)
             else:
                 error("Dask scheduler deployment not ready after 60 seconds")
@@ -305,22 +335,31 @@ def smoke_test(
             # Start port-forward
             info("Starting kubectl port-forward...")
             port_forward_proc = subprocess.Popen(
-                ["kubectl", "port-forward", "-n", namespace, "svc/dask-scheduler", "8786:8786"],
+                [
+                    "kubectl",
+                    "port-forward",
+                    "-n",
+                    namespace,
+                    "svc/dask-scheduler",
+                    "8786:8786",
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
 
             # Wait a bit for port-forward to establish
             import time
+
             for i in range(10):
                 time.sleep(1)
                 # Check if port is listening
                 import socket
+
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(1)
                 try:
-                    result = sock.connect_ex(('localhost', 8786))
+                    result = sock.connect_ex(("localhost", 8786))
                     sock.close()
                     if result == 0:
                         success("Port-forward established successfully")
@@ -338,12 +377,13 @@ def smoke_test(
         client_connected = False
         for attempt in range(3):
             try:
-                client = Client(scheduler_url, timeout='10s')
-                n_workers = len(client.scheduler_info()['workers'])
+                client = Client(scheduler_url, timeout="10s")
+                n_workers = len(client.scheduler_info()["workers"])
                 if n_workers == 0:
                     if attempt < 2:
-                        warning(f"No workers available (attempt {attempt+1}/3), retrying...")
+                        warning(f"No workers available (attempt {attempt + 1}/3), retrying...")
                         import time
+
                         time.sleep(5)
                         continue
                     else:
@@ -354,8 +394,9 @@ def smoke_test(
                 break
             except Exception as e:
                 if attempt < 2:
-                    warning(f"Connection failed (attempt {attempt+1}/3): {e}, retrying...")
+                    warning(f"Connection failed (attempt {attempt + 1}/3): {e}, retrying...")
                     import time
+
                     time.sleep(5)
                 else:
                     error(f"Failed to connect to Dask after 3 attempts: {e}")
@@ -374,19 +415,23 @@ def smoke_test(
 
         # 7. Submit task
         info("Submitting simulation task...")
-        from modelops_contracts import UniqueParameterSet
         import time
+
+        from modelops_contracts import UniqueParameterSet
+
         # Add timestamp to force new task (bypass cache)
-        param_set = UniqueParameterSet.from_dict({
-            "test": "smoke",
-            "message": "Testing OCI bundle fetch",
-            "timestamp": int(time.time())
-        })
+        param_set = UniqueParameterSet.from_dict(
+            {
+                "test": "smoke",
+                "message": "Testing OCI bundle fetch",
+                "timestamp": int(time.time()),
+            }
+        )
         task = SimTask(
             entrypoint="simulate.simulate/smoke",  # module.function/scenario format
             params=param_set,
             seed=12345,
-            bundle_ref=bundle_ref
+            bundle_ref=bundle_ref,
         )
         future = sim_service.submit(task)
 
@@ -395,19 +440,19 @@ def smoke_test(
         result = future.result(timeout=timeout)
 
         # Display result
-        success(f"Task completed successfully!")
+        success("Task completed successfully!")
         info("Result:")
         # Convert SimReturn to dict for display
-        if hasattr(result, '__dict__'):
+        if hasattr(result, "__dict__"):
             result_dict = result.__dict__
         else:
             result_dict = result
         console.print(json.dumps(result_dict, indent=2, default=str))
 
         # Verify result structure - check for SimReturn with outputs
-        if hasattr(result, 'outputs') and result.outputs:
+        if hasattr(result, "outputs") and result.outputs:
             # SimReturn format - check if we have the expected outputs
-            if 'result' in result.outputs and 'metadata' in result.outputs:
+            if "result" in result.outputs and "metadata" in result.outputs:
                 success("✓ Smoke test PASSED! Workers can fetch and execute OCI bundles.")
             else:
                 warning(f"Missing expected outputs in SimReturn: {list(result.outputs.keys())}")
@@ -442,16 +487,13 @@ def smoke_test(
 
 @app.command()
 def test_connection(
-    scheduler: Optional[str] = typer.Option(
+    scheduler: str | None = typer.Option(
         None,
-        "--scheduler", "-s",
-        help="Dask scheduler URL (uses environment if not provided)"
+        "--scheduler",
+        "-s",
+        help="Dask scheduler URL (uses environment if not provided)",
     ),
-    timeout: int = typer.Option(
-        5,
-        "--timeout", "-t",
-        help="Connection timeout in seconds"
-    )
+    timeout: int = typer.Option(5, "--timeout", "-t", help="Connection timeout in seconds"),
 ):
     """Test connection to Dask cluster.
 
@@ -463,22 +505,24 @@ def test_connection(
     info(f"Testing connection to {scheduler_url}...")
 
     try:
-        client = Client(scheduler_url, timeout=f'{timeout}s')
+        client = Client(scheduler_url, timeout=f"{timeout}s")
         scheduler_info = client.scheduler_info()
-        n_workers = len(scheduler_info.get('workers', {}))
+        n_workers = len(scheduler_info.get("workers", {}))
 
-        success(f"✓ Connected successfully!")
+        success("✓ Connected successfully!")
         info(f"Scheduler: {scheduler_url}")
         info(f"Workers: {n_workers}")
 
         # Show worker details
         if n_workers > 0:
             info("\nWorker details:")
-            for worker_id, worker_info in scheduler_info['workers'].items():
-                worker_name = worker_info.get('name', worker_id)
-                worker_threads = worker_info.get('nthreads', 0)
-                worker_memory = worker_info.get('memory_limit', 0) / (1024**3)  # Convert to GB
-                console.print(f"  • {worker_name}: {worker_threads} threads, {worker_memory:.1f} GB memory")
+            for worker_id, worker_info in scheduler_info["workers"].items():
+                worker_name = worker_info.get("name", worker_id)
+                worker_threads = worker_info.get("nthreads", 0)
+                worker_memory = worker_info.get("memory_limit", 0) / (1024**3)  # Convert to GB
+                console.print(
+                    f"  • {worker_name}: {worker_threads} threads, {worker_memory:.1f} GB memory"
+                )
 
         client.close()
 
@@ -500,9 +544,19 @@ def diagnose_auth():
 
     # Get a worker pod
     result = subprocess.run(
-        ["kubectl", "get", "pod", "-n", "modelops-dask-dev",
-         "-l", "app=dask-worker", "-o", "jsonpath={.items[0].metadata.name}"],
-        capture_output=True, text=True
+        [
+            "kubectl",
+            "get",
+            "pod",
+            "-n",
+            "modelops-dask-dev",
+            "-l",
+            "app=dask-worker",
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        ],
+        capture_output=True,
+        text=True,
     )
 
     if result.returncode != 0 or not result.stdout.strip():
@@ -517,7 +571,8 @@ def diagnose_auth():
     info("\nEnvironment variables:")
     result = subprocess.run(
         ["kubectl", "exec", pod, "-n", "modelops-dask-dev", "--", "env"],
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
     )
 
     if result.returncode != 0:
@@ -533,9 +588,9 @@ def diagnose_auth():
     # Show status
     if has_registry:
         # Extract the actual value
-        for line in env_vars.split('\n'):
+        for line in env_vars.split("\n"):
             if line.startswith("MODELOPS_BUNDLE_REGISTRY="):
-                registry_val = line.split('=', 1)[1]
+                registry_val = line.split("=", 1)[1]
                 success(f"  MODELOPS_BUNDLE_REGISTRY: {registry_val}")
                 break
     else:
@@ -559,7 +614,7 @@ def diagnose_auth():
     # Test ACR authentication if all vars present
     if all([has_registry, has_username, has_password]):
         info("\nTesting ACR authentication...")
-        test_script = '''
+        test_script = """
 import os, urllib.request, base64, json
 
 registry = os.environ.get("MODELOPS_BUNDLE_REGISTRY", "").split("/")[0]
@@ -598,21 +653,31 @@ except urllib.error.HTTPError as e:
         print("  Check that the registry URL is correct")
 except Exception as e:
     print(f"✗ Auth failed: {e}")
-'''
+"""
         result = subprocess.run(
-            ["kubectl", "exec", pod, "-n", "modelops-dask-dev", "--",
-             "python", "-c", test_script],
-            capture_output=True, text=True
+            [
+                "kubectl",
+                "exec",
+                pod,
+                "-n",
+                "modelops-dask-dev",
+                "--",
+                "python",
+                "-c",
+                test_script,
+            ],
+            capture_output=True,
+            text=True,
         )
 
         if result.returncode == 0:
-            for line in result.stdout.split('\n'):
+            for line in result.stdout.split("\n"):
                 if line.strip():
-                    if line.startswith('✓'):
+                    if line.startswith("✓"):
                         success(f"  {line}")
-                    elif line.startswith('✗'):
+                    elif line.startswith("✗"):
                         error(f"  {line}")
-                    elif line.startswith('⚠'):
+                    elif line.startswith("⚠"):
                         warning(f"  {line}")
                     else:
                         info(f"    {line}")
@@ -637,7 +702,7 @@ except Exception as e:
 @app.command()
 def validate_bundle(
     path: Path = typer.Argument(..., help="Path to bundle directory"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed validation")
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed validation"),
 ):
     """Validate a bundle directory structure.
 
@@ -698,10 +763,14 @@ def validate_bundle(
                 # Try to import and check function exists
                 try:
                     import ast
+
                     with open(module_file) as f:
                         tree = ast.parse(f.read())
-                        functions = [node.name for node in ast.walk(tree)
-                                   if isinstance(node, ast.FunctionDef)]
+                        functions = [
+                            node.name
+                            for node in ast.walk(tree)
+                            if isinstance(node, ast.FunctionDef)
+                        ]
                         if function not in functions:
                             errors.append(f"Function '{function}' not found in {module_file}")
                         else:
@@ -745,7 +814,7 @@ def validate_bundle(
 @app.command()
 def check_credentials(
     env: str = typer.Option("dev", "--env", "-e", help="Environment"),
-    namespace: Optional[str] = typer.Option(None, "--namespace", "-n", help="K8s namespace")
+    namespace: str | None = typer.Option(None, "--namespace", "-n", help="K8s namespace"),
 ):
     """Check if worker pods have all required credentials.
 
@@ -767,7 +836,7 @@ def check_credentials(
         ("REGISTRY_PASSWORD", "ACR password for bundle pulls"),
         ("AZURE_STORAGE_CONNECTION_STRING", "Azure blob storage access"),
         ("AZURE_STORAGE_ACCOUNT", "Azure storage account name"),
-        ("MODELOPS_BUNDLE_REGISTRY", "Registry URL for bundles")
+        ("MODELOPS_BUNDLE_REGISTRY", "Registry URL for bundles"),
     ]
 
     # Optional but useful variables
@@ -776,7 +845,7 @@ def check_credentials(
         ("MODELOPS_STORAGE_BACKEND", "Storage backend type (local/azure)"),
         ("GITHUB_TOKEN", "GitHub PAT for private repo access"),
         ("GIT_USERNAME", "Git username for HTTPS operations"),
-        ("GIT_PASSWORD", "Git password for HTTPS operations")
+        ("GIT_PASSWORD", "Git password for HTTPS operations"),
     ]
 
     info("\n✓ = Set, ✗ = Missing\n")
@@ -787,9 +856,19 @@ def check_credentials(
     console.print("[bold]Required Variables:[/bold]")
     for var_name, description in required_vars:
         result = subprocess.run(
-            ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
-             "--", "sh", "-c", f"echo ${{{var_name}}}"],
-            capture_output=True, text=True
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "exec",
+                "deployment/dask-workers",
+                "--",
+                "sh",
+                "-c",
+                f"echo ${{{var_name}}}",
+            ],
+            capture_output=True,
+            text=True,
         )
 
         if result.returncode == 0 and result.stdout.strip():
@@ -803,16 +882,28 @@ def check_credentials(
                 console.print(f"  [green]✓[/green] {var_name}: {value} [dim]({description})[/dim]")
         else:
             # Variable is missing
-            console.print(f"  [red]✗[/red] {var_name}: [red]Missing[/red] [dim]({description})[/dim]")
+            console.print(
+                f"  [red]✗[/red] {var_name}: [red]Missing[/red] [dim]({description})[/dim]"
+            )
             missing_required.append(var_name)
 
     # Check optional variables
     console.print("\n[bold]Optional Variables:[/bold]")
     for var_name, description in optional_vars:
         result = subprocess.run(
-            ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
-             "--", "sh", "-c", f"echo ${{{var_name}}}"],
-            capture_output=True, text=True
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "exec",
+                "deployment/dask-workers",
+                "--",
+                "sh",
+                "-c",
+                f"echo ${{{var_name}}}",
+            ],
+            capture_output=True,
+            text=True,
         )
 
         if result.returncode == 0 and result.stdout.strip():
@@ -838,7 +929,7 @@ def check_credentials(
 def test_bundle_fetch(
     bundle_ref: str = typer.Argument(..., help="Bundle reference to test (e.g., sha256:abc123...)"),
     env: str = typer.Option("dev", "--env", "-e", help="Environment"),
-    namespace: Optional[str] = typer.Option(None, "--namespace", "-n", help="K8s namespace")
+    namespace: str | None = typer.Option(None, "--namespace", "-n", help="K8s namespace"),
 ):
     """Test if workers can fetch a bundle from the registry.
 
@@ -936,24 +1027,34 @@ except Exception as e:
     # Run the test script in a worker pod
     info("\nRunning test script in worker pod...")
     result = subprocess.run(
-        ["kubectl", "-n", namespace, "exec", "deployment/dask-workers",
-         "--", "python", "-c", test_script],
-        capture_output=True, text=True
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "exec",
+            "deployment/dask-workers",
+            "--",
+            "python",
+            "-c",
+            test_script,
+        ],
+        capture_output=True,
+        text=True,
     )
 
     # Display output
     if result.stdout:
-        for line in result.stdout.split('\n'):
+        for line in result.stdout.split("\n"):
             if line.strip():
-                if '✓' in line:
+                if "✓" in line:
                     success(line)
-                elif '✗' in line:
+                elif "✗" in line:
                     error(line)
                 else:
                     console.print(line)
 
     if result.stderr:
-        for line in result.stderr.split('\n'):
+        for line in result.stderr.split("\n"):
             if line.strip():
                 error(line)
 
@@ -977,8 +1078,8 @@ def quick_sim(
     bundle_ref: str = typer.Option(..., "--bundle", help="Bundle reference (sha256:...)"),
     seed: int = typer.Option(12345, "--seed", help="Random seed"),
     fn_ref: str = typer.Option("simulate:simulate", "--function", help="Function reference"),
-    scheduler: Optional[str] = typer.Option(None, "--scheduler", help="Dask scheduler URL"),
-    timeout: int = typer.Option(30, "--timeout", help="Timeout in seconds")
+    scheduler: str | None = typer.Option(None, "--scheduler", help="Dask scheduler URL"),
+    timeout: int = typer.Option(30, "--timeout", help="Timeout in seconds"),
 ):
     """Run a quick simulation for testing.
 
@@ -1016,7 +1117,7 @@ def quick_sim(
         # Connect to Dask
         scheduler_url = scheduler or os.environ.get("DASK_SCHEDULER", "tcp://localhost:8786")
         info(f"Connecting to Dask: {scheduler_url}")
-        client = Client(scheduler_url, timeout='10s')
+        client = Client(scheduler_url, timeout="10s")
 
         # Create SimulationService
         config = RuntimeConfig.from_env()
@@ -1024,12 +1125,7 @@ def quick_sim(
 
         # Submit task
         info("Submitting task...")
-        task = SimTask(
-            fn_ref=fn_ref,
-            params=params_dict,
-            seed=seed,
-            bundle_ref=bundle_ref
-        )
+        task = SimTask(fn_ref=fn_ref, params=params_dict, seed=seed, bundle_ref=bundle_ref)
         future = sim_service.submit(task)
 
         # Get result
@@ -1051,8 +1147,10 @@ def quick_sim(
 @app.command()
 def images(
     action: str = typer.Argument(..., help="Action: print|export-env"),
-    key: Optional[str] = typer.Argument(None, help="For 'print': scheduler|worker|runner|adaptive-worker"),
-    config: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to modelops-images.yaml"),
+    key: str | None = typer.Argument(
+        None, help="For 'print': scheduler|worker|runner|adaptive-worker"
+    ),
+    config: Path | None = typer.Option(None, "--config", "-c", help="Path to modelops-images.yaml"),
 ):
     """Manage Docker image references.
 
@@ -1073,6 +1171,7 @@ def images(
         # Load configuration
         config_path = config or Path("modelops-images.yaml")
         from ..images import ImageConfig
+
         img_config = ImageConfig.from_yaml(config_path) if config else get_image_config()
 
         if action == "print":

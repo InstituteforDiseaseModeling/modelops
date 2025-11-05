@@ -1,15 +1,15 @@
 """Service for blob storage management."""
 
-from typing import Dict, Any, Optional
 import os
+from typing import Any
 
-from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
-from .utils import stack_exists
 from ..components.specs.storage import StorageConfig
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
 from ..core.paths import ensure_work_dir
 from ..core.state_manager import PulumiStateManager
+from .base import BaseService, ComponentState, ComponentStatus, OutputCapture
+from .utils import stack_exists
 
 
 class StorageService(BaseService):
@@ -20,11 +20,8 @@ class StorageService(BaseService):
         super().__init__(env)
 
     def provision(
-        self,
-        config: StorageConfig,
-        standalone: bool = False,
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+        self, config: StorageConfig, standalone: bool = False, verbose: bool = False
+    ) -> dict[str, Any]:
         """
         Provision blob storage.
 
@@ -39,10 +36,12 @@ class StorageService(BaseService):
         Raises:
             Exception: If provisioning fails
         """
+
         def pulumi_program():
             """Create BlobStorage in standalone or integrated mode."""
-            from ..infra.components.storage import BlobStorage
             import pulumi
+
+            from ..infra.components.storage import BlobStorage
 
             # Convert config to dict
             storage_config = config.to_pulumi_config()
@@ -82,9 +81,7 @@ class StorageService(BaseService):
         # - State reconciliation with Azure
         # - Environment YAML updates
         result = state_manager.execute_with_recovery(
-            "up",
-            program=pulumi_program,
-            on_output=capture
+            "up", program=pulumi_program, on_output=capture
         )
 
         return result.outputs if result else {}
@@ -100,6 +97,7 @@ class StorageService(BaseService):
             Exception: If destruction fails
         """
         import os
+
         # Allow deletion of K8s resources even if cluster is unreachable
         os.environ["PULUMI_K8S_DELETE_UNREACHABLE"] = "true"
 
@@ -110,10 +108,7 @@ class StorageService(BaseService):
         # State manager handles:
         # - Stale lock detection and clearing
         # - Environment YAML cleanup
-        state_manager.execute_with_recovery(
-            "destroy",
-            on_output=capture
-        )
+        state_manager.execute_with_recovery("destroy", on_output=capture)
 
     def status(self) -> ComponentStatus:
         """
@@ -124,9 +119,7 @@ class StorageService(BaseService):
         """
         try:
             work_dir = ensure_work_dir("storage")
-            outputs = automation.outputs(
-                "storage", self.env, refresh=False, work_dir=str(work_dir)
-            )
+            outputs = automation.outputs("storage", self.env, refresh=False, work_dir=str(work_dir))
 
             if outputs:
                 containers = get_output_value(outputs, "containers", [])
@@ -145,23 +138,19 @@ class StorageService(BaseService):
                         "location": get_output_value(outputs, "location", "unknown"),
                         "endpoint": get_output_value(outputs, "primary_endpoint"),
                         "containers": container_names,
-                        "container_count": len(containers)
-                    }
+                        "container_count": len(containers),
+                    },
                 )
             else:
                 return ComponentStatus(
-                    deployed=False,
-                    phase=ComponentState.NOT_DEPLOYED,
-                    details={}
+                    deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
                 )
         except Exception as e:
             return ComponentStatus(
-                deployed=False,
-                phase=ComponentState.UNKNOWN,
-                details={"error": str(e)}
+                deployed=False, phase=ComponentState.UNKNOWN, details={"error": str(e)}
             )
 
-    def get_connection_string(self, show_secrets: bool = False) -> Optional[str]:
+    def get_connection_string(self, show_secrets: bool = False) -> str | None:
         """
         Get storage connection string.
 
@@ -173,22 +162,19 @@ class StorageService(BaseService):
         """
         try:
             work_dir = ensure_work_dir("storage")
-            outputs = automation.outputs(
-                "storage", self.env, refresh=False, work_dir=str(work_dir)
-            )
+            outputs = automation.outputs("storage", self.env, refresh=False, work_dir=str(work_dir))
 
             if not outputs:
                 return None
 
-            conn_str = get_output_value(outputs, 'connection_string', '')
+            conn_str = get_output_value(outputs, "connection_string", "")
             if conn_str:
                 return conn_str if show_secrets else "****"
             return None
         except:
             return None
 
-
-    def get_info(self) -> Dict[str, Any]:
+    def get_info(self) -> dict[str, Any]:
         """
         Get storage account information.
 
@@ -197,9 +183,7 @@ class StorageService(BaseService):
         """
         try:
             work_dir = ensure_work_dir("storage")
-            outputs = automation.outputs(
-                "storage", self.env, refresh=False, work_dir=str(work_dir)
-            )
+            outputs = automation.outputs("storage", self.env, refresh=False, work_dir=str(work_dir))
 
             if not outputs:
                 return {}
@@ -217,12 +201,12 @@ class StorageService(BaseService):
                 "location": get_output_value(outputs, "location", "unknown"),
                 "endpoint": get_output_value(outputs, "primary_endpoint"),
                 "containers": container_names,
-                "environment": self.env
+                "environment": self.env,
             }
         except:
             return {}
 
-    def export_env_vars(self, output_file: Optional[str] = None) -> str:
+    def export_env_vars(self, output_file: str | None = None) -> str:
         """
         Export storage configuration as environment variables.
 
@@ -240,13 +224,14 @@ class StorageService(BaseService):
 
         export_content = f"""# ModelOps Storage Configuration
 # Generated for environment: {self.env}
-export AZURE_STORAGE_CONNECTION_STRING="{conn_str or ''}"
-export AZURE_STORAGE_ACCOUNT="{outputs.get('account_name', '')}"
+export AZURE_STORAGE_CONNECTION_STRING="{conn_str or ""}"
+export AZURE_STORAGE_ACCOUNT="{outputs.get("account_name", "")}"
 export MODELOPS_STORAGE_ENV="{self.env}"
 """
 
         if output_file:
             from pathlib import Path
+
             output_path = Path(output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(export_content)

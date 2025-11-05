@@ -3,9 +3,8 @@
 Handles timezone conversion and human-friendly date formatting.
 """
 
-from datetime import datetime, timezone, timedelta
-from typing import Optional
 import time
+from datetime import UTC, datetime, timedelta
 
 
 def format_timestamp(iso_timestamp: str, use_local_tz: bool = True) -> str:
@@ -22,7 +21,7 @@ def format_timestamp(iso_timestamp: str, use_local_tz: bool = True) -> str:
 
     # Ensure we have timezone info (assume UTC if not)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
 
     # Convert to local timezone if requested
     if use_local_tz:
@@ -60,7 +59,7 @@ def format_timestamp(iso_timestamp: str, use_local_tz: bool = True) -> str:
         return dt.strftime("%Y-%m-%d %H:%M")  # 2024-03-15 14:30
 
 
-def format_duration(start_iso: str, end_iso: Optional[str] = None) -> str:
+def format_duration(start_iso: str, end_iso: str | None = None) -> str:
     """Format duration between two timestamps.
 
     Args:
@@ -72,15 +71,15 @@ def format_duration(start_iso: str, end_iso: Optional[str] = None) -> str:
     """
     start = datetime.fromisoformat(start_iso)
     if start.tzinfo is None:
-        start = start.replace(tzinfo=timezone.utc)
+        start = start.replace(tzinfo=UTC)
 
     if end_iso:
         end = datetime.fromisoformat(end_iso)
         if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
+            end = end.replace(tzinfo=UTC)
     else:
         # Use current time if ongoing
-        end = datetime.now(timezone.utc)
+        end = datetime.now(UTC)
 
     duration = end - start
 
@@ -124,7 +123,7 @@ def get_timezone_info() -> str:
     tz_name = time.tzname[time.daylight]
 
     # Get offset
-    offset = datetime.now().astimezone().strftime('%z')
+    offset = datetime.now().astimezone().strftime("%z")
     if offset:
         hours = int(offset[:3])
         tz_offset = f"UTC{hours:+d}"
@@ -132,6 +131,6 @@ def get_timezone_info() -> str:
         tz_offset = "UTC"
 
     # Return abbreviation if available, otherwise offset
-    if tz_name and tz_name not in ['UTC', 'GMT']:
+    if tz_name and tz_name not in ["UTC", "GMT"]:
         return tz_name
     return tz_offset

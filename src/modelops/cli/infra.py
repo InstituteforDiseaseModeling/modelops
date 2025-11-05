@@ -4,18 +4,17 @@ Orchestrates all infrastructure components with a single command.
 """
 
 import json
-import subprocess
 import shutil
-import typer
+import subprocess
 from pathlib import Path
-from typing import Optional, List, Dict
-from datetime import datetime
+
+import typer
 
 from ..client import InfrastructureService
-from ..core.paths import INFRASTRUCTURE_FILE
 from ..components.specs.infra import UnifiedInfraSpec
-from .display import console, success, error, info, section, warning
+from ..core.paths import INFRASTRUCTURE_FILE
 from .common_options import env_option, yes_option
+from .display import console, error, info, section, success, warning
 from .templates import get_infra_template
 
 app = typer.Typer(help="Unified infrastructure management")
@@ -23,8 +22,10 @@ app = typer.Typer(help="Unified infrastructure management")
 
 @app.command(hidden=True)  # Hidden: use 'mops init' instead
 def init(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Custom output path"),
-    interactive: bool = typer.Option(True, "--interactive/--non-interactive", help="Interactive mode"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Custom output path"),
+    interactive: bool = typer.Option(
+        True, "--interactive/--non-interactive", help="Interactive mode"
+    ),
 ):
     """Generate infrastructure configuration with guided setup.
 
@@ -61,20 +62,21 @@ def init(
         info(f"Using subscription: {subscription['name']}")
     elif interactive:
         from rich.table import Table
+
         table = Table(title="Azure Subscriptions")
         table.add_column("#", style="cyan")
         table.add_column("Name", style="bold")
         table.add_column("ID", style="dim")
 
         for i, sub in enumerate(subs, 1):
-            table.add_row(str(i), sub['name'], sub['id'])
+            table.add_row(str(i), sub["name"], sub["id"])
 
         console.print(table)
         choice = typer.prompt("Select subscription", type=int, default=1)
         subscription = subs[choice - 1]
     else:
         # Non-interactive: use default subscription
-        subscription = next((s for s in subs if s.get('isDefault')), subs[0])
+        subscription = next((s for s in subs if s.get("isDefault")), subs[0])
         info(f"Using subscription: {subscription['name']}")
 
     # Select location
@@ -85,7 +87,7 @@ def init(
 
     # Get AKS version (with fallback)
     try:
-        versions = get_aks_versions(subscription['id'], location)
+        versions = get_aks_versions(subscription["id"], location)
         k8s_version = versions[0] if versions else "1.30"
         info(f"Using Kubernetes {k8s_version} (latest in {location})")
     except Exception:
@@ -95,17 +97,19 @@ def init(
     # Get username from config (or system)
     try:
         from ..core.config import get_username
+
         username = get_username()
     except Exception:
         import getpass
+
         username = getpass.getuser()
 
     # Generate YAML from template
     yaml_content = get_infra_template(
-        subscription_id=subscription['id'],
+        subscription_id=subscription["id"],
         username=username,
         location=location,
-        k8s_version=k8s_version
+        k8s_version=k8s_version,
     )
 
     # Write file
@@ -123,24 +127,25 @@ def init(
 
 @app.command()
 def up(
-    config: Optional[Path] = typer.Argument(
+    config: Path | None = typer.Argument(
         None,
         help="Infrastructure configuration file (YAML)",
         exists=True,
         file_okay=True,
         dir_okay=False,
-        readable=True
+        readable=True,
     ),
-    components: Optional[List[str]] = typer.Option(
+    components: list[str] | None = typer.Option(
         None,
-        "--components", "-c",
-        help="Specific components to provision (registry,cluster,storage,workspace)"
+        "--components",
+        "-c",
+        help="Specific components to provision (registry,cluster,storage,workspace)",
     ),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
     force: bool = typer.Option(False, "--force", "-f", help="Force reprovisioning"),
     plan: bool = typer.Option(False, "--plan", help="Show what would be done without doing it"),
-    json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
     Provision infrastructure from unified configuration.
@@ -160,6 +165,7 @@ def up(
     # Smart default: look for unified config first, then infrastructure.yaml
     if config is None:
         from ..core.paths import UNIFIED_CONFIG_FILE
+
         if UNIFIED_CONFIG_FILE.exists():
             config = UNIFIED_CONFIG_FILE
             info(f"Using unified config: {config}")
@@ -176,13 +182,19 @@ def up(
     try:
         # Check if this is unified config or legacy infra config
         from ..core.paths import UNIFIED_CONFIG_FILE
-        if config == UNIFIED_CONFIG_FILE or str(config).endswith('modelops.yaml'):
+
+        if config == UNIFIED_CONFIG_FILE or str(config).endswith("modelops.yaml"):
             # Load unified config and convert to infra spec
             from ..core.unified_config import UnifiedModelOpsConfig
+
             unified = UnifiedModelOpsConfig.from_yaml(config)
 
             # Convert to legacy infra spec format
-            from ..components.specs.azure import NodePool, AKSConfig, AzureProviderConfig
+            from ..components.specs.azure import (
+                AKSConfig,
+                AzureProviderConfig,
+                NodePool,
+            )
             from ..components.specs.storage import StorageConfig
             from ..components.specs.workspace import WorkspaceConfig
 
@@ -193,7 +205,7 @@ def up(
                 pool_config = {
                     "name": pool.name,
                     "mode": pool.mode,
-                    "vm_size": pool.vm_size
+                    "vm_size": pool.vm_size,
                 }
 
                 # Add sizing configuration - either fixed or autoscaling
@@ -217,8 +229,8 @@ def up(
                 aks=AKSConfig(
                     name=unified.cluster.aks.name,
                     kubernetes_version=unified.cluster.aks.kubernetes_version,
-                    node_pools=node_pools
-                )
+                    node_pools=node_pools,
+                ),
             )
 
             # Build workspace spec
@@ -229,15 +241,15 @@ def up(
                 spec={
                     "scheduler": {
                         "image": unified.workspace.scheduler_image,
-                        "replicas": unified.workspace.scheduler_replicas
+                        "replicas": unified.workspace.scheduler_replicas,
                     },
                     "workers": {
                         "image": unified.workspace.worker_image,
                         "replicas": unified.workspace.worker_replicas,
                         "processes": unified.workspace.worker_processes,
-                        "threads": unified.workspace.worker_threads
-                    }
-                }
+                        "threads": unified.workspace.worker_threads,
+                    },
+                },
             )
 
             # Create unified infra spec
@@ -246,7 +258,7 @@ def up(
                 cluster=cluster_spec,
                 storage=StorageConfig(account_tier=unified.storage.account_tier),
                 registry={"sku": unified.registry.sku},  # Registry is just a dict
-                workspace=workspace_spec
+                workspace=workspace_spec,
             )
         else:
             # Load legacy infrastructure.yaml format
@@ -254,7 +266,10 @@ def up(
 
         # Check for placeholder subscription IDs
         if spec.cluster and spec.cluster.subscription_id:
-            if spec.cluster.subscription_id in ["YOUR_SUBSCRIPTION_ID", "00000000-0000-0000-0000-000000000000"]:
+            if spec.cluster.subscription_id in [
+                "YOUR_SUBSCRIPTION_ID",
+                "00000000-0000-0000-0000-000000000000",
+            ]:
                 error("Invalid subscription ID in configuration")
                 error("Run 'mops infra init' to regenerate with valid subscription")
                 raise typer.Exit(1)
@@ -279,6 +294,7 @@ def up(
 
         if json_output:
             import json
+
             console.print(json.dumps(preview, indent=2))
         else:
             if preview["to_create"]:
@@ -343,22 +359,28 @@ def up(
 
 @app.command()
 def down(
-    components: Optional[List[str]] = typer.Option(
-        None,
-        "--components", "-c",
-        help="Specific components to destroy"
+    components: list[str] | None = typer.Option(
+        None, "--components", "-c", help="Specific components to destroy"
     ),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
     force: bool = typer.Option(False, "--force", "-f", help="Skip dependency checks"),
     with_deps: bool = typer.Option(False, "--with-deps", help="Also destroy dependent components"),
-    destroy_storage: bool = typer.Option(False, "--destroy-storage", help="Include storage (contains results/artifacts)"),
-    destroy_registry: bool = typer.Option(False, "--destroy-registry", help="Include registry (contains images)"),
-    destroy_all: bool = typer.Option(False, "--destroy-all", help="Destroy all components including data"),
-    delete_rg: bool = typer.Option(False, "--delete-rg", help="Also delete the resource group (dangerous!)"),
+    destroy_storage: bool = typer.Option(
+        False, "--destroy-storage", help="Include storage (contains results/artifacts)"
+    ),
+    destroy_registry: bool = typer.Option(
+        False, "--destroy-registry", help="Include registry (contains images)"
+    ),
+    destroy_all: bool = typer.Option(
+        False, "--destroy-all", help="Destroy all components including data"
+    ),
+    delete_rg: bool = typer.Option(
+        False, "--delete-rg", help="Also delete the resource group (dangerous!)"
+    ),
     plan: bool = typer.Option(False, "--plan", help="Show what would be done"),
     yes: bool = yes_option(),
-    json_output: bool = typer.Option(False, "--json", help="Output in JSON format")
+    json_output: bool = typer.Option(False, "--json", help="Output in JSON format"),
 ):
     """
     Destroy infrastructure components.
@@ -385,11 +407,14 @@ def down(
     if plan:
         # Just show what would be done
         result = service.destroy(
-            components, verbose, force, with_deps,
+            components,
+            verbose,
+            force,
+            with_deps,
             dry_run=True,
             destroy_storage=destroy_storage,
             destroy_registry=destroy_registry,
-            destroy_all=destroy_all
+            destroy_all=destroy_all,
         )
         raise typer.Exit(0)
 
@@ -425,12 +450,15 @@ def down(
             raise typer.Exit(0)
 
     result = service.destroy(
-        components, verbose, force, with_deps,
+        components,
+        verbose,
+        force,
+        with_deps,
         destroy_storage=destroy_storage,
         destroy_registry=destroy_registry,
         destroy_all=destroy_all,
         delete_rg=delete_rg,
-        yes_confirmed=yes
+        yes_confirmed=yes,
     )
 
     if json_output:
@@ -447,10 +475,12 @@ def down(
 
 @app.command()
 def status(
-    env: Optional[str] = env_option(),
-    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed operational information"),
+    env: str | None = env_option(),
+    detailed: bool = typer.Option(
+        False, "--detailed", "-d", help="Show detailed operational information"
+    ),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output in JSON format"),
-    show_outputs: bool = typer.Option(False, "--outputs", "-o", help="Show stack outputs")
+    show_outputs: bool = typer.Option(False, "--outputs", "-o", help="Show stack outputs"),
 ):
     """
     Show infrastructure status.
@@ -473,6 +503,7 @@ def status(
 
     if json_output:
         import json
+
         status_dict = {k: v.to_json() for k, v in status.items()}
         console.print(json.dumps(status_dict, indent=2))
     else:
@@ -514,12 +545,14 @@ def status(
                     if "cluster_name" in details:
                         console.print(f"      [dim]cluster:[/dim] {details['cluster_name']}")
                     if "resource_group" in details:
-                        console.print(f"      [dim]resource group:[/dim] {details['resource_group']}")
+                        console.print(
+                            f"      [dim]resource group:[/dim] {details['resource_group']}"
+                        )
                     if "connectivity" in details:
                         if details["connectivity"]:
-                            console.print(f"      [dim]status:[/dim] [green]connected[/green]")
+                            console.print("      [dim]status:[/dim] [green]connected[/green]")
                         else:
-                            console.print(f"      [dim]status:[/dim] [red]unreachable[/red]")
+                            console.print("      [dim]status:[/dim] [red]unreachable[/red]")
 
                 elif component == "storage":
                     if "account_name" in details:
@@ -529,7 +562,7 @@ def status(
 
                 elif component == "workspace":
                     if "workers" in details:
-                        worker_count = details['workers']
+                        worker_count = details["workers"]
                         # Convert to int if it's a string
                         if isinstance(worker_count, str):
                             try:
@@ -537,11 +570,15 @@ def status(
                             except (ValueError, TypeError):
                                 worker_count = 0
                         if worker_count > 0:
-                            console.print(f"      [dim]workers:[/dim] [green]{worker_count}[/green]")
+                            console.print(
+                                f"      [dim]workers:[/dim] [green]{worker_count}[/green]"
+                            )
                         else:
-                            console.print(f"      [dim]workers:[/dim] [yellow]{worker_count}[/yellow]")
+                            console.print(
+                                f"      [dim]workers:[/dim] [yellow]{worker_count}[/yellow]"
+                            )
                     if "autoscaling" in details and details["autoscaling"]:
-                        console.print(f"      [dim]autoscaling:[/dim] [green]enabled[/green]")
+                        console.print("      [dim]autoscaling:[/dim] [green]enabled[/green]")
 
                 elif component == "registry":
                     if "registry_name" in details:
@@ -631,13 +668,10 @@ def status(
 
 @app.command()
 def outputs(
-    component: Optional[str] = typer.Argument(
-        None,
-        help="Specific component to get outputs for"
-    ),
-    env: Optional[str] = env_option(),
+    component: str | None = typer.Argument(None, help="Specific component to get outputs for"),
+    env: str | None = env_option(),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output in JSON format"),
-    show_secrets: bool = typer.Option(False, "--show-secrets", help="Show secret values")
+    show_secrets: bool = typer.Option(False, "--show-secrets", help="Show secret values"),
 ):
     """
     Get infrastructure outputs.
@@ -658,6 +692,7 @@ def outputs(
 
     if json_output:
         import json
+
         console.print(json.dumps(outputs, indent=2, default=str))
     else:
         if not outputs:
@@ -684,27 +719,44 @@ def outputs(
 
 
 # Helper functions for infra init
-def get_azure_subscriptions() -> List[Dict[str, str]]:
+def get_azure_subscriptions() -> list[dict[str, str]]:
     """Get list of Azure subscriptions."""
     result = subprocess.run(
-        ["az", "account", "list", "--query",
-         "[].{name:name, id:id, isDefault:isDefault}", "-o", "json"],
-        capture_output=True, text=True
+        [
+            "az",
+            "account",
+            "list",
+            "--query",
+            "[].{name:name, id:id, isDefault:isDefault}",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode == 0:
         return json.loads(result.stdout)
     return []
 
 
-def get_aks_versions(subscription_id: str, location: str) -> List[str]:
+def get_aks_versions(subscription_id: str, location: str) -> list[str]:
     """Get supported AKS versions for location."""
     result = subprocess.run(
-        ["az", "aks", "get-versions",
-         "--subscription", subscription_id,
-         "--location", location,
-         "--query", "values[?isPreview==null].version",
-         "-o", "json"],
-        capture_output=True, text=True
+        [
+            "az",
+            "aks",
+            "get-versions",
+            "--subscription",
+            subscription_id,
+            "--location",
+            location,
+            "--query",
+            "values[?isPreview==null].version",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode == 0:
         versions = json.loads(result.stdout)
@@ -716,8 +768,6 @@ def verify_subscription(subscription_id: str) -> bool:
     """Check if subscription is accessible."""
     result = subprocess.run(
         ["az", "account", "show", "--subscription", subscription_id],
-        capture_output=True
+        capture_output=True,
     )
     return result.returncode == 0
-
-

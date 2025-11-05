@@ -5,37 +5,36 @@ used throughout ModelOps, including Pulumi stacks, Azure resources, and
 Kubernetes resources.
 """
 
-import re
 import random
+import re
 import string
-from typing import Optional
 
 
 class StackNaming:
     """Centralized naming for all Pulumi stacks and cloud resources.
-    
+
     All methods use the PROJECT_PREFIX to ensure consistency.
     The prefix can be changed to rebrand or for testing.
     """
-    
+
     PROJECT_PREFIX = "modelops"
-    
+
     # Pulumi file backend uses a virtual organization name (default: "organization")
     # This can be customized via config.yaml to match your backend setup
     # See: https://github.com/pulumi/pulumi/issues/11390
     _DEFAULT_ORG = "organization"
-    
+
     @staticmethod
-    def get_stack_name(component: str, env: str, run_id: Optional[str] = None) -> str:
+    def get_stack_name(component: str, env: str, run_id: str | None = None) -> str:
         """Generate Pulumi stack name.
-        
+
         Pattern: {PROJECT_PREFIX}-{component}-{env}[-{run_id}]
-        
+
         Args:
             component: Component name (infra, workspace, adaptive)
             env: Environment name (dev, staging, prod)
             run_id: Optional run ID for adaptive stacks
-            
+
         Returns:
             Stack name like 'modelops-infra-dev'
         """
@@ -43,33 +42,33 @@ class StackNaming:
         if run_id:
             parts.append(run_id)
         return "-".join(parts)
-    
+
     @staticmethod
     def get_project_name(component: str) -> str:
         """Generate Pulumi project name.
-        
+
         Pattern: {PROJECT_PREFIX}-{component}
-        
+
         Args:
             component: Component name (infra, workspace, adaptive)
-            
+
         Returns:
             Project name like 'modelops-infra'
         """
         return f"{StackNaming.PROJECT_PREFIX}-{component}"
-    
+
     @staticmethod
-    def get_resource_group_name(env: str, username: Optional[str] = None) -> str:
+    def get_resource_group_name(env: str, username: str | None = None) -> str:
         """Generate Azure resource group name.
-        
+
         Pattern: {PROJECT_PREFIX}-{env}-rg[-{username}]
-        
+
         Args:
             env: Environment name (dev, staging, prod)
             username: Optional username for per-user resource groups.
                      This is typically the local system username (not Azure AD).
                      Provides isolation between developers on same subscription
-            
+
         Returns:
             Resource group name like 'modelops-dev-rg-alice'
         """
@@ -78,9 +77,9 @@ class StackNaming:
             sanitized = StackNaming.sanitize_username(username)
             return f"{base}-{sanitized}"
         return base
-    
+
     @staticmethod
-    def get_aks_cluster_name(env: str, username: Optional[str] = None) -> str:
+    def get_aks_cluster_name(env: str, username: str | None = None) -> str:
         """Generate AKS cluster name with deterministic suffix for dev environments.
 
         Pattern: {PROJECT_PREFIX}-{env}-aks[-{hash}]
@@ -100,6 +99,7 @@ class StackNaming:
         # For dev/staging environments with username, add stable hash suffix
         if username and env in ["dev", "staging"]:
             import hashlib
+
             # Create deterministic hash from env + username (same pattern as storage)
             hash_input = f"{env}-{username}"
             hash_value = hashlib.md5(hash_input.encode()).hexdigest()
@@ -108,179 +108,173 @@ class StackNaming:
             return f"{base_name}-{suffix}"
 
         return base_name
-    
+
     @staticmethod
-    def get_acr_name(env: str, suffix: Optional[str] = None) -> str:
+    def get_acr_name(env: str, suffix: str | None = None) -> str:
         """Generate Azure Container Registry name.
-        
+
         ACR names must be globally unique and alphanumeric only (no hyphens).
         Pattern: {PROJECT_PREFIX}{env}acr{suffix}
-        
+
         Args:
             env: Environment name (dev, staging, prod)
             suffix: Optional suffix, auto-generated if not provided
-            
+
         Returns:
             ACR name like 'modelopsdevacr7x9k'
         """
         if not suffix:
-            suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+            suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
         # Remove any non-alphanumeric characters from env
-        clean_env = re.sub(r'[^a-zA-Z0-9]', '', env).lower()
+        clean_env = re.sub(r"[^a-zA-Z0-9]", "", env).lower()
         return f"{StackNaming.PROJECT_PREFIX}{clean_env}acr{suffix}"
-    
-    
+
     @staticmethod
     def get_namespace(component: str, env: str) -> str:
         """Generate Kubernetes namespace.
-        
+
         Pattern: {PROJECT_PREFIX}-{component}-{env}
-        
+
         Args:
             component: Component name (dask, adaptive, etc.)
             env: Environment name (dev, staging, prod)
-            
+
         Returns:
             Namespace like 'modelops-dask-dev'
         """
         return f"{StackNaming.PROJECT_PREFIX}-{component}-{env}"
-    
+
     @staticmethod
     def sanitize_username(username: str) -> str:
         """Sanitize username for use in resource names.
-        
+
         Removes non-alphanumeric characters, converts to lowercase,
         and limits length to Azure's requirements.
-        
+
         Args:
             username: Raw username to sanitize
-            
+
         Returns:
             Sanitized username suitable for resource names
         """
         # Remove non-alphanumeric, convert to lowercase
-        sanitized = re.sub(r'[^a-zA-Z0-9]', '', username).lower()
+        sanitized = re.sub(r"[^a-zA-Z0-9]", "", username).lower()
         # Limit to 20 characters for Azure resource name limits
         return sanitized[:20]
-    
+
     @staticmethod
-    def get_storage_account_name(env: str, username: Optional[str] = None) -> str:
+    def get_storage_account_name(env: str, username: str | None = None) -> str:
         """Generate globally unique storage account name.
-        
+
         Azure storage account names must be:
         - 3-24 characters
         - Lowercase letters and numbers only
         - Globally unique across all Azure
-        
+
         Pattern: 'mops{env}{username}{random}'
         Example: 'mopsdevvsb7x9k' or 'mopsprodacr8a2m'
-        
+
         Args:
             env: Environment (dev, staging, prod)
             username: Optional username for dev environments
-            
+
         Returns:
             Valid storage account name
         """
         # Start with project prefix
         base = StackNaming.PROJECT_PREFIX.replace("-", "")  # Remove hyphens
-        
+
         # Add environment (shortened to save chars)
         env_short = env[:3] if env != "prod" else "prd"
         base += env_short
-        
+
         # Add username for dev/staging if provided
         if username and env in ["dev", "staging"]:
             sanitized = StackNaming.sanitize_username(username)[:3]  # Only 3 chars
             base += sanitized
         else:
             base += "sto"  # Generic suffix for storage
-        
+
         # Add deterministic suffix based on username/env hash for idempotency
         # This ensures the same name is generated for the same user/env combination
         import hashlib
-        
+
         # Create deterministic hash from env + username
         hash_input = f"{env}-{username or 'default'}"
         hash_value = hashlib.md5(hash_input.encode()).hexdigest()
-        
+
         # Take first 4 chars of hash as suffix (alphanumeric)
-        suffix = ''.join(c for c in hash_value[:8] if c.isalnum())[:4]
-        
+        suffix = "".join(c for c in hash_value[:8] if c.isalnum())[:4]
+
         name = f"{base}{suffix}"
-        
+
         # Ensure within Azure limits (24 chars max)
         return name[:24].lower()
-    
+
     @staticmethod
     def get_infra_stack_ref(env: str) -> str:
         """Get infrastructure stack reference name.
-        
+
         Convenience method for getting the infrastructure stack name.
-        
+
         Args:
             env: Environment name (dev, staging, prod)
-            
+
         Returns:
             Infrastructure stack name like 'modelops-infra-dev'
         """
         return StackNaming.get_stack_name("infra", env)
-    
+
     @staticmethod
     def get_workspace_stack_ref(env: str) -> str:
         """Get workspace stack reference name.
-        
+
         Convenience method for getting the workspace stack name.
-        
+
         Args:
             env: Environment name (dev, staging, prod)
-            
+
         Returns:
             Workspace stack name like 'modelops-workspace-dev'
         """
         return StackNaming.get_stack_name("workspace", env)
-    
+
     @staticmethod
     def parse_stack_name(stack_name: str) -> dict:
         """Parse a stack name into its components.
-        
+
         Extracts component, environment, and optional run_id from a stack name.
-        
+
         Args:
             stack_name: Full stack name to parse
-            
+
         Returns:
             Dictionary with 'component', 'env', and optionally 'run_id'
         """
         parts = stack_name.split("-")
         if len(parts) < 3:
             raise ValueError(f"Invalid stack name format: {stack_name}")
-        
+
         # Assuming format: {prefix}-{component}-{env}[-{run_id}...]
-        result = {
-            "prefix": parts[0],
-            "component": parts[1],
-            "env": parts[2]
-        }
-        
+        result = {"prefix": parts[0], "component": parts[1], "env": parts[2]}
+
         # If there are more parts, they're the run_id
         if len(parts) > 3:
             result["run_id"] = "-".join(parts[3:])
-        
+
         return result
-    
-    
+
     @staticmethod
-    def ref(component: str, env: str, run_id: Optional[str] = None) -> str:
+    def ref(component: str, env: str, run_id: str | None = None) -> str:
         """Generate fully-qualified stack reference for Pulumi.
-        
+
         Creates the organization/project/stack format required for StackReference.
-        
+
         Args:
             component: Component name (infra, workspace, adaptive)
             env: Environment name (dev, staging, prod)
             run_id: Optional run ID for adaptive stacks
-            
+
         Returns:
             Fully qualified reference like 'organization/modelops-infra/modelops-infra-dev'
         """
@@ -288,12 +282,13 @@ class StackNaming:
         org = StackNaming._DEFAULT_ORG
         try:
             from ..config import ModelOpsConfig
+
             config = ModelOpsConfig.get_instance()
             org = config.pulumi.organization
         except:
             # Config not available, use default
             pass
-        
+
         project = StackNaming.get_project_name(component)
         stack = StackNaming.get_stack_name(component, env, run_id)
         return f"{org}/{project}/{stack}"

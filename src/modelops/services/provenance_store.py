@@ -6,25 +6,18 @@ storage (hash of inputs) rather than content-addressed storage.
 """
 
 import json
-import hashlib
 import logging
 import os
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-from dataclasses import asdict, dataclass
+from typing import Any
 
-from modelops_contracts import (
-    SimTask,
-    SimReturn,
-    TableArtifact,
-    ErrorInfo
-)
-from modelops_contracts.simulation import AggregationTask, AggregationReturn
+from modelops_contracts import ErrorInfo, SimReturn, SimTask, TableArtifact
+from modelops_contracts.simulation import AggregationReturn, AggregationTask
 
-from .provenance_schema import ProvenanceSchema, DEFAULT_SCHEMA
+from .provenance_schema import DEFAULT_SCHEMA, ProvenanceSchema
 from .storage_utils import atomic_write
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +25,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StoredResult:
     """Result stored with metadata."""
-    metadata: Dict[str, Any]  # SimTask/AggTask metadata
+
+    metadata: dict[str, Any]  # SimTask/AggTask metadata
     result: Any  # SimReturn or AggregationReturn
 
 
@@ -49,7 +43,7 @@ class ProvenanceStore:
         self,
         storage_dir: Path,
         schema: ProvenanceSchema = DEFAULT_SCHEMA,
-        azure_backend: Optional[Dict] = None
+        azure_backend: dict | None = None,
     ):
         """Initialize provenance store.
 
@@ -67,9 +61,10 @@ class ProvenanceStore:
         if azure_backend:
             try:
                 from .storage.azure import AzureBlobBackend
+
                 self._azure_backend = AzureBlobBackend(
                     container=azure_backend.get("container", "results"),
-                    connection_string=azure_backend.get("connection_string")
+                    connection_string=azure_backend.get("connection_string"),
                 )
                 logger.info("ProvenanceStore: Azure uploads enabled")
             except Exception as e:
@@ -80,17 +75,17 @@ class ProvenanceStore:
         backend_msg = " with Azure uploads" if self._azure_backend else " (local-only)"
         logger.info(f"Initialized ProvenanceStore at {storage_dir}{backend_msg}")
 
-    def _write_json_atomic(self, path: Path, data: Dict) -> None:
+    def _write_json_atomic(self, path: Path, data: dict) -> None:
         """Write JSON atomically to avoid corruption.
 
         Args:
             path: Target file path
             data: Dictionary to serialize as JSON
         """
-        content = json.dumps(data, indent=2).encode('utf-8')
+        content = json.dumps(data, indent=2).encode("utf-8")
         atomic_write(path, content)
 
-    def get_sim(self, task: SimTask) -> Optional[SimReturn]:
+    def get_sim(self, task: SimTask) -> SimReturn | None:
         """Retrieve simulation result if it exists.
 
         Args:
@@ -122,7 +117,7 @@ class ProvenanceStore:
                 logger.warning(f"Missing metadata.json in {result_dir}")
                 return None
 
-            with open(metadata_file, "r") as f:
+            with open(metadata_file) as f:
                 metadata = json.load(f)
 
             # Load result
@@ -131,7 +126,7 @@ class ProvenanceStore:
                 logger.warning(f"Missing result.json in {result_dir}")
                 return None
 
-            with open(result_file, "r") as f:
+            with open(result_file) as f:
                 result_data = json.load(f)
 
             # Reconstruct SimReturn with TableArtifacts
@@ -145,7 +140,7 @@ class ProvenanceStore:
                     outputs[name] = TableArtifact(
                         size=len(inline_data),
                         inline=inline_data,
-                        checksum=artifact_data["checksum"]
+                        checksum=artifact_data["checksum"],
                     )
                 else:
                     logger.warning(f"Missing artifact file: {artifact_file}")
@@ -157,7 +152,7 @@ class ProvenanceStore:
                 error = ErrorInfo(
                     error_type=result_data["error"]["error_type"],
                     message=result_data["error"]["message"],
-                    retryable=result_data["error"]["retryable"]
+                    retryable=result_data["error"]["retryable"],
                 )
 
                 # Load error details if present
@@ -169,7 +164,7 @@ class ProvenanceStore:
                         error_details = TableArtifact(
                             size=len(error_data),
                             inline=error_data,
-                            checksum=result_data["error_details"]["checksum"]
+                            checksum=result_data["error_details"]["checksum"],
                         )
 
             return SimReturn(
@@ -177,7 +172,7 @@ class ProvenanceStore:
                 outputs=outputs,
                 error=error,
                 error_details=error_details,
-                cached=True
+                cached=True,
             )
 
         except Exception as e:
@@ -208,24 +203,21 @@ class ProvenanceStore:
                 "seed": task.seed,
                 "outputs": task.outputs,
                 "param_id": task.params.param_id,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             self._write_json_atomic(result_dir / "metadata.json", metadata)
 
             # No longer storing manifest - removed from SimTask
 
             # Store result metadata
-            result_data = {
-                "task_id": result.task_id,
-                "outputs": {}
-            }
+            result_data = {"task_id": result.task_id, "outputs": {}}
 
             # Store error info if present
             if result.error:
                 result_data["error"] = {
                     "error_type": result.error.error_type,
                     "message": result.error.message,
-                    "retryable": result.error.retryable
+                    "retryable": result.error.retryable,
                 }
 
                 # Store error details if present
@@ -235,7 +227,7 @@ class ProvenanceStore:
                         atomic_write(error_file, result.error_details.inline)
                     result_data["error_details"] = {
                         "size": result.error_details.size,
-                        "checksum": result.error_details.checksum
+                        "checksum": result.error_details.checksum,
                     }
 
             # Store artifacts as separate blob files
@@ -248,7 +240,7 @@ class ProvenanceStore:
                 # Store artifact metadata
                 result_data["outputs"][name] = {
                     "size": artifact.size,
-                    "checksum": artifact.checksum
+                    "checksum": artifact.checksum,
                 }
 
             self._write_json_atomic(result_dir / "result.json", result_data)
@@ -265,7 +257,7 @@ class ProvenanceStore:
             logger.error(f"Failed to store simulation result: {e}")
             raise
 
-    def get_agg(self, task: AggregationTask) -> Optional[AggregationReturn]:
+    def get_agg(self, task: AggregationTask) -> AggregationReturn | None:
         """Retrieve aggregation result if it exists.
 
         Args:
@@ -287,7 +279,7 @@ class ProvenanceStore:
             if not result_file.exists():
                 return None
 
-            with open(result_file, "r") as f:
+            with open(result_file) as f:
                 result_data = json.load(f)
 
             return AggregationReturn(
@@ -295,7 +287,7 @@ class ProvenanceStore:
                 loss=result_data["loss"],
                 diagnostics=result_data.get("diagnostics", {}),
                 outputs={},  # Could reconstruct if needed
-                n_replicates=result_data["n_replicates"]
+                n_replicates=result_data["n_replicates"],
             )
 
         except Exception as e:
@@ -324,7 +316,7 @@ class ProvenanceStore:
                 "target_entrypoint": str(task.target_entrypoint),
                 "n_sim_returns": len(task.sim_returns),
                 "param_id": self._extract_param_id_from_task(task),
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat(),
             }
             self._write_json_atomic(result_dir / "metadata.json", metadata)
 
@@ -336,12 +328,8 @@ class ProvenanceStore:
                 "n_replicates": result.n_replicates,
                 "outputs": {},
                 "inputs": [  # Track what we aggregated
-                    {
-                        "type": "sim",
-                        "task_id": sr.task_id
-                    }
-                    for sr in task.sim_returns
-                ]
+                    {"type": "sim", "task_id": sr.task_id} for sr in task.sim_returns
+                ],
             }
 
             # Store any aggregated outputs as artifacts (future enhancement)
@@ -353,7 +341,7 @@ class ProvenanceStore:
                     result_data["outputs"][name] = {
                         "size": artifact.size,
                         "checksum": artifact.checksum,
-                        "content_type": "application/vnd.apache.arrow.file"
+                        "content_type": "application/vnd.apache.arrow.file",
                     }
 
             self._write_json_atomic(result_dir / "result.json", result_data)
@@ -365,11 +353,7 @@ class ProvenanceStore:
             logger.error(f"Failed to store aggregation result: {e}")
             raise
 
-    def list_results(
-        self,
-        result_type: str = "sim",
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    def list_results(self, result_type: str = "sim", limit: int = 100) -> list[dict[str, Any]]:
         """List stored results with metadata.
 
         Args:
@@ -380,7 +364,9 @@ class ProvenanceStore:
             List of result metadata dicts
         """
         results = []
-        search_dir = self.storage_dir / self.schema.name / f"v{self.schema.version}" / f"{result_type}s"
+        search_dir = (
+            self.storage_dir / self.schema.name / f"v{self.schema.version}" / f"{result_type}s"
+        )
 
         if not search_dir.exists():
             return results
@@ -391,7 +377,7 @@ class ProvenanceStore:
                 break
 
             try:
-                with open(result_dir, "r") as f:
+                with open(result_dir) as f:
                     metadata = json.load(f)
                     metadata["path"] = str(result_dir.parent)
                     results.append(metadata)
@@ -400,7 +386,7 @@ class ProvenanceStore:
 
         return results
 
-    def _sim_path_context(self, task: SimTask) -> Dict[str, Any]:
+    def _sim_path_context(self, task: SimTask) -> dict[str, Any]:
         """Generate path context for simulation task."""
         # Extract the actual digest from bundle_ref (e.g., "sha256:abc123..." -> "abc123...")
         if ":" in task.bundle_ref:
@@ -411,7 +397,7 @@ class ProvenanceStore:
         context = {
             "bundle_digest": bundle_digest,  # Already a digest, don't hash again!
             "param_id": task.params.param_id,
-            "seed": task.seed
+            "seed": task.seed,
         }
 
         # For token invalidation, would need model_digest from bundle manifest
@@ -421,7 +407,7 @@ class ProvenanceStore:
 
         return context
 
-    def _extract_param_id_from_task(self, task: AggregationTask) -> Optional[str]:
+    def _extract_param_id_from_task(self, task: AggregationTask) -> str | None:
         """Extract param_id from aggregation task's sim_returns.
 
         Since all sim_returns in a replicate set share the same param_id,
@@ -444,7 +430,7 @@ class ProvenanceStore:
             return first_task_id[:16]
         return None
 
-    def _agg_path_context(self, task: AggregationTask) -> Dict[str, Any]:
+    def _agg_path_context(self, task: AggregationTask) -> dict[str, Any]:
         """Generate path context for aggregation task."""
         # Extract the actual digest from bundle_ref (e.g., "sha256:abc123..." -> "abc123...")
         if ":" in task.bundle_ref:
@@ -455,7 +441,7 @@ class ProvenanceStore:
         context = {
             "bundle_digest": bundle_digest,  # Already a digest, don't hash again!
             "target": str(task.target_entrypoint).replace("/", "_"),
-            "aggregation_id": task.aggregation_id()
+            "aggregation_id": task.aggregation_id(),
         }
 
         # For token invalidation, would need model_digest from bundle manifest
@@ -465,7 +451,7 @@ class ProvenanceStore:
 
         return context
 
-    def clear_schema(self, schema_name: Optional[str] = None):
+    def clear_schema(self, schema_name: str | None = None):
         """Clear all data for a schema (for testing/debugging).
 
         Args:
@@ -476,6 +462,7 @@ class ProvenanceStore:
 
         if schema_dir.exists():
             import shutil
+
             shutil.rmtree(schema_dir)
             logger.info(f"Cleared schema '{target_schema}' data")
         else:
@@ -493,12 +480,12 @@ class ProvenanceStore:
 
         try:
             # Upload all files in the directory recursively
-            for file_path in local_dir.rglob('*'):
+            for file_path in local_dir.rglob("*"):
                 if file_path.is_file():
                     relative_path = file_path.relative_to(local_dir)
                     blob_path = f"{remote_prefix}/{relative_path}"
 
-                    with open(file_path, 'rb') as f:
+                    with open(file_path, "rb") as f:
                         data = f.read()
 
                     # Note: The existing AzureBlobBackend doesn't have async, uses sync save
@@ -535,14 +522,14 @@ class ProvenanceStore:
 
             for blob_path in blobs:
                 # Extract relative path from blob
-                relative_path = blob_path[len(remote_prefix):].lstrip('/')
+                relative_path = blob_path[len(remote_prefix) :].lstrip("/")
                 local_path = local_dir / relative_path
 
                 # Download blob
                 data = self._azure_backend.load(blob_path)
                 if data:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(local_path, 'wb') as f:
+                    with open(local_path, "wb") as f:
                         f.write(data)
 
             logger.debug(f"Downloaded {len(blobs)} files from {remote_prefix}")
@@ -557,7 +544,7 @@ class ProvenanceStore:
         # It uses synchronous operations so no cleanup needed
         pass
 
-    def try_read_json(self, path: str) -> Optional[Dict[str, Any]]:
+    def try_read_json(self, path: str) -> dict[str, Any] | None:
         """Try to read JSON file, returning None if missing or invalid.
 
         Args:
@@ -566,26 +553,26 @@ class ProvenanceStore:
         Returns:
             Parsed JSON as dictionary, or None if missing/invalid
         """
-        full_path = self.storage_dir / path.lstrip('/')
+        full_path = self.storage_dir / path.lstrip("/")
 
         if not full_path.exists():
             return None
 
         try:
-            with open(full_path, 'r') as f:
+            with open(full_path) as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             logger.debug(f"Failed to read JSON from {path}: {e}")
             return None
 
-    def write_json(self, path: str, data: Dict[str, Any]) -> None:
+    def write_json(self, path: str, data: dict[str, Any]) -> None:
         """Write JSON file atomically.
 
         Args:
             path: Path to JSON file (relative to storage_dir)
             data: Dictionary to serialize
         """
-        full_path = self.storage_dir / path.lstrip('/')
+        full_path = self.storage_dir / path.lstrip("/")
         full_path.parent.mkdir(parents=True, exist_ok=True)
         self._write_json_atomic(full_path, data)
 
@@ -596,8 +583,8 @@ class ProvenanceStore:
             src: Source path (relative to storage_dir)
             dst: Destination path (relative to storage_dir)
         """
-        src_path = self.storage_dir / src.lstrip('/')
-        dst_path = self.storage_dir / dst.lstrip('/')
+        src_path = self.storage_dir / src.lstrip("/")
+        dst_path = self.storage_dir / dst.lstrip("/")
 
         # Ensure destination parent exists
         dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -605,6 +592,7 @@ class ProvenanceStore:
         # Remove destination if it exists (for idempotent overwrites)
         if dst_path.exists():
             import shutil
+
             if dst_path.is_dir():
                 shutil.rmtree(dst_path)
             else:
@@ -615,7 +603,7 @@ class ProvenanceStore:
         logger.debug(f"Atomic rename: {src} -> {dst}")
 
     @classmethod
-    def from_env(cls, env: Optional[str] = None) -> "ProvenanceStore":
+    def from_env(cls, env: str | None = None) -> "ProvenanceStore":
         """Create ProvenanceStore from environment configuration.
 
         Args:
@@ -633,7 +621,7 @@ class ProvenanceStore:
         if conn_string:
             azure_backend = {
                 "connection_string": conn_string,
-                "container": os.environ.get("AZURE_STORAGE_CONTAINER", "results")
+                "container": os.environ.get("AZURE_STORAGE_CONTAINER", "results"),
             }
 
         return cls(Path(storage_dir), azure_backend=azure_backend)

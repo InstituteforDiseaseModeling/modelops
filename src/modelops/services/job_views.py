@@ -9,20 +9,21 @@ files per target.
 import json
 import logging
 import re
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
-from datetime import datetime, timezone
+from typing import Any
 
 from modelops_contracts import AggregationReturn, SimJob, TargetSpec
 
 logger = logging.getLogger(__name__)
 
+
 # TODO/FIXME: make output_dir use ProvenanceSchema
 def write_job_view(
     job: SimJob,
-    results: Union[List[AggregationReturn], Dict[str, List[AggregationReturn]]],
+    results: list[AggregationReturn] | dict[str, list[AggregationReturn]],
     output_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
-    prov_store: Optional[Any] = None,
+    prov_store: Any | None = None,
 ) -> Path:
     """Write job results to Parquet for post-job analysis.
 
@@ -75,7 +76,9 @@ def write_job_view(
 
         for i, result in enumerate(target_results):
             if not isinstance(result, AggregationReturn):
-                logger.warning(f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}")
+                logger.warning(
+                    f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}"
+                )
                 continue
 
             # Get param_id from corresponding task group
@@ -93,7 +96,7 @@ def write_job_view(
                 "entrypoint": first_task.entrypoint,
                 "loss": float(result.loss) if result.loss is not None else None,
                 "n_replicates": result.n_replicates,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
             }
 
             # Add parameters as columns
@@ -144,7 +147,7 @@ def write_job_view(
     manifest = {
         "job_id": job.job_id,
         "bundle_ref": job.bundle_ref,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "targets": target_summaries,
         "dataset_uri": str(job_dir),
         "schema_version": "1.0.0",
@@ -152,7 +155,7 @@ def write_job_view(
     }
 
     # Prepare Azure blob URLs if ProvenanceStore is available
-    if prov_store and hasattr(prov_store, '_azure_backend') and prov_store._azure_backend:
+    if prov_store and hasattr(prov_store, "_azure_backend") and prov_store._azure_backend:
         try:
             # Extract storage account name from connection string
             account_name = _extract_account_name(prov_store._azure_backend.connection_string or "")
@@ -176,7 +179,7 @@ def write_job_view(
         json.dump(manifest, f, indent=2)
 
     # Upload to Azure if ProvenanceStore is available
-    if prov_store and hasattr(prov_store, '_azure_backend') and prov_store._azure_backend:
+    if prov_store and hasattr(prov_store, "_azure_backend") and prov_store._azure_backend:
         try:
             logger.info("Uploading job views to Azure...")
 
@@ -195,12 +198,16 @@ def write_job_view(
     logger.info(f"Job view written to {job_dir}")
     logger.info(f"  Total targets: {len(target_summaries)}")
     for target_name, summary in target_summaries.items():
-        logger.info(f"  Target '{target_name}': {summary['rows']} rows, mean loss: {summary['mean_loss']:.2f}" if summary['mean_loss'] else f"  Target '{target_name}': {summary['rows']} rows")
+        logger.info(
+            f"  Target '{target_name}': {summary['rows']} rows, mean loss: {summary['mean_loss']:.2f}"
+            if summary["mean_loss"]
+            else f"  Target '{target_name}': {summary['rows']} rows"
+        )
 
     return job_dir
 
 
-def _serialize_target_spec(spec: Optional[TargetSpec]) -> Optional[Dict[str, Any]]:
+def _serialize_target_spec(spec: TargetSpec | None) -> dict[str, Any] | None:
     """Serialize TargetSpec to dict for JSON storage."""
     if not spec:
         return None
@@ -213,20 +220,23 @@ def _serialize_target_spec(spec: Optional[TargetSpec]) -> Optional[Dict[str, Any
     }
 
 
-def _extract_account_name(connection_string: str) -> Optional[str]:
+def _extract_account_name(connection_string: str) -> str | None:
     """Extract storage account name from Azure connection string.
 
     Connection string format:
     DefaultEndpointsProtocol=https;AccountName=XXX;AccountKey=YYY;EndpointSuffix=core.windows.net
     """
-    match = re.search(r'AccountName=([^;]+)', connection_string)
+    match = re.search(r"AccountName=([^;]+)", connection_string)
     if match:
         return match.group(1)
     return None
 
 
-def read_job_view(job_id: str, target_name: str = "default",
-                  base_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs")) -> Optional[Any]:
+def read_job_view(
+    job_id: str,
+    target_name: str = "default",
+    base_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
+) -> Any | None:
     """Read a job view Parquet dataset for a specific target.
 
     Args:

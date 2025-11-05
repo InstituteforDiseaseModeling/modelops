@@ -23,15 +23,19 @@ completed - a consistent pattern indicating thread starvation.
 """
 
 import logging
-from typing import List, Optional
 
-from dask.distributed import Client, Future as DaskFuture, get_worker
-from modelops_contracts.ports import SimulationService, Future
+from dask.distributed import Client, get_worker
+from dask.distributed import Future as DaskFuture
 from modelops_contracts import SimReturn, SimTask
-from modelops_contracts.simulation import ReplicateSet, AggregationTask, AggregationReturn
+from modelops_contracts.ports import Future, SimulationService
+from modelops_contracts.simulation import (
+    AggregationReturn,
+    AggregationTask,
+    ReplicateSet,
+)
 
-from ..worker.plugin import ModelOpsWorkerPlugin
 from ..worker.config import RuntimeConfig
+from ..worker.plugin import ModelOpsWorkerPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -69,42 +73,42 @@ class TaskKeys:
 
 def _worker_run_task(task: SimTask) -> SimReturn:
     """Execute task on worker using plugin-initialized runtime.
-    
+
     This function runs on the Dask worker and uses the ModelOps runtime
     that was initialized by the WorkerPlugin.
-    
+
     Args:
         task: Simulation task to execute
-        
+
     Returns:
         Simulation result
     """
     worker = get_worker()
-    
-    if not hasattr(worker, 'modelops_runtime'):
+
+    if not hasattr(worker, "modelops_runtime"):
         raise RuntimeError(
             "ModelOps runtime not initialized. "
             "Ensure ModelOpsWorkerPlugin is registered with the client."
         )
-    
+
     return worker.modelops_runtime.execute(task)
 
 
 def _worker_run_aggregation(task: AggregationTask) -> AggregationReturn:
     """Execute aggregation on worker using plugin-initialized runtime.
-    
+
     This runs ON THE WORKER, using the ModelOps runtime that was
     initialized by the WorkerPlugin. It enables worker-side aggregation
     to avoid transferring all replicate data to the client.
     """
     worker = get_worker()
-    
-    if not hasattr(worker, 'modelops_exec_env'):
+
+    if not hasattr(worker, "modelops_exec_env"):
         raise RuntimeError(
             "ModelOps execution environment not initialized. "
             "Ensure ModelOpsWorkerPlugin is registered."
         )
-    
+
     # Use the IsolatedWarmExecEnv's run_aggregation method
     # TODO: why go around the modelops_runtime?
     return worker.modelops_exec_env.run_aggregation(task)
@@ -135,7 +139,7 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
     agg_task = AggregationTask(
         bundle_ref=bundle_ref,
         target_entrypoint=target_ep,
-        sim_returns=list(sim_returns)
+        sim_returns=list(sim_returns),
     )
 
     return _worker_run_aggregation(agg_task)
@@ -143,35 +147,33 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
 
 class DaskFutureAdapter:
     """Adapt Dask Future to our Future protocol."""
-    
+
     def __init__(self, dask_future: DaskFuture):
         self.wrapped = dask_future
-    
-    def result(self, timeout: Optional[float] = None) -> SimReturn:
+
+    def result(self, timeout: float | None = None) -> SimReturn:
         return self.wrapped.result(timeout=timeout)
-    
+
     def done(self) -> bool:
         return self.wrapped.done()
-    
+
     def cancel(self) -> bool:
         return self.wrapped.cancel()
-    
-    def exception(self) -> Optional[Exception]:
+
+    def exception(self) -> Exception | None:
         return self.wrapped.exception()
 
 
 class DaskSimulationService(SimulationService):
     """Dask-based implementation of SimulationService.
-    
+
     This service submits simulation tasks to a Dask cluster and
     manages the WorkerPlugin lifecycle.
     """
-    
-    def __init__(self, 
-                 client: Client,
-                 config: Optional[RuntimeConfig] = None):
+
+    def __init__(self, client: Client, config: RuntimeConfig | None = None):
         """Initialize the service.
-        
+
         Args:
             client: Dask client connected to a cluster
             config: Runtime configuration (uses env if not provided)
@@ -179,34 +181,34 @@ class DaskSimulationService(SimulationService):
         self.client = client
         self.config = config or RuntimeConfig.from_env()
         self._plugin_installed = False
-        
+
         # Install the worker plugin
         self._install_plugin()
-    
+
     def _install_plugin(self):
         """Install the ModelOps worker plugin on all workers."""
         if self._plugin_installed:
             return
-        
+
         logger.info("Installing ModelOps worker plugin on all workers")
-        
+
         # Create the plugin
         plugin = ModelOpsWorkerPlugin(self.config)
-        
+
         # Register it with the cluster
         # Use the current API - register_plugin() handles all plugin types
         # register_worker_plugin() is deprecated since 2023.9.2
         self.client.register_plugin(plugin, name="modelops-runtime-v1")
-        
+
         self._plugin_installed = True
         logger.info("Worker plugin installed successfully")
-    
+
     def submit(self, task: SimTask) -> Future[SimReturn]:
         """Submit a simulation task to the cluster.
-        
+
         Args:
             task: Simulation task to execute
-            
+
         Returns:
             Future for the result
         """
@@ -215,32 +217,32 @@ class DaskSimulationService(SimulationService):
             _worker_run_task,
             task,
             pure=False,  # Tasks have unique IDs
-            key=TaskKeys.single_sim_key(task.seed, task.bundle_ref)  # For debugging
+            key=TaskKeys.single_sim_key(task.seed, task.bundle_ref),  # For debugging
         )
-        
+
         return DaskFutureAdapter(dask_future)
-    
-    def gather(self, futures: List[Future[SimReturn]]) -> List[SimReturn]:
+
+    def gather(self, futures: list[Future[SimReturn]]) -> list[SimReturn]:
         """Gather results from submitted tasks.
-        
+
         Args:
             futures: List of futures from submit()
-            
+
         Returns:
             List of simulation results in the same order as futures
         """
         # Extract Dask futures
         dask_futures = [f.wrapped for f in futures]
-        
+
         # Gather all at once (preserves order)
         return self.client.gather(dask_futures)
-    
-    def submit_batch(self, tasks: List[SimTask]) -> List[Future[SimReturn]]:
+
+    def submit_batch(self, tasks: list[SimTask]) -> list[Future[SimReturn]]:
         """Submit multiple tasks efficiently.
-        
+
         Args:
             tasks: List of simulation tasks
-            
+
         Returns:
             List of futures, one per task
         """
@@ -248,45 +250,43 @@ class DaskSimulationService(SimulationService):
             _worker_run_task,
             tasks,
             pure=False,
-            key=[TaskKeys.single_sim_key(t.seed, t.bundle_ref) for t in tasks]
+            key=[TaskKeys.single_sim_key(t.seed, t.bundle_ref) for t in tasks],
         )
-        
+
         return [DaskFutureAdapter(f) for f in dask_futures]
-    
+
     def submit_replicate_set(
-        self, 
-        replicate_set: ReplicateSet,
-        target_entrypoint: Optional[str] = None
+        self, replicate_set: ReplicateSet, target_entrypoint: str | None = None
     ) -> Future[AggregationReturn]:
         """Submit a replicate set with optional worker-side aggregation.
-        
+
         This is the KEY method for grouped execution:
         1. Submits all replicates as individual tasks
         2. If target_entrypoint provided, aggregates ON WORKER
         3. Returns single Future with aggregated result
-        
+
         Args:
             replicate_set: Set of replicates to run
             target_entrypoint: Optional target for aggregation
-            
+
         Returns:
             Future containing AggregationReturn (or List[SimReturn] if no target)
         """
         # Submit individual replicates
         tasks = replicate_set.tasks()
-        
+
         # Generate proper Dask keys for dashboard grouping
         param_id = replicate_set.base_task.params.param_id
         keys = [TaskKeys.sim_key(param_id, i) for i in range(replicate_set.n_replicates)]
-        
+
         # Use map for efficient batch submission
         replicate_futures = self.client.map(
             _worker_run_task,
             tasks,
             pure=False,
-            key=keys  # Explicit keys for tracking
+            key=keys,  # Explicit keys for tracking
         )
-        
+
         # TODO: we should support iteration over many targets?
         # or should the Targets abstraction encapsulate that?
         if target_entrypoint:
@@ -299,18 +299,16 @@ class DaskSimulationService(SimulationService):
 
             # Check if any worker has aggregation resources
             # This prevents deadlock in tests/local clusters without resources
-            submit_kwargs = {
-                "pure": False
-            }
+            submit_kwargs = {"pure": False}
             try:
                 # Check scheduler info for worker resources
                 info = self.client.scheduler_info()
                 has_aggregation_resource = any(
-                    'aggregation' in worker.get('resources', {})
-                    for worker in info.get('workers', {}).values()
+                    "aggregation" in worker.get("resources", {})
+                    for worker in info.get("workers", {}).values()
                 )
                 if has_aggregation_resource:
-                    submit_kwargs['resources'] = {'aggregation': 1}
+                    submit_kwargs["resources"] = {"aggregation": 1}
                     logger.debug("Using aggregation resource constraint")
             except Exception:
                 # If we can't check, don't apply constraint
@@ -322,44 +320,36 @@ class DaskSimulationService(SimulationService):
                 target_ep=target_entrypoint,
                 bundle_ref=replicate_set.base_task.bundle_ref,
                 key=TaskKeys.agg_key(param_id),
-                **submit_kwargs
+                **submit_kwargs,
             )
 
             return DaskFutureAdapter(agg_future)
-        
+
         else:
             # No aggregation, return list of SimReturns
             # Package as a single future for consistent interface
             def gather_results(futures):
                 from dask.distributed import get_client
+
                 client = get_client()
                 return client.gather(futures)
-            
-            results_future = self.client.submit(
-                gather_results,
-                replicate_futures,
-                pure=False
-            )
+
+            results_future = self.client.submit(gather_results, replicate_futures, pure=False)
             return DaskFutureAdapter(results_future)
-    
+
     def submit_batch_with_aggregation(
-        self,
-        replicate_sets: List[ReplicateSet],
-        target_entrypoint: str
-    ) -> List[Future[AggregationReturn]]:
+        self, replicate_sets: list[ReplicateSet], target_entrypoint: str
+    ) -> list[Future[AggregationReturn]]:
         """Submit multiple replicate sets with aggregation.
-        
+
         This enables efficient batch submission of multiple parameter sets,
         each with their own replicates and aggregation.
-        
+
         Args:
             replicate_sets: List of replicate sets
             target_entrypoint: Target for aggregation
-            
+
         Returns:
             List of futures, one per replicate set
         """
-        return [
-            self.submit_replicate_set(rs, target_entrypoint)
-            for rs in replicate_sets
-        ]
+        return [self.submit_replicate_set(rs, target_entrypoint) for rs in replicate_sets]

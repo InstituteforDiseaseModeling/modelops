@@ -1,6 +1,6 @@
 """Simulation service implementations."""
 
-from .simulation import LocalSimulationService
 from .dask_simulation import DaskSimulationService
+from .simulation import LocalSimulationService
 
 __all__ = ["LocalSimulationService", "DaskSimulationService"]

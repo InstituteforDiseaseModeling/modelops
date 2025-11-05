@@ -1,16 +1,15 @@
 """Service for Dask workspace management."""
 
-from typing import Dict, Any, Optional, List
-import subprocess
 import os
-import json
+import subprocess
+from typing import Any
 
-from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
-from .utils import stack_exists, get_safe_outputs
 from ..components import WorkspaceConfig
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
 from ..core.state_manager import PulumiStateManager
+from .base import BaseService, ComponentState, ComponentStatus, OutputCapture
+from .utils import stack_exists
 
 
 class WorkspaceService(BaseService):
@@ -22,12 +21,12 @@ class WorkspaceService(BaseService):
 
     def provision(
         self,
-        config: Optional[WorkspaceConfig] = None,
-        infra_stack_ref: Optional[str] = None,
-        registry_stack_ref: Optional[str] = None,
-        storage_stack_ref: Optional[str] = None,
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+        config: WorkspaceConfig | None = None,
+        infra_stack_ref: str | None = None,
+        registry_stack_ref: str | None = None,
+        storage_stack_ref: str | None = None,
+        verbose: bool = False,
+    ) -> dict[str, Any]:
         """
         Provision Dask workspace.
 
@@ -44,10 +43,12 @@ class WorkspaceService(BaseService):
         Raises:
             Exception: If provisioning fails
         """
+
         def pulumi_program():
             """Create DaskWorkspace in Stack 2 context."""
-            from ..infra.components.workspace import DaskWorkspace
             import pulumi
+
+            from ..infra.components.workspace import DaskWorkspace
 
             # Convert config to dict if provided
             if config is None:
@@ -57,7 +58,7 @@ class WorkspaceService(BaseService):
                     "or provide explicit config with 'mops workspace up --config workspace.yaml'"
                 )
 
-            if hasattr(config, 'to_pulumi_config'):
+            if hasattr(config, "to_pulumi_config"):
                 workspace_config = config.to_pulumi_config()
             elif isinstance(config, dict):
                 workspace_config = config
@@ -77,9 +78,7 @@ class WorkspaceService(BaseService):
             # TODO: Fix stack_exists() returning False for existing stacks
             # For now, always try to reference if in dev/staging
             if registry_stack_ref is None:
-                if self.env in ["dev", "staging"]:
-                    registry_ref = StackNaming.ref("registry", self.env)
-                elif stack_exists("registry", self.env):
+                if self.env in ["dev", "staging"] or stack_exists("registry", self.env):
                     registry_ref = StackNaming.ref("registry", self.env)
                 else:
                     registry_ref = None
@@ -90,9 +89,7 @@ class WorkspaceService(BaseService):
             # TODO: Fix stack_exists() returning False for existing stacks
             # For now, always try to reference if in dev/staging
             if storage_stack_ref is None:
-                if self.env in ["dev", "staging"]:
-                    storage_ref = StackNaming.ref("storage", self.env)
-                elif stack_exists("storage", self.env):
+                if self.env in ["dev", "staging"] or stack_exists("storage", self.env):
                     storage_ref = StackNaming.ref("storage", self.env)
                 else:
                     storage_ref = None
@@ -105,7 +102,7 @@ class WorkspaceService(BaseService):
                 infra_ref,
                 workspace_config,
                 storage_stack_ref=storage_ref,
-                registry_stack_ref=registry_ref
+                registry_stack_ref=registry_ref,
             )
 
             # Export outputs at stack level for visibility
@@ -130,9 +127,7 @@ class WorkspaceService(BaseService):
         # - State reconciliation with Kubernetes
         # - No environment YAML updates (workspace doesn't save to YAML)
         result = state_manager.execute_with_recovery(
-            "up",
-            program=pulumi_program,
-            on_output=capture
+            "up", program=pulumi_program, on_output=capture
         )
 
         return result.outputs if result else {}
@@ -148,6 +143,7 @@ class WorkspaceService(BaseService):
             Exception: If destruction fails
         """
         import os
+
         # Allow deletion of K8s resources even if cluster is unreachable
         os.environ["PULUMI_K8S_DELETE_UNREACHABLE"] = "true"
 
@@ -158,10 +154,7 @@ class WorkspaceService(BaseService):
         # State manager handles:
         # - Stale lock detection and clearing
         # - No environment YAML cleanup (workspace doesn't save to YAML)
-        state_manager.execute_with_recovery(
-            "destroy",
-            on_output=capture
-        )
+        state_manager.execute_with_recovery("destroy", on_output=capture)
 
     def status(self) -> ComponentStatus:
         """
@@ -176,7 +169,9 @@ class WorkspaceService(BaseService):
             if outputs:
                 # Check if we can reach the scheduler
                 scheduler_address = get_output_value(outputs, "scheduler_address")
-                health = self._check_scheduler_health(scheduler_address) if scheduler_address else False
+                health = (
+                    self._check_scheduler_health(scheduler_address) if scheduler_address else False
+                )
 
                 # Get autoscaling info
                 autoscaling_enabled = get_output_value(outputs, "autoscaling_enabled", False)
@@ -195,23 +190,19 @@ class WorkspaceService(BaseService):
                         "namespace": get_output_value(outputs, "namespace"),
                         "workers": worker_info,
                         "autoscaling": autoscaling_enabled,
-                        "health": health
-                    }
+                        "health": health,
+                    },
                 )
             else:
                 return ComponentStatus(
-                    deployed=False,
-                    phase=ComponentState.NOT_DEPLOYED,
-                    details={}
+                    deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
                 )
         except Exception as e:
             return ComponentStatus(
-                deployed=False,
-                phase=ComponentState.UNKNOWN,
-                details={"error": str(e)}
+                deployed=False, phase=ComponentState.UNKNOWN, details={"error": str(e)}
             )
 
-    def get_outputs(self) -> Dict[str, Any]:
+    def get_outputs(self) -> dict[str, Any]:
         """
         Get all outputs from workspace stack.
 
@@ -221,7 +212,7 @@ class WorkspaceService(BaseService):
         outputs = automation.outputs("workspace", self.env, refresh=False)
         return outputs or {}
 
-    def list_workspaces(self) -> List[Dict[str, str]]:
+    def list_workspaces(self) -> list[dict[str, str]]:
         """
         List all workspaces across environments.
 
@@ -229,7 +220,8 @@ class WorkspaceService(BaseService):
             List of workspace info dicts
         """
         import pulumi.automation as auto
-        from ..core.paths import ensure_work_dir, BACKEND_DIR
+
+        from ..core.paths import BACKEND_DIR, ensure_work_dir
 
         project_name = StackNaming.get_project_name("workspace")
         work_dir = ensure_work_dir("workspace")
@@ -240,9 +232,8 @@ class WorkspaceService(BaseService):
         try:
             # Create a LocalWorkspace bound to the workspace project + backend
             from ..core.automation import workspace_options
-            ws = auto.LocalWorkspace(
-                **workspace_options(project_name, work_dir).__dict__
-            )
+
+            ws = auto.LocalWorkspace(**workspace_options(project_name, work_dir).__dict__)
 
             # List stacks registered for this project
             stacks = ws.list_stacks()
@@ -261,26 +252,23 @@ class WorkspaceService(BaseService):
                 try:
                     # Fast state read without refresh
                     from ..core.automation import noop_program as _noop
+
                     st = auto.select_stack(
                         stack_name=stack_name,
                         project_name=project_name,
                         program=_noop,
-                        opts=workspace_options(project_name, work_dir)
+                        opts=workspace_options(project_name, work_dir),
                     )
 
                     state = st.export_stack()
-                    if hasattr(state, 'deployment') and isinstance(state.deployment, dict):
+                    if hasattr(state, "deployment") and isinstance(state.deployment, dict):
                         resources = state.deployment.get("resources", [])
                         has_real = any(r.get("type") != "pulumi:pulumi:Stack" for r in resources)
                         status = "Deployed" if has_real else "Not deployed"
                 except:
                     pass
 
-                workspaces.append({
-                    "env": stack_env,
-                    "stack": stack_name,
-                    "status": status
-                })
+                workspaces.append({"env": stack_env, "stack": stack_name, "status": status})
 
             return workspaces
 
@@ -290,9 +278,9 @@ class WorkspaceService(BaseService):
     def port_forward(
         self,
         target: str = "dashboard",
-        local_port: Optional[int] = None,
-        remote_port: Optional[int] = None,
-        service_name: Optional[str] = None
+        local_port: int | None = None,
+        remote_port: int | None = None,
+        service_name: str | None = None,
     ) -> None:
         """
         Port forward to Dask services.
@@ -311,19 +299,19 @@ class WorkspaceService(BaseService):
         if not outputs:
             raise Exception("Workspace not deployed")
 
-        namespace = get_output_value(outputs, 'namespace')
+        namespace = get_output_value(outputs, "namespace")
         if not namespace:
             raise Exception("Could not determine workspace namespace")
 
         # Determine service and port
         if not service_name:
-            service_name = get_output_value(outputs, 'scheduler_service_name', 'dask-scheduler')
+            service_name = get_output_value(outputs, "scheduler_service_name", "dask-scheduler")
 
         if not remote_port:
             if target == "dashboard":
-                remote_port = get_output_value(outputs, 'dashboard_port', 8787)
+                remote_port = get_output_value(outputs, "dashboard_port", 8787)
             elif target == "scheduler":
-                remote_port = get_output_value(outputs, 'scheduler_port', 8786)
+                remote_port = get_output_value(outputs, "scheduler_port", 8786)
             else:
                 raise ValueError(f"Unknown target '{target}'")
 
@@ -335,24 +323,31 @@ class WorkspaceService(BaseService):
         if not infra_outputs:
             raise Exception("Infrastructure not deployed")
 
-        kubeconfig = get_output_value(infra_outputs, 'kubeconfig')
+        kubeconfig = get_output_value(infra_outputs, "kubeconfig")
         if not kubeconfig:
             raise Exception("Could not get kubeconfig")
 
         # Start port forward using kubectl
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(kubeconfig)
             temp_kubeconfig = f.name
 
         try:
             # Find the pod
             cmd = [
-                "kubectl", "get", "pods",
-                "-n", namespace,
-                "-l", f"app={service_name.replace('-scheduler', '-scheduler')}",
-                "-o", "jsonpath={.items[0].metadata.name}",
-                "--kubeconfig", temp_kubeconfig
+                "kubectl",
+                "get",
+                "pods",
+                "-n",
+                namespace,
+                "-l",
+                f"app={service_name.replace('-scheduler', '-scheduler')}",
+                "-o",
+                "jsonpath={.items[0].metadata.name}",
+                "--kubeconfig",
+                temp_kubeconfig,
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -364,11 +359,14 @@ class WorkspaceService(BaseService):
 
             # Start port forward
             cmd = [
-                "kubectl", "port-forward",
+                "kubectl",
+                "port-forward",
                 f"pod/{pod_name}",
                 f"{local_port}:{remote_port}",
-                "-n", namespace,
-                "--kubeconfig", temp_kubeconfig
+                "-n",
+                namespace,
+                "--kubeconfig",
+                temp_kubeconfig,
             ]
 
             print(f"Starting port forward to {target}...")
@@ -397,11 +395,11 @@ class WorkspaceService(BaseService):
             return False
 
         if not namespace:
-            namespace = get_output_value(outputs, 'namespace')
+            namespace = get_output_value(outputs, "namespace")
 
         # This would run the actual smoke tests
         # For now, just check basic connectivity
-        scheduler_address = get_output_value(outputs, 'scheduler_address')
+        scheduler_address = get_output_value(outputs, "scheduler_address")
         return self._check_scheduler_health(scheduler_address)
 
     def _check_scheduler_health(self, scheduler_address: str) -> bool:

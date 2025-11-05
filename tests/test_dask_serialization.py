@@ -25,7 +25,7 @@ def test_direct_pickle_simtask():
         bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
-        seed=42
+        seed=42,
     )
 
     # Try standard pickle - expect this to fail
@@ -42,7 +42,7 @@ def test_cloudpickle_simtask():
         bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
-        seed=42
+        seed=42,
     )
 
     # Try cloudpickle
@@ -66,9 +66,9 @@ def test_nested_aggregation_task_serialization():
                 "result": TableArtifact(
                     size=9,  # "test data" is 9 bytes
                     inline=b"test data",
-                    checksum="b" * 64
+                    checksum="b" * 64,
                 )
-            }
+            },
         ),
         SimReturn(
             task_id="c" * 64,
@@ -76,17 +76,17 @@ def test_nested_aggregation_task_serialization():
                 "result": TableArtifact(
                     size=11,  # "test data 2" is 11 bytes
                     inline=b"test data 2",
-                    checksum="d" * 64
+                    checksum="d" * 64,
                 )
-            }
-        )
+            },
+        ),
     ]
 
     # Create AggregationTask with nested SimReturns
     agg_task = AggregationTask(
         bundle_ref="test://bundle",
         target_entrypoint="targets.test/compute",
-        sim_returns=sim_returns
+        sim_returns=sim_returns,
     )
 
     # Test with cloudpickle
@@ -123,11 +123,10 @@ def test_dask_submission(dask_cluster):
         bundle_ref=TEST_BUNDLE_REF,
         entrypoint="module.func/test",
         params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
-        seed=42
+        seed=42,
     )
 
     try:
-
         # Function that will run on worker
         def process_task(t: SimTask):
             return f"Processed {t.bundle_ref} with seed {t.seed}"
@@ -155,7 +154,7 @@ def test_through_dask_worker_with_validation(dask_cluster):
             bundle_ref=f"sha256:{'b' * 63}{i}",
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": i, "y": i * 2}),
-            seed=42 + i
+            seed=42 + i,
         )
         tasks.append(task)
 
@@ -167,7 +166,7 @@ def test_through_dask_worker_with_validation(dask_cluster):
             "entrypoint": str(task.entrypoint),
             "param_id": task.params.param_id[:8],
             "seed": task.seed,
-            "outputs": task.outputs  # Should be None or tuple
+            "outputs": task.outputs,  # Should be None or tuple
         }
 
     try:
@@ -199,18 +198,14 @@ def test_simreturn_with_error_serialization():
     error_details = TableArtifact(
         size=len(b'{"details": "error context"}'),
         inline=b'{"details": "error context"}',
-        checksum="f" * 64
+        checksum="f" * 64,
     )
 
     sim_return = SimReturn(
         task_id="e" * 64,
         outputs={},  # Empty outputs allowed when error is present
-        error=ErrorInfo(
-            error_type="RuntimeError",
-            message="Test error",
-            retryable=False
-        ),
-        error_details=error_details  # Required when error is present
+        error=ErrorInfo(error_type="RuntimeError", message="Test error", retryable=False),
+        error_details=error_details,  # Required when error is present
     )
 
     try:
@@ -252,6 +247,6 @@ if __name__ == "__main__":
     except AssertionError as e:
         print(f"✗ {e}")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("To test with Dask, start cluster with: make dask-local")
     print("Then run: pytest tests/test_dask_serialization.py -k dask -s")

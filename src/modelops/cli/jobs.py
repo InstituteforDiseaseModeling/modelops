@@ -5,26 +5,25 @@ for submitting simulation and calibration jobs to the cluster.
 """
 
 import json
-import typer
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
-from modelops_contracts import SimulationStudy, CalibrationSpec
+import typer
+from modelops_contracts import CalibrationSpec, SimulationStudy
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ..client import JobSubmissionClient
-from ..services.storage.azure_versioned import AzureVersionedStore
 from ..services.job_registry import JobRegistry
 from ..services.job_state import JobStatus
-from .display import console, success, error, info, warning, section
+from ..services.storage.azure_versioned import AzureVersionedStore
 from .common_options import env_option
-from .formatting import format_timestamp, format_duration, get_timezone_info
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from .display import console, error, info, section, success, warning
+from .formatting import format_duration, format_timestamp, get_timezone_info
 
 app = typer.Typer(help="Submit and manage simulation jobs")
 
 
-def _get_registry(env: str) -> Optional[JobRegistry]:
+def _get_registry(env: str) -> JobRegistry | None:
     """Get JobRegistry instance, or None if unavailable.
 
     Args:
@@ -36,6 +35,7 @@ def _get_registry(env: str) -> Optional[JobRegistry]:
     try:
         # Get storage connection from environment or Pulumi
         import os
+
         from ..core import automation
 
         # Try environment variable first
@@ -55,7 +55,9 @@ def _get_registry(env: str) -> Optional[JobRegistry]:
                 try:
                     outputs = automation.outputs("infra", env, refresh=False)
                     if outputs and "storage_connection_string" in outputs:
-                        connection_string = automation.get_output_value(outputs, "storage_connection_string")
+                        connection_string = automation.get_output_value(
+                            outputs, "storage_connection_string"
+                        )
                 except Exception:
                     pass
 
@@ -63,10 +65,7 @@ def _get_registry(env: str) -> Optional[JobRegistry]:
             return None
 
         # Create versioned store and registry
-        store = AzureVersionedStore(
-            connection_string=connection_string,
-            container="job-registry"
-        )
+        store = AzureVersionedStore(connection_string=connection_string, container="job-registry")
         return JobRegistry(store)
 
     except Exception as e:
@@ -86,6 +85,7 @@ def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: boo
         verbose: Whether to print progress messages
     """
     from kubernetes import client as k8s_client
+
     from ..images import get_image_config
 
     try:
@@ -98,10 +98,7 @@ def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: boo
 
         # Check if indexer job already exists
         try:
-            existing = batch_v1.read_namespaced_job(
-                name=indexer_name,
-                namespace=namespace
-            )
+            existing = batch_v1.read_namespaced_job(name=indexer_name, namespace=namespace)
             if verbose:
                 info(f"    Result indexer already exists for {job_id}")
             return
@@ -120,7 +117,7 @@ def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: boo
                     "app": "modelops-indexer",
                     "job-id": job_id[:8],
                     "component": "result-indexer",
-                }
+                },
             ),
             spec=k8s_client.V1JobSpec(
                 ttl_seconds_after_finished=3600,  # Clean up after 1 hour
@@ -141,10 +138,7 @@ def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: boo
                                 command=["python", "-m", "modelops.cli.main"],
                                 args=["results", "index", job_id],
                                 env=[
-                                    k8s_client.V1EnvVar(
-                                        name="MODELOPS_JOB_ID",
-                                        value=job_id
-                                    ),
+                                    k8s_client.V1EnvVar(name="MODELOPS_JOB_ID", value=job_id),
                                     # Pass through storage configuration
                                     k8s_client.V1EnvVar(
                                         name="AZURE_STORAGE_CONNECTION_STRING",
@@ -152,27 +146,24 @@ def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: boo
                                             secret_key_ref=k8s_client.V1SecretKeySelector(
                                                 name="modelops-storage",
                                                 key="connection-string",
-                                                optional=True
+                                                optional=True,
                                             )
-                                        )
+                                        ),
                                     ),
                                 ],
                                 resources=k8s_client.V1ResourceRequirements(
                                     requests={"cpu": "0.5", "memory": "1Gi"},
-                                    limits={"cpu": "1", "memory": "2Gi"}
-                                )
+                                    limits={"cpu": "1", "memory": "2Gi"},
+                                ),
                             )
-                        ]
-                    )
-                )
-            )
+                        ],
+                    ),
+                ),
+            ),
         )
 
         # Create the indexer job
-        batch_v1.create_namespaced_job(
-            namespace=namespace,
-            body=job_spec
-        )
+        batch_v1.create_namespaced_job(namespace=namespace, body=job_spec)
 
         if verbose:
             info(f"    Triggered result indexer: {indexer_name}")
@@ -228,13 +219,15 @@ def submit(
         file_okay=True,
         readable=True,
     ),
-    bundle: Optional[str] = typer.Option(
+    bundle: str | None = typer.Option(
         None, "--bundle", "-b", help="Explicit bundle reference (sha256:...)"
     ),
     auto: bool = typer.Option(
-        True, "--auto/--no-auto", help="Auto-push bundle from current directory (default: True)"
+        True,
+        "--auto/--no-auto",
+        help="Auto-push bundle from current directory (default: True)",
     ),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
 ):
     """Submit a job specification (SimulationStudy or CalibrationSpec) as a K8s Job.
 
@@ -257,6 +250,7 @@ def submit(
     """
     # Use config default if env not specified
     from .utils import resolve_env
+
     env = resolve_env(env)
 
     # Load spec from JSON
@@ -358,8 +352,8 @@ def submit(
                 registry_ref = config.registry_ref  # e.g. "acr.io/my-project"
 
                 # Extract repository name from registry_ref
-                if '/' in registry_ref:
-                    repository_name = registry_ref.split('/', 1)[1]
+                if "/" in registry_ref:
+                    repository_name = registry_ref.split("/", 1)[1]
                     bundle_ref = f"{repository_name}@{digest}"
                 else:
                     # Fallback to digest-only if parsing fails
@@ -394,14 +388,15 @@ def submit(
     try:
         if is_calibration:
             # Submit calibration job
-            from modelops_contracts import CalibrationJob, TargetSpec
             import uuid
+
+            from modelops_contracts import CalibrationJob, TargetSpec
 
             # Create target spec from calibration spec
             target_spec = TargetSpec(
                 data=job_obj.target_data,
                 loss_function="default",
-                metadata={"targets": job_obj.target_data.get("target_entrypoints", [])}
+                metadata={"targets": job_obj.target_data.get("target_entrypoints", [])},
             )
 
             # Create calibration job
@@ -427,23 +422,23 @@ def submit(
                 study=job_obj, bundle_strategy="explicit", bundle_ref=bundle_ref
             )
 
-        success(f"\n✓ Job submitted successfully!")
+        success("\n✓ Job submitted successfully!")
         info(f"  Job ID: {job_id}")
         info(f"  Environment: {env}")
-        info(f"  Status: Running")
+        info("  Status: Running")
 
         # Show how to monitor the job
         info("\n To monitor job execution:")
-        info(f"  # Port-forward to access Dask dashboard (run in separate terminals or use &)")
-        info(f"  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8787:8787 &")
-        info(f"  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786 &")
-        info(f"  # Then open http://localhost:8787 in your browser")
+        info("  # Port-forward to access Dask dashboard (run in separate terminals or use &)")
+        info("  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8787:8787 &")
+        info("  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786 &")
+        info("  # Then open http://localhost:8787 in your browser")
 
         info("\n To check job status:")
         info(f"  kubectl -n modelops-dask-dev get job {job_id}")
         info("\n To see logs:")
         info(f"  kubectl -n modelops-dask-dev logs job/{job_id}")
-        info(f"  kubectl -n modelops-dask-dev logs deployment/dask-workers")
+        info("  kubectl -n modelops-dask-dev logs deployment/dask-workers")
 
     except Exception as e:
         error(f"Job submission failed: {e}")
@@ -459,12 +454,10 @@ def submit_calibration(
         file_okay=True,
         readable=True,
     ),
-    bundle: Optional[str] = typer.Option(
-        None, "--bundle", "-b", help="Explicit bundle reference"
-    ),
+    bundle: str | None = typer.Option(None, "--bundle", "-b", help="Explicit bundle reference"),
     build: bool = typer.Option(False, "--build", help="Build and push bundle"),
     latest: bool = typer.Option(False, "--latest", help="Use latest bundle"),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
 ):
     """Submit a CalibrationSpec as a K8s Job.
 
@@ -522,7 +515,7 @@ def submit_calibration(
             spec=spec, bundle_strategy=strategy, bundle_ref=bundle_ref
         )
 
-        success(f"\n✓ Calibration job submitted successfully!")
+        success("\n✓ Calibration job submitted successfully!")
         info(f"  Job ID: {job_id}")
         info(f"  Environment: {env}")
 
@@ -534,7 +527,7 @@ def submit_calibration(
 @app.command()
 def status(
     job_id: str = typer.Argument(..., help="Job ID to check"),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
 ):
     """Check the status of a submitted job.
 
@@ -542,6 +535,7 @@ def status(
     Falls back to kubectl if registry is unavailable.
     """
     from .utils import resolve_env
+
     env = resolve_env(env)
 
     # Try to get status from registry
@@ -614,7 +608,7 @@ def status(
 def logs(
     job_id: str = typer.Argument(..., help="Job ID to get logs for"),
     follow: bool = typer.Option(False, "--follow", "-f", help="Follow log output"),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
 ):
     """Get logs for a running or completed job.
 
@@ -634,9 +628,9 @@ def logs(
 @app.command()
 def list(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of jobs to show"),
-    status: Optional[str] = typer.Option(None, "--status", "-s", help="Filter by status"),
+    status: str | None = typer.Option(None, "--status", "-s", help="Filter by status"),
     hours: int = typer.Option(24, "--hours", "-h", help="Show jobs from last N hours"),
-    env: Optional[str] = env_option(),
+    env: str | None = env_option(),
     no_sync: bool = typer.Option(False, "--no-sync", help="Skip automatic status sync"),
 ):
     """List recent jobs.
@@ -644,7 +638,8 @@ def list(
     Shows jobs from the registry with their current status and progress.
     Automatically syncs status with Kubernetes before displaying.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
+
     from .utils import resolve_env
 
     env = resolve_env(env)
@@ -664,7 +659,7 @@ def list(
                 JobStatus.PENDING,
                 JobStatus.SUBMITTING,
                 JobStatus.SCHEDULED,
-                JobStatus.RUNNING
+                JobStatus.RUNNING,
             ]
         )
 
@@ -690,7 +685,7 @@ def list(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
                     console=console,
-                    transient=True
+                    transient=True,
                 ) as progress:
                     task = progress.add_task("Syncing job status...", total=None)
 
@@ -701,12 +696,12 @@ def list(
                         dry_run=False,
                         validate=True,
                         progress=progress,
-                        verbose=False  # Quiet during spinner
+                        verbose=False,  # Quiet during spinner
                     )
 
                     progress.update(task, completed=True)
 
-            except Exception as e:
+            except Exception:
                 # Silently skip sync on error, still show list
                 pass
 
@@ -721,11 +716,13 @@ def list(
             status_filter = [JobStatus(status.lower())]
         except ValueError:
             error(f"Invalid status: {status}")
-            info("Valid statuses: pending, submitting, scheduled, running, succeeded, failed, cancelled")
+            info(
+                "Valid statuses: pending, submitting, scheduled, running, succeeded, failed, cancelled"
+            )
             raise typer.Exit(1)
 
     # Get recent jobs
-    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    since = datetime.now(UTC) - timedelta(hours=hours)
     jobs = registry.list_jobs(limit=limit, status_filter=status_filter, since=since)
 
     if not jobs:
@@ -777,8 +774,15 @@ def list(
 
     # Count by status
     counts = registry.count_jobs_by_status()
-    active_count = sum(counts[s] for s in [JobStatus.PENDING, JobStatus.SUBMITTING,
-                                             JobStatus.SCHEDULED, JobStatus.RUNNING])
+    active_count = sum(
+        counts[s]
+        for s in [
+            JobStatus.PENDING,
+            JobStatus.SUBMITTING,
+            JobStatus.SCHEDULED,
+            JobStatus.RUNNING,
+        ]
+    )
     if active_count > 0:
         info(f"  Active jobs: {active_count}")
 
@@ -794,7 +798,7 @@ def _perform_sync(
     validate: bool = True,
     progress_task=None,
     progress=None,
-    verbose: bool = True
+    verbose: bool = True,
 ) -> int:
     """Perform the actual sync operation.
 
@@ -808,14 +812,13 @@ def _perform_sync(
         if progress and progress_task is not None:
             progress.update(
                 progress_task,
-                description=f"Syncing job status from Kubernetes... [{idx+1}/{total_jobs}]"
+                description=f"Syncing job status from Kubernetes... [{idx + 1}/{total_jobs}]",
             )
 
         # Get Kubernetes job status
         try:
             k8s_job = batch_v1.read_namespaced_job(
-                name=job.k8s_name,
-                namespace=job.k8s_namespace or "modelops-dask-dev"
+                name=job.k8s_name, namespace=job.k8s_namespace or "modelops-dask-dev"
             )
 
             # Determine status based on Kubernetes job
@@ -852,7 +855,9 @@ def _perform_sync(
 
                             # Trigger result indexing for succeeded jobs
                             if k8s_status == JobStatus.SUCCEEDED:
-                                _trigger_result_indexing(job.job_id, batch_v1, job.k8s_namespace, verbose)
+                                _trigger_result_indexing(
+                                    job.job_id, batch_v1, job.k8s_namespace, verbose
+                                )
                         updated_count += 1
                     except Exception as e:
                         if verbose:
@@ -868,7 +873,7 @@ def _perform_sync(
                     try:
                         registry.update_job_status(job.job_id, JobStatus.FAILED)
                         if verbose:
-                            info(f"    → marked as failed")
+                            info("    → marked as failed")
                         updated_count += 1
                     except Exception as update_e:
                         if verbose:
@@ -882,17 +887,21 @@ def _perform_sync(
 
 @app.command()
 def sync(
-    env: Optional[str] = env_option(),
-    validate: bool = typer.Option(True, "--validate/--no-validate", help="Validate outputs after sync"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be updated without making changes"),
+    env: str | None = env_option(),
+    validate: bool = typer.Option(
+        True, "--validate/--no-validate", help="Validate outputs after sync"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be updated without making changes"
+    ),
 ):
     """Sync job status from Kubernetes to the registry.
 
     Updates the registry to reflect actual Kubernetes job status.
     Optionally validates outputs when jobs complete to ensure all expected files exist.
     """
+    from ..cli.k8s_client import cleanup_temp_kubeconfig, get_k8s_client
     from .utils import resolve_env
-    from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
 
     env = resolve_env(env)
 
@@ -906,6 +915,7 @@ def sync(
     try:
         v1, apps_v1, temp_path = get_k8s_client(env)
         from kubernetes import client as k8s_client
+
         batch_v1 = k8s_client.BatchV1Api()
     except Exception as e:
         error(f"Failed to connect to Kubernetes: {e}")
@@ -927,7 +937,7 @@ def sync(
         ) as progress:
             task = progress.add_task(
                 f"Syncing {len(active_jobs)} active {'job' if len(active_jobs) == 1 else 'jobs'}...",
-                total=None
+                total=None,
             )
 
             updated_count = _perform_sync(
@@ -938,7 +948,7 @@ def sync(
                 validate=validate,
                 progress_task=task,
                 progress=progress,
-                verbose=False  # Quiet during spinner
+                verbose=False,  # Quiet during spinner
             )
 
             progress.update(task, completed=True)
@@ -951,19 +961,23 @@ def sync(
 @app.command()
 def resume(
     job_id: str = typer.Argument(..., help="Job ID to resume"),
-    env: Optional[str] = env_option(),
-    bundle: Optional[str] = typer.Option(None, help="Override bundle reference"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be submitted without actually doing it"),
+    env: str | None = env_option(),
+    bundle: str | None = typer.Option(None, help="Override bundle reference"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Show what would be submitted without actually doing it",
+    ),
 ):
     """Resume a partially completed job.
 
     Resubmits only the missing tasks from a job that completed with PARTIAL_SUCCESS status.
     This allows recovery from transient failures without re-running successful tasks.
     """
-    from .utils import resolve_env
-    from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
-    from ..client.job_submission import JobSubmissionClient
     from modelops_contracts import SimJob, UniqueParameterSet
+
+    from ..client.job_submission import JobSubmissionClient
+    from .utils import resolve_env
 
     env = resolve_env(env)
 
@@ -1008,19 +1022,14 @@ def resume(
     tasks_by_param = {}
     for task in resumable_tasks:
         if task.param_id not in tasks_by_param:
-            tasks_by_param[task.param_id] = {
-                'params': task.params,
-                'seeds': []
-            }
-        tasks_by_param[task.param_id]['seeds'].append(task.seed)
+            tasks_by_param[task.param_id] = {"params": task.params, "seeds": []}
+        tasks_by_param[task.param_id]["seeds"].append(task.seed)
 
     # Create parameter sets for the resume job
     parameter_sets = []
     for param_id, data in tasks_by_param.items():
         param_set = UniqueParameterSet(
-            param_id=param_id,
-            params=data['params'],
-            replicate_count=len(data['seeds'])
+            param_id=param_id, params=data["params"], replicate_count=len(data["seeds"])
         )
         parameter_sets.append(param_set)
 
@@ -1029,10 +1038,10 @@ def resume(
         job_id=f"{job_id}-resume-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         parameter_sets=parameter_sets,
         metadata={
-            'original_job_id': job_id,
-            'bundle_digest': bundle or job_state.metadata.get('bundle_digest', 'unknown'),
-            'resume_attempt': job_state.metadata.get('resume_attempt', 0) + 1
-        }
+            "original_job_id": job_id,
+            "bundle_digest": bundle or job_state.metadata.get("bundle_digest", "unknown"),
+            "resume_attempt": job_state.metadata.get("resume_attempt", 0) + 1,
+        },
     )
 
     # Submit the resume job
@@ -1041,15 +1050,12 @@ def resume(
         client = JobSubmissionClient(env=env)
 
         # Use bundle from command line or original job
-        bundle_ref = bundle or job_state.metadata.get('bundle_ref')
+        bundle_ref = bundle or job_state.metadata.get("bundle_ref")
         if not bundle_ref:
             error("Bundle reference not found. Please specify with --bundle")
             raise typer.Exit(1)
 
-        new_job_id = client.submit_job(
-            resume_job,
-            bundle_ref=bundle_ref
-        )
+        new_job_id = client.submit_job(resume_job, bundle_ref=bundle_ref)
 
         success(f"\n✓ Resume job submitted: {new_job_id}")
         info(f"\nResuming {len(resumable_tasks)} tasks from job {job_id}")
@@ -1064,8 +1070,10 @@ def resume(
 @app.command()
 def validate(
     job_id: str = typer.Argument(..., help="Job ID to validate"),
-    env: Optional[str] = env_option(),
-    force: bool = typer.Option(False, "--force", help="Force re-validation even if already validated"),
+    env: str | None = env_option(),
+    force: bool = typer.Option(
+        False, "--force", help="Force re-validation even if already validated"
+    ),
 ):
     """Manually validate job outputs.
 
@@ -1109,7 +1117,7 @@ def validate(
         warning(f"Validation unavailable: {validation_result.error}")
         raise typer.Exit(1)
 
-    info(f"\n Validation Results:")
+    info("\n Validation Results:")
     info(f"  Status: {validation_result.status.upper()}")
     info(f"  Verified: {validation_result.verified_count} outputs")
     info(f"  Missing: {validation_result.missing_count} outputs")

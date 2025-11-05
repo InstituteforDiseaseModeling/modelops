@@ -26,7 +26,6 @@ class TestOCIBundleIntegration:
         """Get path to smoke test bundle fixture."""
         return Path(__file__).parent.parent / "fixtures" / "smoke_bundle"
 
-
     def test_smoke_bundle_exists(self, smoke_bundle_path):
         """Test that smoke bundle fixture exists and is valid."""
         assert smoke_bundle_path.exists()
@@ -38,9 +37,16 @@ class TestOCIBundleIntegration:
     def test_smoke_bundle_validation(self, smoke_bundle_path):
         """Test that smoke bundle passes validation."""
         result = subprocess.run(
-            [sys.executable, "-m", "modelops.cli.main", "dev", "validate-bundle", str(smoke_bundle_path)],
+            [
+                sys.executable,
+                "-m",
+                "modelops.cli.main",
+                "dev",
+                "validate-bundle",
+                str(smoke_bundle_path),
+            ],
             capture_output=True,
-            text=True
+            text=True,
         )
         assert result.returncode == 0
         assert "Bundle validation PASSED" in result.stdout
@@ -52,8 +58,7 @@ class TestOCIBundleIntegration:
         pass
 
     @pytest.mark.skipif(
-        not os.environ.get("MODELOPS_BUNDLE_REGISTRY"),
-        reason="Registry not configured"
+        not os.environ.get("MODELOPS_BUNDLE_REGISTRY"), reason="Registry not configured"
     )
     def test_bundle_push_to_registry(self, smoke_bundle_path):
         """Test pushing bundle to registry.
@@ -66,10 +71,7 @@ class TestOCIBundleIntegration:
         # For now, we just verify the bundle structure is correct
         assert smoke_bundle_path.exists()
 
-    @pytest.mark.skipif(
-        not os.environ.get("DASK_SCHEDULER"),
-        reason="Dask cluster not running"
-    )
+    @pytest.mark.skipif(not os.environ.get("DASK_SCHEDULER"), reason="Dask cluster not running")
     def test_smoke_test_with_dask(self):
         """Test full smoke test with Dask cluster.
 
@@ -80,7 +82,7 @@ class TestOCIBundleIntegration:
         result = subprocess.run(
             [sys.executable, "-m", "modelops.cli.main", "dev", "smoke-test", "--timeout", "30"],
             capture_output=True,
-            text=True
+            text=True,
         )
         # If Dask is running, this should work
         if "Connected to Dask cluster" in result.stdout:
@@ -93,18 +95,15 @@ class TestOCIBundleIntegration:
         import importlib
 
         # Clean up any existing simulate module
-        if 'simulate' in sys.modules:
-            del sys.modules['simulate']
+        if "simulate" in sys.modules:
+            del sys.modules["simulate"]
 
         sys.path.insert(0, str(smoke_bundle_path))
         try:
             from simulate import simulate
 
             # Test the function
-            result = simulate(
-                params={"test": True, "value": 2.0},
-                seed=12345
-            )
+            result = simulate(params={"test": True, "value": 2.0}, seed=12345)
 
             assert result["status"] == "completed"
             assert result["seed"] == 12345
@@ -115,8 +114,8 @@ class TestOCIBundleIntegration:
         finally:
             # Clean up
             sys.path.pop(0)
-            if 'simulate' in sys.modules:
-                del sys.modules['simulate']
+            if "simulate" in sys.modules:
+                del sys.modules["simulate"]
 
     @pytest.mark.skip(reason="Calabaria bridge bundle not yet available")
     def test_calabaria_bridge_simulate(self):

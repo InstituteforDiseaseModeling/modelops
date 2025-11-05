@@ -39,7 +39,7 @@ class TestJobRegistry:
             job_id="job-123",
             k8s_name="optuna-job-abc",
             namespace="modelops",
-            metadata={"algorithm": "optuna", "run_id": "run-456"}
+            metadata={"algorithm": "optuna", "run_id": "run-456"},
         )
 
         assert state.job_id == "job-123"
@@ -53,19 +53,11 @@ class TestJobRegistry:
     def test_register_duplicate_job(self, registry):
         """Test that duplicate registration fails."""
         # Register once
-        registry.register_job(
-            job_id="job-123",
-            k8s_name="test-job",
-            namespace="default"
-        )
+        registry.register_job(job_id="job-123", k8s_name="test-job", namespace="default")
 
         # Try to register again
         with pytest.raises(JobExistsError, match="already registered"):
-            registry.register_job(
-                job_id="job-123",
-                k8s_name="different-job",
-                namespace="default"
-            )
+            registry.register_job(job_id="job-123", k8s_name="different-job", namespace="default")
 
     def test_update_status_valid_transition(self, registry):
         """Test valid status transitions."""
@@ -86,9 +78,7 @@ class TestJobRegistry:
 
         # Valid transition: RUNNING -> SUCCEEDED
         state = registry.update_status(
-            "job-1",
-            JobStatus.SUCCEEDED,
-            results_path="s3://bucket/results/job-1"
+            "job-1", JobStatus.SUCCEEDED, results_path="s3://bucket/results/job-1"
         )
         assert state.status == JobStatus.SUCCEEDED
         assert state.results_path == "s3://bucket/results/job-1"
@@ -131,20 +121,13 @@ class TestJobRegistry:
         registry.register_job("job-1", "k8s-job-1", "default")
 
         # Update with k8s_uid
-        state = registry.update_status(
-            "job-1",
-            JobStatus.SUBMITTING,
-            k8s_uid="abc-123-def"
-        )
+        state = registry.update_status("job-1", JobStatus.SUBMITTING, k8s_uid="abc-123-def")
         assert state.k8s_uid == "abc-123-def"
 
         # Update to failed with error info
         registry.update_status("job-1", JobStatus.SCHEDULED)
         state = registry.update_status(
-            "job-1",
-            JobStatus.FAILED,
-            error_message="Pod OOMKilled",
-            error_code="OOM"
+            "job-1", JobStatus.FAILED, error_message="Pod OOMKilled", error_code="OOM"
         )
         assert state.status == JobStatus.FAILED
         assert state.error_message == "Pod OOMKilled"
@@ -216,9 +199,7 @@ class TestJobRegistry:
         assert running_jobs[0].job_id == "job-1"
 
         # Filter by multiple statuses
-        terminal_jobs = registry.list_jobs(
-            status_filter=[JobStatus.SUCCEEDED, JobStatus.FAILED]
-        )
+        terminal_jobs = registry.list_jobs(status_filter=[JobStatus.SUCCEEDED, JobStatus.FAILED])
         assert len(terminal_jobs) == 1
         assert terminal_jobs[0].job_id == "job-2"
 
@@ -252,9 +233,7 @@ class TestJobRegistry:
 
         # Finalize as success
         state = registry.finalize_job(
-            "job-1",
-            JobStatus.SUCCEEDED,
-            results_path="s3://bucket/results/job-1"
+            "job-1", JobStatus.SUCCEEDED, results_path="s3://bucket/results/job-1"
         )
         assert state.status == JobStatus.SUCCEEDED
         assert state.results_path == "s3://bucket/results/job-1"
@@ -271,10 +250,7 @@ class TestJobRegistry:
         state = registry.finalize_job(
             "job-1",
             JobStatus.FAILED,
-            error_info={
-                "message": "Container exited with code 137",
-                "code": "OOMKilled"
-            }
+            error_info={"message": "Container exited with code 137", "code": "OOMKilled"},
         )
         assert state.status == JobStatus.FAILED
         assert state.error_message == "Container exited with code 137"
@@ -417,15 +393,12 @@ class TestJobRegistry:
         """Test that metadata updates are merged, not replaced."""
         # Register with initial metadata
         registry.register_job(
-            "job-1", "k8s-1", "default",
-            metadata={"algorithm": "optuna", "version": "1.0"}
+            "job-1", "k8s-1", "default", metadata={"algorithm": "optuna", "version": "1.0"}
         )
 
         # Update status with additional metadata
         state = registry.update_status(
-            "job-1",
-            JobStatus.SUBMITTING,
-            metadata={"cluster": "prod", "region": "us-east"}
+            "job-1", JobStatus.SUBMITTING, metadata={"cluster": "prod", "region": "us-east"}
         )
 
         # All metadata should be present
@@ -437,17 +410,11 @@ class TestJobRegistry:
     def test_job_state_serialization(self, registry):
         """Test that JobState survives serialization round-trip."""
         # Register job with various fields
-        state = registry.register_job(
-            "job-1", "k8s-1", "default",
-            metadata={"test": True}
-        )
+        state = registry.register_job("job-1", "k8s-1", "default", metadata={"test": True})
 
         # Update with more fields
         state = registry.update_status(
-            "job-1",
-            JobStatus.SUBMITTING,
-            k8s_uid="uid-123",
-            tasks_total=100
+            "job-1", JobStatus.SUBMITTING, k8s_uid="uid-123", tasks_total=100
         )
 
         # Serialize and deserialize

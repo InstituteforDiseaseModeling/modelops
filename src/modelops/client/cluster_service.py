@@ -1,16 +1,16 @@
 """Service for Kubernetes cluster management."""
 
-from typing import Dict, Any, Optional
-from pathlib import Path
-import subprocess
 import os
+import subprocess
+from pathlib import Path
+from typing import Any
 
-from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
-from .utils import stack_exists, get_safe_outputs
 from ..components import AzureProviderConfig
-from ..core import StackNaming, automation
+from ..core import automation
 from ..core.automation import get_output_value
 from ..core.state_manager import PulumiStateManager
+from .base import BaseService, ComponentState, ComponentStatus, OutputCapture
+from .utils import stack_exists
 
 
 class ClusterService(BaseService):
@@ -20,7 +20,7 @@ class ClusterService(BaseService):
         """Initialize cluster service."""
         super().__init__(env)
 
-    def provision(self, config: AzureProviderConfig, verbose: bool = False) -> Dict[str, Any]:
+    def provision(self, config: AzureProviderConfig, verbose: bool = False) -> dict[str, Any]:
         """
         Provision AKS cluster.
 
@@ -34,10 +34,11 @@ class ClusterService(BaseService):
         Raises:
             Exception: If provisioning fails
         """
+
         def pulumi_program():
             """Pulumi program that creates infrastructure using ComponentResource."""
             import pulumi
-            from ..core.naming import StackNaming
+
             from ..core import automation
 
             if config.provider == "azure":
@@ -51,15 +52,17 @@ class ClusterService(BaseService):
                     if registry_outputs and "registry_id" in registry_outputs:
                         # Extract the value if it's wrapped
                         registry_id_val = registry_outputs["registry_id"]
-                        if hasattr(registry_id_val, 'value'):
+                        if hasattr(registry_id_val, "value"):
                             registry_id = pulumi.Output.from_input(registry_id_val.value)
-                        elif isinstance(registry_id_val, dict) and 'value' in registry_id_val:
-                            registry_id = pulumi.Output.from_input(registry_id_val['value'])
+                        elif isinstance(registry_id_val, dict) and "value" in registry_id_val:
+                            registry_id = pulumi.Output.from_input(registry_id_val["value"])
                         else:
                             registry_id = pulumi.Output.from_input(registry_id_val)
                 except:
                     # Registry doesn't exist yet or has no outputs
-                    pulumi.log.warn("Registry stack not found or has no outputs, ACR permissions will be skipped")
+                    pulumi.log.warn(
+                        "Registry stack not found or has no outputs, ACR permissions will be skipped"
+                    )
 
                 # Pass validated config dict to component with environment and registry_id
                 config_dict = config.to_pulumi_config()
@@ -86,9 +89,7 @@ class ClusterService(BaseService):
         # - State reconciliation with Azure
         # - Environment YAML updates (cluster doesn't save to YAML)
         result = state_manager.execute_with_recovery(
-            "up",
-            program=pulumi_program,
-            on_output=capture
+            "up", program=pulumi_program, on_output=capture
         )
 
         outputs = result.outputs if result else {}
@@ -110,16 +111,13 @@ class ClusterService(BaseService):
         except Exception as e:
             # Don't fail provisioning if kubeconfig update fails
             print(f"  ⚠ Could not update kubeconfig automatically: {e}")
-            print(f"  Run: az aks get-credentials -g {resource_group} -n {cluster_name} --overwrite-existing")
+            print(
+                f"  Run: az aks get-credentials -g {resource_group} -n {cluster_name} --overwrite-existing"
+            )
 
         return outputs
 
-    def destroy(
-        self,
-        delete_rg: bool = False,
-        force: bool = False,
-        verbose: bool = False
-    ) -> None:
+    def destroy(self, delete_rg: bool = False, force: bool = False, verbose: bool = False) -> None:
         """
         Destroy cluster.
 
@@ -156,10 +154,7 @@ class ClusterService(BaseService):
         # State manager handles:
         # - Stale lock detection and clearing
         # - No environment YAML cleanup (cluster doesn't save to YAML)
-        state_manager.execute_with_recovery(
-            "destroy",
-            on_output=capture
-        )
+        state_manager.execute_with_recovery("destroy", on_output=capture)
 
         # Clean up kubeconfig entries for this cluster
         if cluster_name:
@@ -197,28 +192,24 @@ class ClusterService(BaseService):
                         "resource_group": get_output_value(outputs, "resource_group", "unknown"),
                         "location": get_output_value(outputs, "location", "unknown"),
                         "provider": get_output_value(outputs, "provider", "azure"),
-                        "connectivity": connectivity
-                    }
+                        "connectivity": connectivity,
+                    },
                 )
             else:
                 return ComponentStatus(
-                    deployed=False,
-                    phase=ComponentState.NOT_DEPLOYED,
-                    details={}
+                    deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
                 )
         except Exception as e:
             return ComponentStatus(
-                deployed=False,
-                phase=ComponentState.UNKNOWN,
-                details={"error": str(e)}
+                deployed=False, phase=ComponentState.UNKNOWN, details={"error": str(e)}
             )
 
     def get_kubeconfig(
         self,
         merge: bool = False,
-        output: Optional[Path] = None,
-        show_secrets: bool = False
-    ) -> Optional[str]:
+        output: Path | None = None,
+        show_secrets: bool = False,
+    ) -> str | None:
         """
         Get kubeconfig from infrastructure state.
 
@@ -253,7 +244,7 @@ class ClusterService(BaseService):
             else:
                 return "****"  # Mask by default
 
-    def get_outputs(self) -> Dict[str, Any]:
+    def get_outputs(self) -> dict[str, Any]:
         """
         Get all outputs from infrastructure stack.
 
@@ -291,17 +282,25 @@ class ClusterService(BaseService):
 
         try:
             # Write kubeconfig to temp file
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
                 f.write(kubeconfig)
                 temp_path = f.name
 
             try:
                 # Try to get nodes
                 result = subprocess.run(
-                    ["kubectl", "get", "nodes", "--kubeconfig", temp_path, "-o", "name"],
+                    [
+                        "kubectl",
+                        "get",
+                        "nodes",
+                        "--kubeconfig",
+                        temp_path,
+                        "-o",
+                        "name",
+                    ],
                     capture_output=True,
                     text=True,
-                    timeout=5
+                    timeout=5,
                 )
                 return result.returncode == 0
             finally:
@@ -322,18 +321,27 @@ class ClusterService(BaseService):
         import subprocess
 
         # Use --overwrite-existing to handle stale DNS from old clusters
-        cmd = ["az", "aks", "get-credentials",
-               "-g", resource_group,
-               "-n", cluster_name,
-               "--overwrite-existing"]
+        cmd = [
+            "az",
+            "aks",
+            "get-credentials",
+            "-g",
+            resource_group,
+            "-n",
+            cluster_name,
+            "--overwrite-existing",
+        ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise Exception(f"Failed to update kubeconfig: {result.stderr}")
 
         # Set the context to the new cluster
-        subprocess.run(["kubectl", "config", "use-context", cluster_name],
-                      capture_output=True, check=False)
+        subprocess.run(
+            ["kubectl", "config", "use-context", cluster_name],
+            capture_output=True,
+            check=False,
+        )
 
     def _prune_kubeconfig(self, cluster_name: str):
         """Remove kubeconfig entries for a cluster.
@@ -350,7 +358,12 @@ class ClusterService(BaseService):
         commands = [
             ["kubectl", "config", "delete-context", cluster_name],
             ["kubectl", "config", "delete-cluster", cluster_name],
-            ["kubectl", "config", "delete-user", f"clusterUser_modelops-{self.env}-rg-{os.environ.get('USER', 'user')}_{cluster_name}"]
+            [
+                "kubectl",
+                "config",
+                "delete-user",
+                f"clusterUser_modelops-{self.env}-rg-{os.environ.get('USER', 'user')}_{cluster_name}",
+            ],
         ]
 
         for cmd in commands:
@@ -358,11 +371,11 @@ class ClusterService(BaseService):
 
     def _merge_kubeconfig(self, kubeconfig_yaml: str):
         """Merge kubeconfig with existing ~/.kube/config."""
-        import tempfile
         import shutil
+        import tempfile
 
         # Create temp file with new kubeconfig
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(kubeconfig_yaml)
             temp_path = f.name
 
@@ -387,7 +400,7 @@ class ClusterService(BaseService):
                 ["kubectl", "config", "view", "--flatten"],
                 env=env_vars,
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if result.returncode != 0:

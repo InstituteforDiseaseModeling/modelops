@@ -5,7 +5,6 @@ eliminating the hardcoded restrictions and providing flexibility.
 """
 
 import os
-from typing import Optional, Set
 
 # CRITICAL: We don't restrict environment names anymore!
 # Users can use ANY valid name they want: dev, staging, prod, test, vsb-dev, etc.
@@ -13,7 +12,7 @@ from typing import Optional, Set
 DEFAULT_ENVIRONMENT = "dev"
 
 
-def resolve_env(env: Optional[str] = None, required: bool = False) -> str:
+def resolve_env(env: str | None = None, required: bool = False) -> str:
     """Resolve environment name from various sources.
 
     Args:
@@ -45,9 +44,7 @@ def resolve_env(env: Optional[str] = None, required: bool = False) -> str:
         return DEFAULT_ENVIRONMENT
 
     # 4. If required but not found, raise error
-    raise ValueError(
-        "No environment specified. Set MODELOPS_ENV or provide --env parameter."
-    )
+    raise ValueError("No environment specified. Set MODELOPS_ENV or provide --env parameter.")
 
 
 def is_production(env: str) -> bool:
@@ -98,7 +95,7 @@ def validate_env_name(env: str) -> bool:
 
     # Can only contain letters, numbers, hyphens
     for char in env:
-        if not (char.isalnum() or char == '-'):
+        if not (char.isalnum() or char == "-"):
             return False
 
     return True
@@ -119,11 +116,11 @@ def sanitize_env_name(env: str) -> str:
         "my_test" -> "mytest"
     """
     # Remove any non-alphanumeric characters
-    sanitized = ''.join(c for c in env.lower() if c.isalnum())
+    sanitized = "".join(c for c in env.lower() if c.isalnum())
 
     # Ensure it starts with a letter
     if sanitized and not sanitized[0].isalpha():
-        sanitized = 'e' + sanitized  # Prefix with 'e' for environment
+        sanitized = "e" + sanitized  # Prefix with 'e' for environment
 
     # Truncate if too long
     return sanitized[:20]

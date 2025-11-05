@@ -4,11 +4,10 @@ This module provides a single source of truth for all container image
 references used throughout the codebase.
 """
 
-import os
-import yaml
-from pathlib import Path
-from typing import Dict, Optional
 from functools import lru_cache
+from pathlib import Path
+
+import yaml
 from pydantic import BaseModel, Field
 
 
@@ -16,14 +15,13 @@ class ImageConfig(BaseModel):
     """Container image configuration."""
 
     version: int = Field(1)
-    images: Dict[str, str] = Field(
-        default_factory=dict,
-        description="Map of image keys to full references"
+    images: dict[str, str] = Field(
+        default_factory=dict, description="Map of image keys to full references"
     )
 
     @classmethod
     @lru_cache(maxsize=1)
-    def from_yaml(cls, path: Optional[Path] = None) -> "ImageConfig":
+    def from_yaml(cls, path: Path | None = None) -> "ImageConfig":
         """Load image configuration from YAML file.
 
         Args:
@@ -42,7 +40,7 @@ class ImageConfig(BaseModel):
         if not path.exists():
             raise FileNotFoundError(f"Image configuration not found: {path}")
 
-        with open(path, "r") as f:
+        with open(path) as f:
             data = yaml.safe_load(f)
 
         return cls.model_validate(data)
@@ -61,9 +59,7 @@ class ImageConfig(BaseModel):
         """
         if image_key not in self.images:
             available = ", ".join(sorted(self.images.keys()))
-            raise KeyError(
-                f"Unknown image key '{image_key}'. Available: {available}"
-            )
+            raise KeyError(f"Unknown image key '{image_key}'. Available: {available}")
         return self.images[image_key]
 
     # Convenience methods for common images
@@ -85,7 +81,7 @@ class ImageConfig(BaseModel):
 
 
 # Global singleton - loaded on first access
-_IMAGE_CONFIG: Optional[ImageConfig] = None
+_IMAGE_CONFIG: ImageConfig | None = None
 
 
 def get_image_config() -> ImageConfig:

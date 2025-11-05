@@ -1,11 +1,9 @@
 """SimulationService implementations for distributed and local execution."""
 
-from modelops_contracts import (
-    SimulationService, SimReturn, Future, UniqueParameterSet,
-    Scalar, make_param_id, SimTask, EntryPointId
-)
-from typing import List, Optional
 import logging
+
+from modelops_contracts import Future, SimReturn, SimTask, SimulationService
+
 # from .aggregation import AggregationService  # TODO: Update for new SimTask interface
 
 # Logger for capturing Dask warnings
@@ -25,97 +23,100 @@ class BaseSimulationService(SimulationService):
         """Initialize base simulation service."""
         pass
         # self.aggregation_service = aggregation_service or AggregationService()  # TODO: Update
-    
-    def submit_batch(self, tasks: List[SimTask], *, 
-                     cache_policy: str = "read_write") -> List[Future[SimReturn]]:
+
+    def submit_batch(
+        self, tasks: list[SimTask], *, cache_policy: str = "read_write"
+    ) -> list[Future[SimReturn]]:
         """Submit multiple tasks efficiently.
-        
+
         Args:
             tasks: List of simulation tasks to submit
             cache_policy: One of:
                 - "read_write": Check cache first, write results
                 - "write_only": Don't check, but write results
                 - "bypass": Ignore cache completely
-            
+
         Returns:
             List of futures (or results for cached items)
         """
         futures = []
-        
+
         for task in tasks:
             # Caching now handled at execution environment level
             # Submit to execution
             future = self.submit(task)
             futures.append(future)
-        
+
         return futures
-    
-    def batch_gather_with_cache(self, futures: List[Future[SimReturn]], 
-                                 tasks: List[SimTask]) -> List[SimReturn]:
+
+    def batch_gather_with_cache(
+        self, futures: list[Future[SimReturn]], tasks: list[SimTask]
+    ) -> list[SimReturn]:
         """Gather results and update cache.
-        
+
         Args:
             futures: List of futures from submit_batch
             tasks: Original tasks (for cache keys)
-            
+
         Returns:
             List of simulation results
         """
         results = self.gather(futures)
         # Caching now handled at execution environment level
         return results
-    
-    def submit_replicated(self, task: SimTask, n_replicates: int, *,
-                          seed_offset: int = 0) -> List[Future[SimReturn]]:
+
+    def submit_replicated(
+        self, task: SimTask, n_replicates: int, *, seed_offset: int = 0
+    ) -> list[Future[SimReturn]]:
         """Submit replicated simulations with different seeds.
-        
+
         This is a common pattern: same params, different seeds.
-        
+
         Args:
             task: Base task to replicate
             n_replicates: Number of replicates to run
             seed_offset: Offset to add to task.seed for each replicate
-            
+
         Returns:
             List of futures
         """
         futures = []
-        
+
         for i in range(n_replicates):
             # Create replicate with offset seed
             replicate = SimTask(
                 entrypoint=task.entrypoint,
                 params=task.params,
-                seed=task.seed + seed_offset + i, # TODO -- better seed policy needed?
-                bundle_ref=task.bundle_ref
+                seed=task.seed + seed_offset + i,  # TODO -- better seed policy needed?
+                bundle_ref=task.bundle_ref,
             )
-            
+
             future = self.submit(replicate)
             futures.append(future)
-        
+
         return futures
-    
 
 
 class LocalSimulationService(BaseSimulationService):
     """Local in-process execution for development and testing.
-    
+
     Executes simulations directly in the current process without
     any distributed infrastructure. Useful for:
     - Development and debugging
     - Small-scale experiments
     - Environments without Kubernetes
     """
-    
+
     def __init__(self):
         """Initialize local simulation service."""
         super().__init__()
         # Import here to avoid circular dependency
-        from ..core.executor import SimulationExecutor
-        from ..adapters.exec_env.direct import DirectExecEnv
-        from ..adapters.bundle.file_repo import FileBundleRepository
-        from ..worker.config import RuntimeConfig
         from pathlib import Path
+
+        from ..adapters.bundle.file_repo import FileBundleRepository
+        from ..adapters.exec_env.direct import DirectExecEnv
+        from ..core.executor import SimulationExecutor
+        from ..worker.config import RuntimeConfig
 
         config = RuntimeConfig.from_env()
 
@@ -124,27 +125,29 @@ class LocalSimulationService(BaseSimulationService):
             bundle_repo = FileBundleRepository(
                 # TODO fix?
                 bundles_dir=config.bundles_dir or "/tmp/modelops/bundles",
-                cache_dir=config.bundles_cache_dir
+                cache_dir=config.bundles_cache_dir,
             )
         else:
-            raise NotImplementedError(f"LocalSimulationService doesn't support bundle_source={config.bundle_source} yet")
+            raise NotImplementedError(
+                f"LocalSimulationService doesn't support bundle_source={config.bundle_source} yet"
+            )
 
         # Create execution environment with proper dependencies
         storage_dir = Path("/tmp/modelops/provenance")
         exec_env = DirectExecEnv(bundle_repo=bundle_repo, storage_dir=storage_dir)
         self.executor = SimulationExecutor(exec_env)
-    
+
     def submit(self, task: SimTask) -> Future[SimReturn]:
         """Submit a simulation task for local execution.
-        
+
         Args:
             task: SimTask specification containing all execution parameters
-            
+
         Returns:
             A Future that contains the simulation result
         """
         from concurrent.futures import Future as ConcurrentFuture
-        
+
         # Create a future and set the result immediately (synchronous execution)
         future = ConcurrentFuture()
         try:
@@ -154,15 +157,15 @@ class LocalSimulationService(BaseSimulationService):
             future.set_result(result)
         except Exception as e:
             future.set_exception(e)
-        
+
         return future
-    
-    def gather(self, futures: List[Future[SimReturn]]) -> List[SimReturn]:
+
+    def gather(self, futures: list[Future[SimReturn]]) -> list[SimReturn]:
         """Gather results from submitted simulations.
-        
+
         Args:
             futures: List of futures from submit()
-            
+
         Returns:
             List of simulation results
         """
@@ -170,7 +173,7 @@ class LocalSimulationService(BaseSimulationService):
         for future in futures:
             try:
                 # For concurrent.futures.Future objects
-                if hasattr(future, 'result'):
+                if hasattr(future, "result"):
                     results.append(future.result())
                 else:
                     # Fallback for any direct results (shouldn't happen)

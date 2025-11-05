@@ -10,22 +10,19 @@ import json
 import logging
 import os
 import sys
-from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 from azure.storage.blob import BlobServiceClient
 from dask.distributed import Client
-
 from modelops_contracts import (
+    CalibrationJob,
     Job,
     SimJob,
-    CalibrationJob,
     SimTask,
     TargetSpec,
     UniqueParameterSet,
 )
 from modelops_contracts.adaptive import AdaptiveAlgorithm
-from modelops.telemetry import TelemetryCollector, TelemetryStorage
 
 # Set up logging
 logging.basicConfig(
@@ -62,7 +59,7 @@ def load_job_from_blob() -> Job:
     return deserialize_job(job_data)
 
 
-def deserialize_job(data: Dict[str, Any]) -> Job:
+def deserialize_job(data: dict[str, Any]) -> Job:
     """Deserialize job from JSON data.
 
     Args:
@@ -194,15 +191,19 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             replicate_set = ReplicateSet(
                 base_task=base_task,
                 n_replicates=len(replicate_tasks),
-                seed_offset=0  # Seeds already set in tasks
+                seed_offset=0,  # Seeds already set in tasks
             )
             # Submit with first target for now
             future = sim_service.submit_replicate_set(replicate_set, first_target)
             futures.append((param_id, future))
             if first_target:
-                logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} with target aggregation")
+                logger.info(
+                    f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} with target aggregation"
+                )
             else:
-                logger.info(f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} as group")
+                logger.info(
+                    f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} as group"
+                )
         else:
             # Single task - no grouping needed
             task = replicate_tasks[0]
@@ -229,14 +230,15 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
 
             # Log first few losses
             for i, result in enumerate(results[:3]):
-                if hasattr(result, 'loss'):
+                if hasattr(result, "loss"):
                     logger.info(f"  Param set {i} loss for {target_name}: {result.loss}")
 
         # Write Parquet views for post-job analysis
         try:
+            from pathlib import Path
+
             from modelops.services.job_views import write_job_view
             from modelops.services.provenance_store import ProvenanceStore
-            from pathlib import Path
 
             logger.info("Writing job results to Parquet views...")
 
@@ -247,7 +249,10 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                 try:
                     prov_store = ProvenanceStore(
                         storage_dir=Path("/tmp/modelops/provenance"),
-                        azure_backend={"container": "results", "connection_string": conn_str}
+                        azure_backend={
+                            "container": "results",
+                            "connection_string": conn_str,
+                        },
                     )
                     logger.info("ProvenanceStore initialized with Azure backend")
                 except Exception as e:
@@ -274,7 +279,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             trial_results = evaluate_results(results, job.target_spec)
             logger.info(f"Target evaluation complete: {len(trial_results)} trials evaluated")
             for i, tr in enumerate(trial_results[:3]):
-                if hasattr(tr, 'loss'):
+                if hasattr(tr, "loss"):
                     logger.info(f"  Trial {i} loss: {tr.loss}")
         except NotImplementedError:
             logger.warning("Target evaluation not yet implemented")
@@ -307,9 +312,11 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
 
     # Check if we should use the new calibration wire
     try:
-        from modelops_calabaria.calibration.wire import calibration_wire
-        from modelops.services.provenance_store import ProvenanceStore
         from pathlib import Path
+
+        from modelops_calabaria.calibration.wire import calibration_wire
+
+        from modelops.services.provenance_store import ProvenanceStore
 
         # Create simulation service
         sim_service = DaskSimulationService(client)
@@ -321,9 +328,14 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
             try:
                 prov_store = ProvenanceStore(
                     storage_dir=Path("/tmp/modelops/provenance"),
-                    azure_backend={"container": "results", "connection_string": conn_str}
+                    azure_backend={
+                        "container": "results",
+                        "connection_string": conn_str,
+                    },
                 )
-                logger.info("ProvenanceStore initialized with Azure backend for calibration results")
+                logger.info(
+                    "ProvenanceStore initialized with Azure backend for calibration results"
+                )
             except Exception as e:
                 logger.warning(f"Could not initialize ProvenanceStore with Azure: {e}")
                 prov_store = None
@@ -333,8 +345,7 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
         return
     except ImportError:
         logger.warning(
-            "modelops-calabaria calibration module not available. "
-            "Using basic implementation."
+            "modelops-calabaria calibration module not available. Using basic implementation."
         )
 
     # Fallback to basic implementation if calibration wire not available
@@ -386,9 +397,7 @@ def run_calibration_job(job: CalibrationJob, client: Client) -> None:
     logger.info(f"Calibration job {job.job_id} completed after {iteration} iterations")
 
 
-def create_adaptive_algorithm(
-    algorithm: str, config: Dict[str, Any]
-) -> AdaptiveAlgorithm:
+def create_adaptive_algorithm(algorithm: str, config: dict[str, Any]) -> AdaptiveAlgorithm:
     """Create adaptive algorithm instance.
 
     Args:
@@ -407,8 +416,7 @@ def create_adaptive_algorithm(
         from modelops_calabaria.calibration.factory import parse_parameter_specs
     except ImportError as e:
         raise ImportError(
-            "modelops-calabaria not installed. "
-            "Please install it to use calibration features."
+            "modelops-calabaria not installed. Please install it to use calibration features."
         ) from e
 
     # Parse parameter specs if provided
@@ -439,7 +447,7 @@ def evaluate_results(sim_results, target_spec: TargetSpec):
     raise NotImplementedError("Result evaluation not yet implemented")
 
 
-def check_convergence(trial_results, criteria: Dict[str, float]) -> bool:
+def check_convergence(trial_results, criteria: dict[str, float]) -> bool:
     """Check if convergence criteria are met.
 
     Args:
@@ -470,9 +478,7 @@ def main():
         logger.info(f"Loaded {job.job_type} job: {job.job_id}")
 
         # Connect to Dask scheduler
-        scheduler_addr = os.environ.get(
-            "DASK_SCHEDULER_ADDRESS", "tcp://dask-scheduler:8786"
-        )
+        scheduler_addr = os.environ.get("DASK_SCHEDULER_ADDRESS", "tcp://dask-scheduler:8786")
         logger.info(f"Connecting to Dask scheduler at {scheduler_addr}")
 
         client = Client(scheduler_addr)

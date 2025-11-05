@@ -4,10 +4,10 @@ Provides lightweight context-manager based telemetry for capturing
 execution timing and metrics without requiring external dependencies.
 """
 
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-import time
+from typing import Any
 
 
 @dataclass
@@ -19,14 +19,14 @@ class NoopSpan:
     stay clean without guards: span.metrics["key"] = value just works.
     """
 
-    metrics: Dict[str, float] = field(default_factory=dict)
-    tags: Dict[str, str] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
 
     def duration(self) -> None:
         """Always returns None for disabled telemetry."""
         return None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Returns empty dict for disabled telemetry."""
         return {}
 
@@ -44,17 +44,17 @@ class TelemetrySpan:
 
     name: str
     start_time: float
-    end_time: Optional[float] = None
-    metrics: Dict[str, float] = field(default_factory=dict)
-    tags: Dict[str, str] = field(default_factory=dict)
+    end_time: float | None = None
+    metrics: dict[str, float] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
 
-    def duration(self) -> Optional[float]:
+    def duration(self) -> float | None:
         """Duration in seconds, or None if still running."""
         if self.end_time is None:
             return None
         return self.end_time - self.start_time
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
         return {
             "name": self.name,
@@ -87,8 +87,8 @@ class TelemetryCollector:
             enabled: If False, spans become no-ops (zero overhead)
         """
         self.enabled = enabled
-        self.spans: List[TelemetrySpan] = []
-        self._current_span: Optional[TelemetrySpan] = None
+        self.spans: list[TelemetrySpan] = []
+        self._current_span: TelemetrySpan | None = None
 
     @contextmanager
     def span(self, name: str, **tags):
@@ -142,7 +142,7 @@ class TelemetryCollector:
         if self.enabled and self._current_span:
             self._current_span.metrics[key] = value
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Export all telemetry as JSON-compatible dict."""
         return {
             "spans": [s.to_dict() for s in self.spans],

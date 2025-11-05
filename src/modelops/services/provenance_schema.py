@@ -5,9 +5,10 @@ using a simple DSL. Different schemas create isolated storage namespaces,
 enabling different invalidation strategies.
 """
 
-import re
 import hashlib
-from typing import Dict, Any, Optional
+import re
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -34,23 +35,21 @@ class ProvenanceSchema(BaseModel, frozen=True):
 
     # Path templates with DSL
     root_template: str = Field(
-        default="{schema_name}/v{version}",
-        description="Root directory template"
+        default="{schema_name}/v{version}", description="Root directory template"
     )
 
     sim_path_template: str = Field(
         default="sims/{bundle_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
-        description="Template for simulation result paths"
+        description="Template for simulation result paths",
     )
 
     agg_path_template: str = Field(
         default="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}",
-        description="Template for aggregation result paths"
+        description="Template for aggregation result paths",
     )
 
     job_path_template: str = Field(
-        default="jobs/{job_type}/{job_id}",
-        description="Template for job-level paths"
+        default="jobs/{job_type}/{job_id}", description="Template for job-level paths"
     )
 
     @field_validator("root_template", "sim_path_template", "agg_path_template", "job_path_template")
@@ -62,7 +61,9 @@ class ProvenanceSchema(BaseModel, frozen=True):
             raise ValueError(f"Unbalanced braces in template: {v}")
 
         # Check for valid DSL patterns - includes slicing like param_id[:8]
-        pattern = r"\{([a-z_]+(?:\[:\d+\])?|hash\([a-z_]+\)(?:\[:\d+\])?|shard\([a-z_]+,\d+,\d+\))\}"
+        pattern = (
+            r"\{([a-z_]+(?:\[:\d+\])?|hash\([a-z_]+\)(?:\[:\d+\])?|shard\([a-z_]+,\d+,\d+\))\}"
+        )
         invalid = re.findall(r"\{[^}]+\}", v)
         for match in invalid:
             if not re.match(pattern, match):
@@ -70,7 +71,7 @@ class ProvenanceSchema(BaseModel, frozen=True):
 
         return v
 
-    def render_path(self, template: str, context: Dict[str, Any]) -> str:
+    def render_path(self, template: str, context: dict[str, Any]) -> str:
         """Render a path template with the given context.
 
         Args:
@@ -81,18 +82,14 @@ class ProvenanceSchema(BaseModel, frozen=True):
             Rendered path string
         """
         # Add schema metadata to context
-        full_context = {
-            "schema_name": self.name,
-            "version": self.version,
-            **context
-        }
+        full_context = {"schema_name": self.name, "version": self.version, **context}
 
         # Process DSL expressions
         def replace_expr(match):
             expr = match.group(1)
 
             # Check if it's a function call (contains parentheses)
-            if '(' not in expr:
+            if "(" not in expr:
                 # Direct variable interpolation (with optional slicing)
                 var_match = re.match(r"([a-z_]+)(?:\[:(\d+)\])?", expr)
                 if var_match:
@@ -133,7 +130,7 @@ class ProvenanceSchema(BaseModel, frozen=True):
                 parts = []
                 for i in range(depth):
                     start = i * width
-                    parts.append(hash_val[start:start + width])
+                    parts.append(hash_val[start : start + width])
                 return "/".join(parts)
 
             raise ValueError(f"Unknown DSL expression: {expr}")
@@ -143,24 +140,15 @@ class ProvenanceSchema(BaseModel, frozen=True):
 
     def sim_path(self, **kwargs) -> str:
         """Render simulation result path."""
-        return self.render_path(
-            f"{self.root_template}/{self.sim_path_template}",
-            kwargs
-        )
+        return self.render_path(f"{self.root_template}/{self.sim_path_template}", kwargs)
 
     def agg_path(self, **kwargs) -> str:
         """Render aggregation result path."""
-        return self.render_path(
-            f"{self.root_template}/{self.agg_path_template}",
-            kwargs
-        )
+        return self.render_path(f"{self.root_template}/{self.agg_path_template}", kwargs)
 
     def job_path(self, **kwargs) -> str:
         """Render job-level path."""
-        return self.render_path(
-            f"{self.root_template}/{self.job_path_template}",
-            kwargs
-        )
+        return self.render_path(f"{self.root_template}/{self.job_path_template}", kwargs)
 
 
 # Pre-defined schema instances for different strategies
@@ -168,14 +156,14 @@ BUNDLE_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="bundle",
     version=1,
     sim_path_template="sims/{bundle_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
-    agg_path_template="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}"
+    agg_path_template="aggs/{bundle_digest[:12]}/target_{target}/agg_{aggregation_id}",
 )
 
 TOKEN_INVALIDATION_SCHEMA = ProvenanceSchema(
     name="token",
     version=1,
     sim_path_template="sims/{model_digest[:12]}/{shard(param_id,2,2)}/params_{param_id[:8]}/seed_{seed}",
-    agg_path_template="aggs/{model_digest[:12]}/target_{target}/agg_{aggregation_id}"
+    agg_path_template="aggs/{model_digest[:12]}/target_{target}/agg_{aggregation_id}",
 )
 
 DEFAULT_SCHEMA = TOKEN_INVALIDATION_SCHEMA

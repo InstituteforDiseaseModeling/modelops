@@ -9,39 +9,38 @@ import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Any, List, Tuple
-from dataclasses import replace
+from typing import Any
 
-from modelops_contracts import SimTask, SimReturn, TableArtifact, ErrorInfo
-from modelops_contracts.simulation import AggregationTask, AggregationReturn
-from modelops_contracts.ports import ExecutionEnvironment, BundleRepository
+from modelops_contracts import ErrorInfo, SimReturn, SimTask, TableArtifact
+from modelops_contracts.ports import BundleRepository, ExecutionEnvironment
+from modelops_contracts.simulation import AggregationReturn, AggregationTask
 
-from ...worker.process_manager import WarmProcessManager
+from ...services.provenance_schema import DEFAULT_SCHEMA, ProvenanceSchema
 from ...services.provenance_store import ProvenanceStore
-from ...services.provenance_schema import ProvenanceSchema, DEFAULT_SCHEMA
+from ...worker.process_manager import WarmProcessManager
 
 logger = logging.getLogger(__name__)
 
 
 class IsolatedWarmExecEnv(ExecutionEnvironment):
     """Execution environment using warm isolated subprocesses.
-    
+
     This environment maintains a pool of warm subprocesses, each
     isolated with its own virtual environment. Processes are reused
     for the same bundle digest to avoid repeated initialization.
     """
-    
+
     def __init__(
         self,
         bundle_repo: BundleRepository,
         venvs_dir: Path,
         storage_dir: Path,
-        mem_limit_bytes: Optional[int] = None,
+        mem_limit_bytes: int | None = None,
         max_warm_processes: int = 128,
-        provenance_schema: Optional[ProvenanceSchema] = None,
+        provenance_schema: ProvenanceSchema | None = None,
         force_fresh_venv: bool = False,
         disable_provenance_cache: bool = False,
-        azure_backend: Optional[Dict[str, Any]] = None
+        azure_backend: dict[str, Any] | None = None,
     ):
         """Initialize the execution environment.
 
@@ -60,23 +59,24 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         self.venvs_dir = venvs_dir
         self.storage_dir = storage_dir
         self.mem_limit_bytes = mem_limit_bytes
-        self.disable_provenance_cache = disable_provenance_cache or \
-            os.environ.get("MODELOPS_DISABLE_PROVENANCE", "").lower() in ("1", "true")
+        self.disable_provenance_cache = disable_provenance_cache or os.environ.get(
+            "MODELOPS_DISABLE_PROVENANCE", ""
+        ).lower() in ("1", "true")
 
         # Create provenance store with optional Azure backend
         self.provenance = ProvenanceStore(
             storage_dir=storage_dir,
             schema=provenance_schema or DEFAULT_SCHEMA,
-            azure_backend=azure_backend
+            azure_backend=azure_backend,
         )
 
         # Create process manager
         self._process_manager = WarmProcessManager(
             venvs_dir=venvs_dir,
             max_processes=max_warm_processes,
-            force_fresh_venv=force_fresh_venv
+            force_fresh_venv=force_fresh_venv,
         )
-    
+
     def run(self, task: SimTask) -> SimReturn:
         """Execute simulation task.
 
@@ -105,7 +105,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 bundle_path=bundle_path,
                 entrypoint=str(task.entrypoint) if task.entrypoint else "main",
                 params=dict(task.params.params),
-                seed=task.seed
+                seed=task.seed,
             )
 
             # 3. Create return value
@@ -123,9 +123,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 str(task.entrypoint) if task.entrypoint else "main",
                 dict(task.params.params),
                 task.seed,
-                e
+                e,
             )
-    
+
     def run_aggregation(self, task: AggregationTask) -> AggregationReturn:
         """Execute aggregation task.
 
@@ -155,20 +155,21 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 bundle_path=bundle_path,
                 target_entrypoint=str(task.target_entrypoint),
                 sim_returns=serialized_returns,
-                target_data=task.target_data
+                target_data=task.target_data,
             )
 
             # 4. Handle errors and return
-            if 'error' in result:
+            if "error" in result:
                 from modelops.utils.error_utils import format_aggregation_error
+
                 raise RuntimeError(format_aggregation_error(result))
 
             agg_return = AggregationReturn(
                 aggregation_id=task.aggregation_id(),
-                loss=result['loss'],
-                diagnostics=result.get('diagnostics', {}),
+                loss=result["loss"],
+                diagnostics=result.get("diagnostics", {}),
                 outputs={},  # Could add aggregated outputs
-                n_replicates=result.get('n_replicates', len(task.sim_returns))
+                n_replicates=result.get("n_replicates", len(task.sim_returns)),
             )
 
             # 5. Store in provenance (if enabled)
@@ -180,15 +181,15 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         except Exception as e:
             logger.error(f"Aggregation execution failed: {e}")
             raise
-    
-    def health_check(self) -> Dict[str, Any]:
+
+    def health_check(self) -> dict[str, Any]:
         """Check health of execution environment."""
         return {
-            'type': 'isolated_warm',
-            'active_processes': self._process_manager.active_count(),
-            'venvs_dir': str(self.venvs_dir)
+            "type": "isolated_warm",
+            "active_processes": self._process_manager.active_count(),
+            "venvs_dir": str(self.venvs_dir),
         }
-    
+
     def shutdown(self):
         """Clean shutdown of all warm processes."""
         logger.info("Shutting down IsolatedWarmExecEnv")
@@ -209,8 +210,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         # The bundle repository should handle both
         return self.bundle_repo.ensure_local(bundle_ref)
 
-
-    def _create_sim_return(self, task: SimTask, raw_artifacts: Dict[str, Any]) -> SimReturn:
+    def _create_sim_return(self, task: SimTask, raw_artifacts: dict[str, Any]) -> SimReturn:
         """Create SimReturn from task and raw subprocess artifacts.
 
         Args:
@@ -223,6 +223,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         Raises:
             RuntimeError: If subprocess returned an error
         """
+
         # Log total artifact size for debugging (without full decode)
         def estimate_b64_size(s: str) -> int:
             """Estimate decoded size from base64 without decoding."""
@@ -232,8 +233,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             return (3 * (n // 4)) - pad
 
         total_size = sum(
-            estimate_b64_size(v) if isinstance(v, str) else len(v)
-            for v in raw_artifacts.values()
+            estimate_b64_size(v) if isinstance(v, str) else len(v) for v in raw_artifacts.values()
         )
 
         # Warn about large payloads
@@ -247,6 +247,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             error_data = base64.b64decode(raw_artifacts["error"])
             # Import json locally to avoid Python 3.13 scope issue
             import json as json_module
+
             error_info = json_module.loads(error_data)
             raise RuntimeError(
                 f"Subprocess execution failed: {error_info.get('error', 'Unknown error')} "
@@ -268,6 +269,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             if name == "metadata" and decoded_data:
                 # Import json locally to avoid Python 3.13 scope issue
                 import json as json_module
+
                 try:
                     metadata = json_module.loads(decoded_data)
                     if "error" in metadata:
@@ -285,14 +287,14 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
             # Warn about empty outputs for key artifacts
             if name == "table" and len(decoded_data) == 0:
-                logger.warning(f"Empty table output detected for task {task.params.param_id[:8]}-seed{task.seed}")
+                logger.warning(
+                    f"Empty table output detected for task {task.params.param_id[:8]}-seed{task.seed}"
+                )
 
             checksum = hashlib.blake2b(decoded_data, digest_size=32).hexdigest()
 
             outputs[name] = TableArtifact(
-                size=len(decoded_data),
-                inline=decoded_data,
-                checksum=checksum
+                size=len(decoded_data), inline=decoded_data, checksum=checksum
             )
 
         # Generate task_id from components
@@ -301,7 +303,11 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
         # Final validation - ensure we have meaningful outputs
-        table_artifacts = [art for name, art in outputs.items() if isinstance(art, TableArtifact) and name != "metadata"]
+        table_artifacts = [
+            art
+            for name, art in outputs.items()
+            if isinstance(art, TableArtifact) and name != "metadata"
+        ]
         if table_artifacts and all(art.size == 0 for art in table_artifacts):
             raise RuntimeError(
                 f"All outputs are empty for task {task.params.param_id[:8]}-seed{task.seed}. "
@@ -309,13 +315,9 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
                 f"This often indicates the model registry could not be found or loaded."
             )
 
-        return SimReturn(
-            task_id=tid,
-            outputs=outputs
-        )
+        return SimReturn(task_id=tid, outputs=outputs)
 
-
-    def _serialize_sim_returns(self, sim_returns: List[SimReturn]) -> List[Dict]:
+    def _serialize_sim_returns(self, sim_returns: list[SimReturn]) -> list[dict]:
         """Serialize SimReturns for JSON-RPC transport.
 
         Args:
@@ -326,27 +328,31 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         """
         serialized_returns = []
         for sr in sim_returns:
-            sr_dict = {
-                'task_id': sr.task_id,
-                'outputs': {}
-            }
+            sr_dict = {"task_id": sr.task_id, "outputs": {}}
 
             for name, artifact in sr.outputs.items():
                 # For MVP, always use inline data
                 if not artifact.inline:
                     raise ValueError(f"Artifact {name} missing inline data for aggregation")
 
-                sr_dict['outputs'][name] = {
-                    'size': artifact.size,
-                    'checksum': artifact.checksum,
-                    'inline': base64.b64encode(artifact.inline).decode('ascii')
+                sr_dict["outputs"][name] = {
+                    "size": artifact.size,
+                    "checksum": artifact.checksum,
+                    "inline": base64.b64encode(artifact.inline).decode("ascii"),
                 }
 
             serialized_returns.append(sr_dict)
 
         return serialized_returns
 
-    def _create_error_return(self, bundle_ref: str, entrypoint: str, params: dict, seed: int, exception: Exception) -> SimReturn:
+    def _create_error_return(
+        self,
+        bundle_ref: str,
+        entrypoint: str,
+        params: dict,
+        seed: int,
+        exception: Exception,
+    ) -> SimReturn:
         """Create error SimReturn from exception.
 
         Args:
@@ -363,6 +369,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
         # Create simple task_id for error case
         from modelops_contracts import make_param_id
+
         param_id = make_param_id(params)
         tid_components = f"{param_id[:16]}-{seed}-error"
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
@@ -371,30 +378,31 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         error_info = ErrorInfo(
             error_type=type(exception).__name__,
             message=str(exception),
-            retryable=False  # Could be smarter about this based on error type
+            retryable=False,  # Could be smarter about this based on error type
         )
 
         # Store full error details as artifact (always inline for MVP)
         # Import json locally to avoid Python 3.13 scope issue
         import json as json_module
-        error_details_data = json_module.dumps({
-            "error": str(exception),
-            "type": type(exception).__name__,
-            "bundle_ref": bundle_ref,
-            "entrypoint": entrypoint,
-            "traceback": None  # Could capture traceback if needed
-        }).encode()
+
+        error_details_data = json_module.dumps(
+            {
+                "error": str(exception),
+                "type": type(exception).__name__,
+                "bundle_ref": bundle_ref,
+                "entrypoint": entrypoint,
+                "traceback": None,  # Could capture traceback if needed
+            }
+        ).encode()
         checksum = hashlib.blake2b(error_details_data, digest_size=32).hexdigest()
 
         error_details = TableArtifact(
-            size=len(error_details_data),
-            inline=error_details_data,
-            checksum=checksum
+            size=len(error_details_data), inline=error_details_data, checksum=checksum
         )
 
         return SimReturn(
             task_id=tid,
             outputs={},  # Empty outputs for error case
             error=error_info,
-            error_details=error_details
+            error_details=error_details,
         )

@@ -39,10 +39,13 @@ def test_job_submission_with_registry():
             mock_batch.return_value = mock_batch_instance
 
             # Mock storage connection retrieval and Azure services
-            with patch.object(JobSubmissionClient, "_get_storage_connection", return_value="fake-connection"), \
-                 patch("modelops.client.job_submission.AzureBlobBackend") as mock_storage, \
-                 patch("modelops.client.job_submission.AzureVersionedStore") as mock_versioned:
-
+            with (
+                patch.object(
+                    JobSubmissionClient, "_get_storage_connection", return_value="fake-connection"
+                ),
+                patch("modelops.client.job_submission.AzureBlobBackend") as mock_storage,
+                patch("modelops.client.job_submission.AzureVersionedStore") as mock_versioned,
+            ):
                 # Configure mocks
                 mock_storage_instance = MagicMock()
                 mock_storage.return_value = mock_storage_instance
@@ -71,7 +74,7 @@ def test_job_submission_with_registry():
                 job_id = client.submit_sim_job(
                     study=study,
                     bundle_strategy="explicit",
-                    bundle_ref="test-bundle@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+                    bundle_ref="test-bundle@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
                 )
 
             # Verify job was registered
@@ -95,9 +98,7 @@ def test_job_submission_with_registry():
 
             # Simulate job completion
             registry.finalize_job(
-                job_id,
-                JobStatus.SUCCEEDED,
-                results_path="s3://bucket/results/test"
+                job_id, JobStatus.SUCCEEDED, results_path="s3://bucket/results/test"
             )
 
             # Verify final state
@@ -123,7 +124,7 @@ def test_cli_status_command():
         job_id="test-123",
         k8s_name="test-123",  # job_id already contains prefix if needed
         namespace="modelops-dask-dev",
-        metadata={"test": True}
+        metadata={"test": True},
     )
     registry.update_status("test-123", JobStatus.SUBMITTING)
     registry.update_status("test-123", JobStatus.SCHEDULED)
@@ -131,8 +132,10 @@ def test_cli_status_command():
     registry.update_progress("test-123", tasks_completed=5, tasks_total=10)
 
     # Mock both resolve_env and _get_registry
-    with patch("modelops.cli.utils.resolve_env", return_value="dev"), \
-         patch("modelops.cli.jobs._get_registry") as mock_get_registry:
+    with (
+        patch("modelops.cli.utils.resolve_env", return_value="dev"),
+        patch("modelops.cli.jobs._get_registry") as mock_get_registry,
+    ):
         mock_get_registry.return_value = registry
 
         # Run the status command
@@ -163,7 +166,7 @@ def test_cli_list_command():
         registry.register_job(
             job_id=job_id,
             k8s_name=job_id,  # job_id already contains prefix if needed
-            namespace="modelops-dask-dev"
+            namespace="modelops-dask-dev",
         )
 
         # Different statuses
@@ -184,8 +187,10 @@ def test_cli_list_command():
             registry.update_status(job_id, JobStatus.FAILED)
 
     # Mock both resolve_env and _get_registry
-    with patch("modelops.cli.utils.resolve_env", return_value="dev"), \
-         patch("modelops.cli.jobs._get_registry") as mock_get_registry:
+    with (
+        patch("modelops.cli.utils.resolve_env", return_value="dev"),
+        patch("modelops.cli.jobs._get_registry") as mock_get_registry,
+    ):
         mock_get_registry.return_value = registry
 
         # Run the list command

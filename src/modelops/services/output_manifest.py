@@ -5,13 +5,13 @@ its specification. These paths are used to validate that all expected
 outputs were actually created.
 """
 
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
 import hashlib
 import json
+from dataclasses import dataclass
+from typing import Any
 
-from modelops_contracts import SimJob, SimTask, CalibrationJob
-from modelops_contracts.simulation import UniqueParameterSet, AggregationTask
+from modelops_contracts import CalibrationJob, SimJob, SimTask
+from modelops_contracts.simulation import AggregationTask
 
 from .provenance_schema import ProvenanceSchema
 
@@ -23,23 +23,21 @@ class OutputSpec:
     Contains all information needed to verify an output exists
     and reconstruct missing tasks for resumption.
     """
-    param_id: str                # Parameter set ID
-    seed: int                    # Random seed for simulation
-    output_type: str             # "simulation" or "aggregation"
-    bundle_digest: str           # Bundle hash for invalidation
-    replicate_count: int         # Number of replicates
-    provenance_path: str         # Expected path in ProvenanceStore
+
+    param_id: str  # Parameter set ID
+    seed: int  # Random seed for simulation
+    output_type: str  # "simulation" or "aggregation"
+    bundle_digest: str  # Bundle hash for invalidation
+    replicate_count: int  # Number of replicates
+    provenance_path: str  # Expected path in ProvenanceStore
 
     # Additional fields for task reconstruction
-    param_values: Optional[Dict[str, Any]] = None   # Original parameter values
-    target_id: Optional[str] = None                 # Target ID for aggregation tasks
-    aggregation_id: Optional[str] = None            # Aggregation ID
+    param_values: dict[str, Any] | None = None  # Original parameter values
+    target_id: str | None = None  # Target ID for aggregation tasks
+    aggregation_id: str | None = None  # Aggregation ID
 
 
-def generate_output_manifest(
-    job: SimJob,
-    provenance_schema: ProvenanceSchema
-) -> List[OutputSpec]:
+def generate_output_manifest(job: SimJob, provenance_schema: ProvenanceSchema) -> list[OutputSpec]:
     """Generate expected outputs from job specification.
 
     Creates a complete list of all expected outputs based on the job's
@@ -77,8 +75,7 @@ def generate_output_manifest(
 
             # Render the simulation path
             sim_path = provenance_schema.render_path(
-                provenance_schema.sim_path_template,
-                path_context
+                provenance_schema.sim_path_template, path_context
             )
 
             # Create output spec for simulation result
@@ -100,9 +97,8 @@ def generate_output_manifest(
 
 
 def generate_calibration_manifest(
-    job: CalibrationJob,
-    provenance_schema: ProvenanceSchema
-) -> List[OutputSpec]:
+    job: CalibrationJob, provenance_schema: ProvenanceSchema
+) -> list[OutputSpec]:
     """Generate expected outputs for calibration job.
 
     Calibration jobs include both simulation outputs and aggregation/target
@@ -134,8 +130,7 @@ def generate_calibration_manifest(
             }
 
             sim_path = provenance_schema.render_path(
-                provenance_schema.sim_path_template,
-                path_context
+                provenance_schema.sim_path_template, path_context
             )
 
             output = OutputSpec(
@@ -150,9 +145,13 @@ def generate_calibration_manifest(
             outputs.append(output)
 
     # Add aggregation outputs for each target
-    if hasattr(job, 'targets') and job.targets:
+    if hasattr(job, "targets") and job.targets:
         for target in job.targets:
-            target_id = target.target_id if hasattr(target, 'target_id') else f"target_{hash(str(target))[:8]}"
+            target_id = (
+                target.target_id
+                if hasattr(target, "target_id")
+                else f"target_{hash(str(target))[:8]}"
+            )
 
             # For each parameter set that needs aggregation
             for param_set in job.parameter_sets:
@@ -160,11 +159,11 @@ def generate_calibration_manifest(
                 agg_data = {
                     "param_id": param_set.param_id,
                     "target_id": target_id,
-                    "replicate_count": param_set.replicate_count
+                    "replicate_count": param_set.replicate_count,
                 }
-                agg_id = hashlib.sha256(
-                    json.dumps(agg_data, sort_keys=True).encode()
-                ).hexdigest()[:16]
+                agg_id = hashlib.sha256(json.dumps(agg_data, sort_keys=True).encode()).hexdigest()[
+                    :16
+                ]
 
                 # Generate aggregation path
                 agg_context = {
@@ -176,8 +175,7 @@ def generate_calibration_manifest(
                 }
 
                 agg_path = provenance_schema.render_path(
-                    provenance_schema.agg_path_template,
-                    agg_context
+                    provenance_schema.agg_path_template, agg_context
                 )
 
                 # Create aggregation output spec
@@ -197,7 +195,7 @@ def generate_calibration_manifest(
     return outputs
 
 
-def reconstruct_task_from_spec(output_spec: OutputSpec) -> Optional[SimTask]:
+def reconstruct_task_from_spec(output_spec: OutputSpec) -> SimTask | None:
     """Reconstruct a SimTask from an OutputSpec.
 
     Used when resuming partial jobs to recreate tasks for missing outputs.
@@ -218,17 +216,18 @@ def reconstruct_task_from_spec(output_spec: OutputSpec) -> Optional[SimTask]:
         entrypoint="simulations.model/run",  # Valid entrypoint format
         bundle_ref=output_spec.bundle_digest,
         params=UniqueParameterSet(
-            param_id=output_spec.param_id,
-            params=output_spec.param_values or {}
+            param_id=output_spec.param_id, params=output_spec.param_values or {}
         ),
         seed=output_spec.seed,
-        outputs=["output.csv"]  # Default output
+        outputs=["output.csv"],  # Default output
     )
 
     return task
 
 
-def reconstruct_aggregation_from_spec(output_spec: OutputSpec) -> Optional[AggregationTask]:
+def reconstruct_aggregation_from_spec(
+    output_spec: OutputSpec,
+) -> AggregationTask | None:
     """Reconstruct an AggregationTask from an OutputSpec.
 
     Used when resuming partial jobs to recreate aggregation tasks.

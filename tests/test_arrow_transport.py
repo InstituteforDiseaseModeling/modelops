@@ -4,10 +4,7 @@ import base64
 import io
 import pytest
 import polars as pl
-from modelops.worker.arrow_transport import (
-    decode_arrow_data,
-    extract_arrow_from_artifact
-)
+from modelops.worker.arrow_transport import decode_arrow_data, extract_arrow_from_artifact
 
 
 def create_test_arrow_bytes() -> bytes:
@@ -30,14 +27,14 @@ class TestDecodeArrowData:
     def test_base64_with_hint(self):
         """Test base64 decoding with explicit hint."""
         arrow_bytes = create_test_arrow_bytes()
-        base64_str = base64.b64encode(arrow_bytes).decode('ascii')
+        base64_str = base64.b64encode(arrow_bytes).decode("ascii")
         result = decode_arrow_data(base64_str, encoding_hint="base64")
         assert result == arrow_bytes
 
     def test_base64_auto_detect(self):
         """Test base64 auto-detection when it starts with ARROW."""
         arrow_bytes = create_test_arrow_bytes()
-        base64_str = base64.b64encode(arrow_bytes).decode('ascii')
+        base64_str = base64.b64encode(arrow_bytes).decode("ascii")
         result = decode_arrow_data(base64_str)
         assert result == arrow_bytes
 
@@ -64,7 +61,7 @@ class TestExtractArrowFromArtifact:
     def test_dict_with_inline_base64(self):
         """Test extraction from dict with base64 inline field."""
         arrow_bytes = create_test_arrow_bytes()
-        base64_str = base64.b64encode(arrow_bytes).decode('ascii')
+        base64_str = base64.b64encode(arrow_bytes).decode("ascii")
         artifact = {"inline": base64_str, "size": len(arrow_bytes)}
         result = extract_arrow_from_artifact(artifact)
         assert result == arrow_bytes
@@ -79,7 +76,7 @@ class TestExtractArrowFromArtifact:
     def test_dict_with_data_field(self):
         """Test extraction from dict with data field instead of inline."""
         arrow_bytes = create_test_arrow_bytes()
-        base64_str = base64.b64encode(arrow_bytes).decode('ascii')
+        base64_str = base64.b64encode(arrow_bytes).decode("ascii")
         artifact = {"data": base64_str}
         result = extract_arrow_from_artifact(artifact)
         assert result == arrow_bytes
@@ -102,10 +99,7 @@ class TestIntegrationWithPolars:
     def test_round_trip_through_base64(self):
         """Test full round trip through base64 encoding."""
         # Create original DataFrame
-        df_original = pl.DataFrame({
-            "id": [1, 2, 3],
-            "value": [10.5, 20.3, 30.1]
-        })
+        df_original = pl.DataFrame({"id": [1, 2, 3], "value": [10.5, 20.3, 30.1]})
 
         # Convert to Arrow bytes
         buf = io.BytesIO()
@@ -113,7 +107,7 @@ class TestIntegrationWithPolars:
         arrow_bytes = buf.getvalue()
 
         # Simulate serialization for JSON-RPC
-        base64_str = base64.b64encode(arrow_bytes).decode('ascii')
+        base64_str = base64.b64encode(arrow_bytes).decode("ascii")
         artifact = {"inline": base64_str}
 
         # Extract and load back

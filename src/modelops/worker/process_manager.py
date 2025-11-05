@@ -15,22 +15,20 @@ The locking mechanism is essential for production where multiple workers
 legitimately need to share the same venv cache.
 """
 
-import base64
+import fcntl
 import hashlib
 import io
 import logging
 import os
-import select
 import subprocess
 import sys
-import fcntl
+import threading
 import time
 import uuid
-import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Any
+from typing import Any
 
 from .jsonrpc import JSONRPCClient
 
@@ -45,13 +43,15 @@ class WarmProcess:
     client: JSONRPCClient
     bundle_digest: str
     use_count: int = 0
-    stderr_file: Optional[io.FileIO] = None  # File handle for stderr logging
-    _lock: threading.RLock = field(default_factory=threading.RLock)  # Reentrant lock for same thread
-    
+    stderr_file: io.FileIO | None = None  # File handle for stderr logging
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock
+    )  # Reentrant lock for same thread
+
     def is_alive(self) -> bool:
         """Check if the process is still running."""
         return self.process.poll() is None
-    
+
     def terminate(self):
         """Terminate the process gracefully."""
         with self._lock:
@@ -96,15 +96,20 @@ class WarmProcess:
 
 class WarmProcessManager:
     """Manages a pool of warm subprocesses for bundle execution.
-    
+
     Keeps processes warm and reuses them for the same bundle digest
     to avoid repeated initialization overhead. Uses LRU eviction
     when the pool is full.
     """
-    
-    def __init__(self, max_processes: int = 128, venvs_dir: Path = Path("/tmp/modelops/venvs"), force_fresh_venv: bool = False):
+
+    def __init__(
+        self,
+        max_processes: int = 128,
+        venvs_dir: Path = Path("/tmp/modelops/venvs"),
+        force_fresh_venv: bool = False,
+    ):
         """Initialize the process manager.
-        
+
         Args:
             max_processes: Maximum number of warm processes to maintain
             venvs_dir: Directory for virtual environments
@@ -114,23 +119,25 @@ class WarmProcessManager:
         self.venvs_dir = Path(venvs_dir)
         self.venvs_dir.mkdir(parents=True, exist_ok=True)
         self.force_fresh_venv = force_fresh_venv
-        
+
         # Use OrderedDict for LRU behavior
         self._processes: OrderedDict[str, WarmProcess] = OrderedDict()
-    
+
     def get_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Get or create a warm process for the given bundle.
-        
+
         Args:
             bundle_digest: SHA256 digest of the bundle
             bundle_path: Local path to the bundle
-            
+
         Returns:
             WarmProcess ready to execute tasks
         """
         # Skip cache entirely when forcing fresh venvs
         if self.force_fresh_venv:
-            logger.info(f"Forcing fresh venv for bundle {bundle_digest[:12]} (MODELOPS_FORCE_FRESH_VENV=true)")
+            logger.info(
+                f"Forcing fresh venv for bundle {bundle_digest[:12]} (MODELOPS_FORCE_FRESH_VENV=true)"
+            )
             # Still need to check pool size
             if len(self._processes) >= self.max_processes:
                 self._evict_lru()
@@ -140,11 +147,11 @@ class WarmProcessManager:
             unique_key = f"{bundle_digest}-{uuid.uuid4().hex[:8]}"
             self._processes[unique_key] = process
             return process
-        
+
         # Check if we have a warm process for this digest
         if bundle_digest in self._processes:
             process = self._processes[bundle_digest]
-            
+
             # Verify it's still alive
             if process.is_alive():
                 # Validate the process still serves the correct digest
@@ -156,8 +163,10 @@ class WarmProcessManager:
                         # Move to end (most recently used)
                         self._processes.move_to_end(bundle_digest)
                         process.use_count += 1
-                        logger.debug(f"Reusing warm process for bundle {bundle_digest[:12]} "
-                                   f"(use #{process.use_count})")
+                        logger.debug(
+                            f"Reusing warm process for bundle {bundle_digest[:12]} "
+                            f"(use #{process.use_count})"
+                        )
                         return process
                     else:
                         logger.warning(f"Process digest mismatch for {bundle_digest[:12]}")
@@ -179,53 +188,55 @@ class WarmProcessManager:
                 # Process died, remove it
                 logger.warning(f"Warm process for bundle {bundle_digest[:12]} died")
                 del self._processes[bundle_digest]
-        
+
         # Need to create a new process
         if len(self._processes) >= self.max_processes:
             # Evict least recently used
             self._evict_lru()
-        
+
         # Create new warm process with locking to prevent races
         process = self._create_process_with_lock(bundle_digest, bundle_path)
         self._processes[bundle_digest] = process
         return process
-    
+
     def _create_process_with_lock(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Create process with filesystem lock to prevent concurrent venv creation.
-        
+
         Args:
             bundle_digest: Bundle digest
             bundle_path: Path to bundle
-            
+
         Returns:
             New WarmProcess
         """
         venv_key = self._get_venv_key(bundle_digest, bundle_path)
         lock_file = self.venvs_dir / f"{venv_key}.lock"
-        
+
         # Ensure lock file exists
         lock_file.touch()
-        
-        with open(lock_file, 'r+') as lock:
+
+        with open(lock_file, "r+") as lock:
             # Acquire exclusive lock
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 # Check if another process created the venv while we waited
                 venv_path = self.venvs_dir / venv_key
                 python_bin = venv_path / "bin" / "python"
-                
+
                 if venv_path.exists() and python_bin.exists():
                     logger.info(f"Venv created by another process: {venv_path}")
                     # Just start the subprocess, venv already exists
                     return self._start_subprocess(venv_path, bundle_path, bundle_digest)
-                
+
                 # Create the process (which creates venv)
                 return self._create_process(bundle_digest, bundle_path)
             finally:
                 # Release lock
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-    
-    def _start_subprocess(self, venv_path: Path, bundle_path: Path, bundle_digest: str) -> WarmProcess:
+
+    def _start_subprocess(
+        self, venv_path: Path, bundle_path: Path, bundle_digest: str
+    ) -> WarmProcess:
         """Start a subprocess with existing venv.
 
         Args:
@@ -262,18 +273,21 @@ class WarmProcessManager:
             [
                 str(venv_python),  # Use venv's Python for clean isolation
                 str(runner_script),
-                "--bundle-path", str(bundle_path),
-                "--venv-path", str(venv_path),
-                "--bundle-digest", bundle_digest
+                "--bundle-path",
+                str(bundle_path),
+                "--venv-path",
+                str(venv_path),
+                "--bundle-digest",
+                bundle_digest,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=stderr_file,  # Direct to file, not PIPE
             text=False,  # Binary mode for proper Content-Length framing
-            bufsize=0,   # Unbuffered for immediate communication
+            bufsize=0,  # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
             cwd=str(bundle_path),  # Run from bundle directory so relative paths work
-            env=env
+            env=env,
         )
 
         # Check for immediate failure
@@ -281,14 +295,16 @@ class WarmProcessManager:
             # Process died immediately
             stderr_file.close()
             # Read back error from file for debugging
-            with open(log_path, 'rb') as f:
-                stderr_text = f.read().decode('utf-8', errors='replace')
+            with open(log_path, "rb") as f:
+                stderr_text = f.read().decode("utf-8", errors="replace")
 
             logger.error(f"Subprocess died immediately with exit code {process.returncode}")
             logger.error(f"Stderr from log file: {stderr_text}")
 
             # Include in error message for debugging
-            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
+            error_msg = (
+                f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
+            )
             raise RuntimeError(error_msg)
 
         # Create JSON-RPC client
@@ -301,9 +317,11 @@ class WarmProcessManager:
                 if process.poll() is not None:
                     # Process died, read stderr from file
                     stderr_file.close()
-                    with open(log_path, 'rb') as f:
-                        stderr_text = f.read().decode('utf-8', errors='replace')
-                    raise RuntimeError(f"Process died with code {process.returncode} before ready.\nStderr: {stderr_text}")
+                    with open(log_path, "rb") as f:
+                        stderr_text = f.read().decode("utf-8", errors="replace")
+                    raise RuntimeError(
+                        f"Process died with code {process.returncode} before ready.\nStderr: {stderr_text}"
+                    )
                 time.sleep(0.1)  # Shorter sleep for faster response
 
             # Create WarmProcess with stderr file handle
@@ -312,7 +330,7 @@ class WarmProcessManager:
                 client=client,
                 bundle_digest=bundle_digest,
                 use_count=1,
-                stderr_file=stderr_file
+                stderr_file=stderr_file,
             )
 
             result = warm_process.safe_call("ready", {}, timeout=10.0)
@@ -329,8 +347,8 @@ class WarmProcessManager:
             stderr_file.close()
             stderr_output = ""
             try:
-                with open(log_path, 'rb') as f:
-                    stderr_output = f.read().decode('utf-8', errors='replace')
+                with open(log_path, "rb") as f:
+                    stderr_output = f.read().decode("utf-8", errors="replace")
                     if stderr_output:
                         logger.error(f"Subprocess stderr during initialization:\n{stderr_output}")
             except Exception:
@@ -342,26 +360,31 @@ class WarmProcessManager:
                 error_msg += f"\nSubprocess stderr:\n{stderr_output}"
 
             raise RuntimeError(error_msg)
-    
+
     def _compute_deps_hash(self, bundle_path: Path) -> str:
         """Compute hash of dependency files.
-        
+
         Args:
             bundle_path: Path to the bundle
-            
+
         Returns:
             16-character hex digest of dependencies
         """
         hasher = hashlib.blake2b(digest_size=8)  # 16 hex chars
-        
+
         # Hash lock files and dependency specs
-        for dep_file in ["uv.lock", "poetry.lock", "requirements.txt", "pyproject.toml"]:
+        for dep_file in [
+            "uv.lock",
+            "poetry.lock",
+            "requirements.txt",
+            "pyproject.toml",
+        ]:
             dep_path = bundle_path / dep_file
             if dep_path.exists():
                 hasher.update(dep_path.read_bytes())
-        
+
         return hasher.hexdigest()
-    
+
     def _get_venv_key(self, bundle_digest: str, bundle_path: Path) -> str:
         """Generate venv directory name with all isolation factors.
 
@@ -383,7 +406,7 @@ class WarmProcessManager:
             return f"{base_key}-{unique_id}"
 
         return base_key
-    
+
     def _create_process(self, bundle_digest: str, bundle_path: Path) -> WarmProcess:
         """Create a new warm subprocess.
 
@@ -410,7 +433,7 @@ class WarmProcessManager:
                     ["uv", "venv", str(venv_path)],
                     check=True,
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
             except subprocess.CalledProcessError as e:
                 logger.error(f"Failed to create venv: {e.stderr}")
@@ -441,18 +464,21 @@ class WarmProcessManager:
             [
                 str(venv_python),  # Use venv's Python for clean isolation
                 str(runner_script),
-                "--bundle-path", str(bundle_path),
-                "--venv-path", str(venv_path),
-                "--bundle-digest", bundle_digest
+                "--bundle-path",
+                str(bundle_path),
+                "--venv-path",
+                str(venv_path),
+                "--bundle-digest",
+                bundle_digest,
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=stderr_file,  # Direct to file, not PIPE
             text=False,  # Binary mode for proper Content-Length framing
-            bufsize=0,   # Unbuffered for immediate communication
+            bufsize=0,  # Unbuffered for immediate communication
             close_fds=True,  # Prevent fd leakage
             cwd=str(bundle_path),  # Run from bundle directory so relative paths work
-            env=env
+            env=env,
         )
 
         # Check for immediate failure
@@ -460,14 +486,16 @@ class WarmProcessManager:
             # Process died immediately
             stderr_file.close()
             # Read back error from file for debugging
-            with open(log_path, 'rb') as f:
-                stderr_text = f.read().decode('utf-8', errors='replace')
+            with open(log_path, "rb") as f:
+                stderr_text = f.read().decode("utf-8", errors="replace")
 
             logger.error(f"Subprocess died immediately with exit code {process.returncode}")
             logger.error(f"Stderr from log file: {stderr_text}")
 
             # Include in error message for debugging
-            error_msg = f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
+            error_msg = (
+                f"Subprocess failed to start (exit {process.returncode}).\nStderr: {stderr_text}"
+            )
             raise RuntimeError(error_msg)
 
         # Create JSON-RPC client for communication
@@ -487,8 +515,8 @@ class WarmProcessManager:
             stderr_file.close()
             stderr_text = ""
             try:
-                with open(log_path, 'rb') as f:
-                    stderr_text = f.read().decode('utf-8', errors='replace')
+                with open(log_path, "rb") as f:
+                    stderr_text = f.read().decode("utf-8", errors="replace")
                     if stderr_text:
                         logger.error(f"Subprocess stderr: {stderr_text}")
             except Exception:
@@ -504,28 +532,35 @@ class WarmProcessManager:
             client=client,
             bundle_digest=bundle_digest,
             use_count=1,
-            stderr_file=stderr_file
+            stderr_file=stderr_file,
         )
-    
+
     def _evict_lru(self):
         """Evict the least recently used process."""
         if not self._processes:
             return
-        
+
         # Get least recently used (first item)
         digest, process = next(iter(self._processes.items()))
-        
-        logger.info(f"Evicting LRU process for bundle {digest[:12]} "
-                   f"(used {process.use_count} times)")
-        
+
+        logger.info(
+            f"Evicting LRU process for bundle {digest[:12]} (used {process.use_count} times)"
+        )
+
         # Terminate the process
         process.terminate()
-        
+
         # Remove from pool
         del self._processes[digest]
-    
-    def execute_task(self, bundle_digest: str, bundle_path: Path,
-                     entrypoint: str, params: Dict, seed: int) -> Dict[str, str]:
+
+    def execute_task(
+        self,
+        bundle_digest: str,
+        bundle_path: Path,
+        entrypoint: str,
+        params: dict,
+        seed: int,
+    ) -> dict[str, str]:
         """Execute a task in a warm process.
 
         Args:
@@ -540,6 +575,7 @@ class WarmProcessManager:
         """
         # Log execution sizes for debugging
         import sys
+
         params_size = sys.getsizeof(str(params))  # Estimate size
         logger.debug(
             f"Executing task with params size: ~{params_size:,} bytes, "
@@ -548,21 +584,16 @@ class WarmProcessManager:
 
         # Get or create warm process
         process = self.get_process(bundle_digest, bundle_path)
-        
+
         try:
             # Execute task via JSON-RPC using safe_call
             result = process.safe_call(
-                "execute",
-                {
-                    "entrypoint": entrypoint,
-                    "params": params,
-                    "seed": seed
-                }
+                "execute", {"entrypoint": entrypoint, "params": params, "seed": seed}
             )
-            
+
             # Result should already be base64-encoded strings
             return result
-            
+
         except Exception as e:
             # Process might be broken, remove it
             logger.error(f"Task execution failed: {e}")
@@ -574,34 +605,34 @@ class WarmProcessManager:
                     del self._processes[key]
                     break
             raise
-    
+
     def execute_aggregation(
-        self, 
-        bundle_digest: str, 
+        self,
+        bundle_digest: str,
         bundle_path: Path,
         target_entrypoint: str,
-        sim_returns: List[Dict[str, Any]],  # Already serialized SimReturns
-        target_data: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        sim_returns: list[dict[str, Any]],  # Already serialized SimReturns
+        target_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute aggregation task in a warm process.
-        
+
         This reuses the SAME warm process pool as simulations!
         The process already has the bundle installed and can run
         target evaluation code just like simulation code.
-        
+
         Args:
             bundle_digest: Bundle digest (for process selection)
             bundle_path: Path to the bundle
             target_entrypoint: Target evaluation entrypoint
             sim_returns: List of simulation results (already serialized)
             target_data: Optional empirical data
-            
+
         Returns:
             Aggregation result with loss and diagnostics
         """
         # Get or create warm process - SAME pool as simulations!
         process = self.get_process(bundle_digest, bundle_path)
-        
+
         try:
             # Execute aggregation via JSON-RPC using safe_call
             result = process.safe_call(
@@ -609,17 +640,18 @@ class WarmProcessManager:
                 {
                     "target_entrypoint": target_entrypoint,
                     "sim_returns": sim_returns,
-                    "target_data": target_data
-                }
+                    "target_data": target_data,
+                },
             )
-            
+
             # Check for errors
-            if 'error' in result:
+            if "error" in result:
                 from modelops.utils.error_utils import format_aggregation_error
+
                 raise RuntimeError(format_aggregation_error(result))
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Aggregation execution failed: {e}")
             # Process might be dead, remove it
@@ -631,17 +663,17 @@ class WarmProcessManager:
                     del self._processes[key]
                     break
             raise
-    
+
     def shutdown_all(self):
         """Shutdown all warm processes."""
         logger.info(f"Shutting down {len(self._processes)} warm processes")
-        
+
         for digest, process in list(self._processes.items()):
             logger.debug(f"Terminating process for bundle {digest[:12]}")
             process.terminate()
-        
+
         self._processes.clear()
-    
+
     def active_count(self) -> int:
         """Return the count of active processes."""
         return len(self._processes)

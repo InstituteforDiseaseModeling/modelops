@@ -1,13 +1,13 @@
 """Service for container registry management."""
 
-from typing import Dict, Any, Optional
 import subprocess
+from typing import Any
 
-from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
-from .utils import stack_exists
 from ..core import StackNaming, automation
 from ..core.automation import get_output_value
 from ..core.state_manager import PulumiStateManager
+from .base import BaseService, ComponentState, ComponentStatus, OutputCapture
+from .utils import stack_exists
 
 
 class RegistryService(BaseService):
@@ -17,11 +17,7 @@ class RegistryService(BaseService):
         """Initialize registry service."""
         super().__init__(env)
 
-    def provision(
-        self,
-        config: Dict[str, Any],
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+    def provision(self, config: dict[str, Any], verbose: bool = False) -> dict[str, Any]:
         """
         Provision registry using unified contract.
 
@@ -41,9 +37,9 @@ class RegistryService(BaseService):
     def create(
         self,
         name: str = "modelops-registry",
-        config: Optional[Dict[str, Any]] = None,
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+        config: dict[str, Any] | None = None,
+        verbose: bool = False,
+    ) -> dict[str, Any]:
         """
         Create container registry.
 
@@ -63,6 +59,7 @@ class RegistryService(BaseService):
         def pulumi_program():
             """Create ContainerRegistry in registry stack context."""
             import pulumi
+
             from ..infra.components.registry import ContainerRegistry
 
             # Add environment to config
@@ -90,15 +87,15 @@ class RegistryService(BaseService):
             pulumi.export("requires_auth", registry.requires_auth)
             # CRITICAL: Export registry_id for cluster to use when granting ACR permissions
             # This allows cluster to reference the actual Azure resource ID, not compute it
-            if hasattr(registry, 'registry_id') and registry.registry_id:
+            if hasattr(registry, "registry_id") and registry.registry_id:
                 pulumi.export("registry_id", registry.registry_id)
 
             # Export bundle credentials if available (needed by workspace)
-            if hasattr(registry, 'bundles_pull_username') and registry.bundles_pull_username:
+            if hasattr(registry, "bundles_pull_username") and registry.bundles_pull_username:
                 pulumi.export("bundles_pull_username", registry.bundles_pull_username)
-            if hasattr(registry, 'bundles_pull_password') and registry.bundles_pull_password:
+            if hasattr(registry, "bundles_pull_password") and registry.bundles_pull_password:
                 pulumi.export("bundles_pull_password", registry.bundles_pull_password)
-            if hasattr(registry, 'bundle_repo') and registry.bundle_repo:
+            if hasattr(registry, "bundle_repo") and registry.bundle_repo:
                 pulumi.export("bundle_repo", registry.bundle_repo)
 
             return registry
@@ -112,9 +109,7 @@ class RegistryService(BaseService):
         # - State reconciliation with Azure
         # - Environment YAML updates
         result = state_manager.execute_with_recovery(
-            "up",
-            program=pulumi_program,
-            on_output=capture
+            "up", program=pulumi_program, on_output=capture
         )
 
         return result.outputs if result else {}
@@ -136,10 +131,7 @@ class RegistryService(BaseService):
         # State manager handles:
         # - Stale lock detection and clearing
         # - Environment YAML cleanup
-        state_manager.execute_with_recovery(
-            "destroy",
-            on_output=capture
-        )
+        state_manager.execute_with_recovery("destroy", on_output=capture)
 
     def status(self) -> ComponentStatus:
         """
@@ -160,22 +152,19 @@ class RegistryService(BaseService):
                         "registry_name": get_output_value(outputs, "registry_name", "unknown"),
                         "provider": get_output_value(outputs, "provider", "unknown"),
                         "requires_auth": get_output_value(outputs, "requires_auth", False),
-                        "cluster_pull_configured": get_output_value(outputs, "cluster_pull_configured", False)
-                    }
+                        "cluster_pull_configured": get_output_value(
+                            outputs, "cluster_pull_configured", False
+                        ),
+                    },
                 )
             else:
                 return ComponentStatus(
-                    deployed=False,
-                    phase=ComponentState.NOT_DEPLOYED,
-                    details={}
+                    deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
                 )
         except Exception as e:
             return ComponentStatus(
-                deployed=False,
-                phase=ComponentState.UNKNOWN,
-                details={"error": str(e)}
+                deployed=False, phase=ComponentState.UNKNOWN, details={"error": str(e)}
             )
-
 
     def login(self) -> bool:
         """
@@ -192,10 +181,10 @@ class RegistryService(BaseService):
         if not outputs:
             raise Exception("Registry not found")
 
-        provider = get_output_value(outputs, 'provider')
+        provider = get_output_value(outputs, "provider")
 
         if provider == "azure":
-            registry_name = get_output_value(outputs, 'registry_name')
+            registry_name = get_output_value(outputs, "registry_name")
             if not registry_name:
                 raise Exception("Registry name not found")
 
@@ -203,7 +192,7 @@ class RegistryService(BaseService):
             result = subprocess.run(
                 ["az", "acr", "login", "--name", registry_name],
                 capture_output=True,
-                text=True
+                text=True,
             )
 
             if result.returncode != 0:
@@ -211,7 +200,7 @@ class RegistryService(BaseService):
 
             return True
         else:
-            login_server = get_output_value(outputs, 'login_server')
+            login_server = get_output_value(outputs, "login_server")
             raise Exception(
                 f"Manual login required for {provider} registry: docker login {login_server}"
             )
@@ -234,9 +223,9 @@ class RegistryService(BaseService):
             return ""
 
         # Extract values
-        login_server = get_output_value(outputs, 'login_server')
-        registry_name = get_output_value(outputs, 'registry_name')
-        provider = get_output_value(outputs, 'provider')
+        login_server = get_output_value(outputs, "login_server")
+        registry_name = get_output_value(outputs, "registry_name")
+        provider = get_output_value(outputs, "provider")
 
         if format == "bash":
             # Output as shell export statements
@@ -263,6 +252,7 @@ class RegistryService(BaseService):
         elif format == "json":
             # Output as JSON
             import json
+
             data = {}
             if login_server:
                 data["MODELOPS_REGISTRY_SERVER"] = login_server
@@ -275,7 +265,7 @@ class RegistryService(BaseService):
         else:
             raise ValueError(f"Unknown format: {format}")
 
-    def wire_permissions(self, infra_stack: Optional[str] = None) -> bool:
+    def wire_permissions(self, infra_stack: str | None = None) -> bool:
         """
         Wire ACR pull permissions for AKS cluster.
 
@@ -293,14 +283,16 @@ class RegistryService(BaseService):
         registry_stack = StackNaming.get_stack_name("registry", self.env)
         infra_stack = infra_stack or StackNaming.get_stack_name("cluster", self.env)
 
-        print(f"Wiring registry permissions...")
+        print("Wiring registry permissions...")
         print(f"  Registry stack: {registry_stack}")
         print(f"  Infrastructure stack: {infra_stack}")
 
         # TODO: Implement actual permission wiring
         print("\nManual steps for now:")
         print("1. Get the AKS cluster's kubelet identity:")
-        print("   az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId")
+        print(
+            "   az aks show -n <cluster> -g <rg> --query identityProfile.kubeletidentity.objectId"
+        )
         print("2. Grant ACR pull permissions:")
         print("   az role assignment create --assignee <identity> --role acrpull --scope <acr-id>")
 

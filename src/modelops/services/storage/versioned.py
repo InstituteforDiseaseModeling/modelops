@@ -5,8 +5,8 @@ Compare-And-Swap (CAS) semantics, enabling safe concurrent updates
 without locks or leases.
 """
 
-from typing import Protocol, Optional, Any
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class VersionToken:
     - GCS: metageneration number
     - DynamoDB: version counter
     """
+
     value: Any
 
     def __str__(self) -> str:
@@ -34,7 +35,7 @@ class VersionedStore(Protocol):
     JSON encoding/decoding happens at the JobRegistry layer.
     """
 
-    def get(self, key: str) -> Optional[tuple[bytes, VersionToken]]:
+    def get(self, key: str) -> tuple[bytes, VersionToken] | None:
         """Get current value and version.
 
         Args:
@@ -106,4 +107,5 @@ class VersionedStore(Protocol):
 
 class TooManyRetriesError(Exception):
     """Raised when CAS retries are exhausted."""
+
     pass

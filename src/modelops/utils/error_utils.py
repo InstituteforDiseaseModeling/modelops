@@ -3,7 +3,6 @@
 import base64
 import json
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +26,12 @@ def decode_base64_error(error_msg: str) -> str:
         formatted.append(f"Error: {error_data.get('error', 'Unknown error')}")
         formatted.append(f"Type: {error_data.get('type', 'Unknown')}")
 
-        if 'target_entrypoint' in error_data:
+        if "target_entrypoint" in error_data:
             formatted.append(f"Target: {error_data['target_entrypoint']}")
 
-        if 'traceback' in error_data:
+        if "traceback" in error_data:
             formatted.append("Traceback:")
-            formatted.append(error_data['traceback'])
+            formatted.append(error_data["traceback"])
 
         return "\n  ".join(formatted)
 
@@ -50,13 +49,13 @@ def format_aggregation_error(result: dict) -> str:
     Returns:
         Formatted error message
     """
-    if 'error' not in result:
+    if "error" not in result:
         return "Unknown aggregation error"
 
-    error_msg = decode_base64_error(result['error'])
-    error_type = result.get('type', 'Unknown')
+    error_msg = decode_base64_error(result["error"])
+    error_type = result.get("type", "Unknown")
 
-    if error_msg != result['error']:
+    if error_msg != result["error"]:
         # Successfully decoded
         return f"Aggregation failed:\n  {error_msg}"
     else:

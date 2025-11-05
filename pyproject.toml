@@ -55,9 +55,11 @@ bundle = [
     "modelops-bundle",
 ]
 dev = [
+    "pre-commit>=4.3.0",
     "pytest>=8.4.1",
     "pytest-cov>=6.2.1",
     "pytest-timeout>=2.4.0",
+    "ruff>=0.14.3",
 ]
 
 [tool.hatch.metadata]
@@ -82,3 +84,32 @@ markers = [
 ]
 # Run unit tests by default, integration tests with: pytest -m integration
 addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (modernize Python code)
+    "B",   # flake8-bugbear (detect bugs)
+    "SIM", # flake8-simplify (simplify code)
+]
+ignore = [
+    "E722",  # bare-except (TODO: fix gradually)
+    "B008",  # function-call-in-default-argument (common in FastAPI/Typer)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["F401", "F811"]  # Allow unused imports and redefinitions in tests
+"examples/**/*.py" = ["E402"]  # Allow imports not at top in examples
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

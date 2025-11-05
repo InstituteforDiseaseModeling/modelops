@@ -13,7 +13,7 @@ from modelops.worker.jsonrpc import JSONRPCClient
 
 class TestSubprocessRunnerLargeMessages:
     """Test subprocess_runner handling of large messages."""
-    
+
     def test_subprocess_runner_70kb_params(self, tmp_path):
         """Test subprocess_runner with 70KB parameters."""
         # Create a minimal test bundle
@@ -42,54 +42,55 @@ test_bundle = "wire:wire"
 
         # Get venv Python
         venv_python = venv_path / "bin" / "python"
-        
+
         # Get subprocess_runner path
-        runner_script = Path(__file__).parent.parent / "src" / "modelops" / "worker" / "subprocess_runner.py"
-        
+        runner_script = (
+            Path(__file__).parent.parent / "src" / "modelops" / "worker" / "subprocess_runner.py"
+        )
+
         # Start subprocess
         proc = subprocess.Popen(
             [
                 str(venv_python),
                 str(runner_script),
-                "--bundle-path", str(bundle_path),
-                "--venv-path", str(venv_path),
-                "--bundle-digest", "test123"
+                "--bundle-path",
+                str(bundle_path),
+                "--venv-path",
+                str(venv_path),
+                "--bundle-digest",
+                "test123",
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            bufsize=0  # Unbuffered like in process_manager
+            bufsize=0,  # Unbuffered like in process_manager
         )
-        
+
         try:
             # Create JSON-RPC client
             client = JSONRPCClient(proc.stdin, proc.stdout)
-            
+
             # Wait for ready
             result = client.call("ready", {})
             assert result.get("ready") == True
-            
+
             # Send execute with 70KB params
             large_data = "x" * 70000
-            params = {
-                "entrypoint": "test",
-                "params": {"data": large_data},
-                "seed": 42
-            }
-            
+            params = {"entrypoint": "test", "params": {"data": large_data}, "seed": 42}
+
             # This should work without hanging or crashing
             result = client.call("execute", params)
             assert "error" not in result or result.get("error") is None
-            
+
             # Shutdown
             client.call("shutdown", {})
             proc.wait(timeout=5)
-            
+
         finally:
             if proc.poll() is None:
                 proc.terminate()
                 proc.wait(timeout=5)
-            
+
             # Check stderr for any errors
             stderr = proc.stderr.read()
             if stderr:

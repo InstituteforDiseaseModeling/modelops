@@ -13,9 +13,11 @@ from modelops_contracts.types import UniqueParameterSet
 # AzureBlobBackend is optional - only imported if azure deps are available
 try:
     from modelops.services.storage.azure import AzureBlobBackend
+
     HAS_AZURE = True
 except ImportError:
     HAS_AZURE = False
+
 
 def test_provenance_with_mock_blob():
     """Test ProvenanceStore with mocked blob backend."""
@@ -37,7 +39,7 @@ def test_provenance_with_mock_blob():
         # Create ProvenanceStore without Azure config (since we don't have deps)
         store = ProvenanceStore(
             storage_dir=storage_dir,
-            azure_backend=None  # Start with local-only
+            azure_backend=None,  # Start with local-only
         )
 
         # Manually set up Azure backend with our mock for testing
@@ -48,27 +50,21 @@ def test_provenance_with_mock_blob():
         bundle_digest = "sha256:" + "a" * 64
         task = SimTask(
             bundle_ref=bundle_digest,
-            params=UniqueParameterSet(
-                params={"alpha": 0.5, "beta": 1.0},
-                param_id="test123"
-            ),
+            params=UniqueParameterSet(params={"alpha": 0.5, "beta": 1.0}, param_id="test123"),
             seed=42,
-            entrypoint="module.path/scenario"
+            entrypoint="module.path/scenario",
         )
 
         test_data = b"test simulation results"
         import hashlib
+
         checksum = hashlib.blake2b(test_data, digest_size=32).hexdigest()
 
         result = SimReturn(
             task_id="task123",
             outputs={
-                "results": TableArtifact(
-                    size=len(test_data),
-                    inline=test_data,
-                    checksum=checksum
-                )
-            }
+                "results": TableArtifact(size=len(test_data), inline=test_data, checksum=checksum)
+            },
         )
 
         # Store result
@@ -105,6 +101,7 @@ def test_provenance_with_mock_blob():
 
         # Cleanup
         store.shutdown()
+
 
 if __name__ == "__main__":
     test_provenance_with_mock_blob()

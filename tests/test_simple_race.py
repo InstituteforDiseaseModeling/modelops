@@ -36,11 +36,7 @@ def process_manager(tmp_path):
     venvs_dir = tmp_path / "venvs"
     venvs_dir.mkdir()
 
-    manager = WarmProcessManager(
-        venvs_dir=venvs_dir,
-        max_processes=5,
-        force_fresh_venv=False
-    )
+    manager = WarmProcessManager(venvs_dir=venvs_dir, max_processes=5, force_fresh_venv=False)
 
     yield manager
 

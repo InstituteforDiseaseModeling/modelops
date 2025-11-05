@@ -8,28 +8,28 @@ import json
 import os
 import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
 
 from kubernetes import client as k8s_client
+
 # TODO: Integrate modelops-bundle service when available
 # from modelops_bundle.bundle_service import BundleService
 # from modelops_bundle.auth import get_auth_provider
 from modelops_contracts import (
+    CalibrationJob,
+    CalibrationSpec,
     Job,
     SimJob,
-    CalibrationJob,
     SimulationStudy,
-    CalibrationSpec,
     TargetSpec,
 )
 
-from ..services.storage.azure import AzureBlobBackend
-from ..services.storage.azure_versioned import AzureVersionedStore
+from ..cli.k8s_client import cleanup_temp_kubeconfig, get_k8s_client
+from ..core import automation
+from ..images import get_image_config
 from ..services.job_registry import JobRegistry
 from ..services.job_state import JobStatus
-from ..cli.k8s_client import get_k8s_client, cleanup_temp_kubeconfig
-from ..images import get_image_config
-from ..core import automation
+from ..services.storage.azure import AzureBlobBackend
+from ..services.storage.azure_versioned import AzureVersionedStore
 
 
 class JobSubmissionClient:
@@ -58,17 +58,13 @@ class JobSubmissionClient:
 
         # Get storage connection from Pulumi or environment
         connection_string = self._get_storage_connection()
-        self.storage = AzureBlobBackend(
-            container="jobs",
-            connection_string=connection_string
-        )
+        self.storage = AzureBlobBackend(container="jobs", connection_string=connection_string)
 
         # Initialize job registry for state tracking
         # Using the same connection string and a separate container
         try:
             versioned_store = AzureVersionedStore(
-                connection_string=connection_string,
-                container="job-registry"
+                connection_string=connection_string, container="job-registry"
             )
             self.registry = JobRegistry(versioned_store)
         except Exception as e:
@@ -94,6 +90,7 @@ class JobSubmissionClient:
         bundle_env_path = Path.home() / ".modelops" / "bundle-env" / f"{self.env}.yaml"
         if bundle_env_path.exists():
             import yaml
+
             with open(bundle_env_path) as f:
                 bundle_env = yaml.safe_load(f)
                 registry = bundle_env.get("registry", {}).get("login_server")
@@ -179,7 +176,7 @@ class JobSubmissionClient:
                     # Override just the tag, extract registry/org from existing image
                     base_image = img_config.runner_image()
                     # Split off the tag and replace with custom one
-                    image_parts = base_image.rsplit(':', 1)[0]
+                    image_parts = base_image.rsplit(":", 1)[0]
                     image = f"{image_parts}:{runner_tag}"
                 else:
                     image = img_config.runner_image()
@@ -187,7 +184,7 @@ class JobSubmissionClient:
                 # For now, use same runner for both types
                 if runner_tag:
                     base_image = img_config.runner_image()
-                    image_parts = base_image.rsplit(':', 1)[0]
+                    image_parts = base_image.rsplit(":", 1)[0]
                     image = f"{image_parts}:{runner_tag}"
                 else:
                     image = img_config.runner_image()
@@ -207,7 +204,7 @@ class JobSubmissionClient:
                         "type": type(job).__name__,
                         "blob_key": blob_key,
                         "image": image,
-                    }
+                    },
                 )
                 # Update to SUBMITTING status
                 self.registry.update_status(job.job_id, JobStatus.SUBMITTING)
@@ -231,8 +228,8 @@ class JobSubmissionClient:
         self,
         study: SimulationStudy,
         bundle_strategy: str = "latest",
-        bundle_ref: Optional[str] = None,
-        build_path: Optional[Path] = None,
+        bundle_ref: str | None = None,
+        build_path: Path | None = None,
     ) -> str:
         """Submit a simulation study as a SimJob.
 
@@ -252,9 +249,7 @@ class JobSubmissionClient:
             ValueError: If bundle strategy is invalid or resolution fails
         """
         # Resolve bundle reference
-        resolved_bundle = self._resolve_bundle(
-            study.model, bundle_strategy, bundle_ref, build_path
-        )
+        resolved_bundle = self._resolve_bundle(study.model, bundle_strategy, bundle_ref, build_path)
 
         # Create SimJob from study
         job = study.to_simjob(resolved_bundle)
@@ -266,8 +261,8 @@ class JobSubmissionClient:
         self,
         spec: CalibrationSpec,
         bundle_strategy: str = "latest",
-        bundle_ref: Optional[str] = None,
-        build_path: Optional[Path] = None,
+        bundle_ref: str | None = None,
+        build_path: Path | None = None,
     ) -> str:
         """Submit a calibration specification as a CalibrationJob.
 
@@ -281,9 +276,7 @@ class JobSubmissionClient:
             Job ID of submitted job
         """
         # Resolve bundle reference
-        resolved_bundle = self._resolve_bundle(
-            spec.model, bundle_strategy, bundle_ref, build_path
-        )
+        resolved_bundle = self._resolve_bundle(spec.model, bundle_strategy, bundle_ref, build_path)
 
         # Create CalibrationJob
         job = CalibrationJob(
@@ -307,8 +300,8 @@ class JobSubmissionClient:
         self,
         model: str,
         strategy: str,
-        bundle_ref: Optional[str] = None,
-        build_path: Optional[Path] = None,
+        bundle_ref: str | None = None,
+        build_path: Path | None = None,
     ) -> str:
         """Resolve bundle reference based on strategy.
 
@@ -393,7 +386,9 @@ class JobSubmissionClient:
         #     registry=registry,
         # )
         # return bundle_ref
-        raise NotImplementedError("BundleService integration not yet available. Use modelops-bundle CLI directly.")
+        raise NotImplementedError(
+            "BundleService integration not yet available. Use modelops-bundle CLI directly."
+        )
 
     def _upload_job(self, job: Job) -> str:
         """Upload job specification to blob storage.
@@ -432,7 +427,12 @@ class JobSubmissionClient:
 
         # Add type-specific fields
         match job:
-            case SimJob(tasks=tasks, priority=priority, metadata=metadata, target_spec=target_spec):
+            case SimJob(
+                tasks=tasks,
+                priority=priority,
+                metadata=metadata,
+                target_spec=target_spec,
+            ):
                 data["priority"] = priority
                 data["metadata"] = metadata
 
@@ -512,9 +512,7 @@ class JobSubmissionClient:
                                     image=image,
                                     env=[
                                         # Pass blob key to runner
-                                        k8s_client.V1EnvVar(
-                                            name="JOB_BLOB_KEY", value=blob_key
-                                        ),
+                                        k8s_client.V1EnvVar(name="JOB_BLOB_KEY", value=blob_key),
                                         # Storage connection from secret
                                         k8s_client.V1EnvVar(
                                             name="AZURE_STORAGE_CONNECTION_STRING",

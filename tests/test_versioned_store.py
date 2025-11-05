@@ -94,9 +94,9 @@ class TestVersionedStore:
     def test_list_keys(self, store):
         """Test listing keys with prefix."""
         # Create some keys
-        store.create_if_absent("jobs/123/state.json", b'{}')
-        store.create_if_absent("jobs/456/state.json", b'{}')
-        store.create_if_absent("events/123/chunk_0.json", b'[]')
+        store.create_if_absent("jobs/123/state.json", b"{}")
+        store.create_if_absent("jobs/456/state.json", b"{}")
+        store.create_if_absent("events/123/chunk_0.json", b"[]")
 
         # List all keys
         all_keys = store.list_keys()
@@ -139,6 +139,7 @@ class TestVersionedStore:
         def increment_counter(worker_id: int):
             """Each worker tries to increment the counter."""
             try:
+
                 def update_fn(current: dict) -> dict:
                     current["counter"] += 1
                     current["updates"].append(f"worker-{worker_id}")
@@ -200,6 +201,7 @@ class TestRetryLogic:
 
     def test_update_with_retry_nonexistent(self, store):
         """Test update fails gracefully for nonexistent key."""
+
         def update_fn(current: dict) -> dict:
             return current
 
@@ -219,7 +221,7 @@ class TestRetryLogic:
     def test_get_json_invalid(self, store):
         """Test get_json handles invalid JSON gracefully."""
         # Store invalid JSON
-        store.create_if_absent("bad", b'not json')
+        store.create_if_absent("bad", b"not json")
 
         # Should return None and log error
         result = get_json(store, "bad")
@@ -244,7 +246,7 @@ class TestInMemoryStore:
         store = InMemoryVersionedStore()
 
         # Create a key
-        store.create_if_absent("counter", b'0')
+        store.create_if_absent("counter", b"0")
 
         def increment_many():
             """Increment counter 100 times."""
@@ -279,8 +281,8 @@ class TestInMemoryStore:
         store = InMemoryVersionedStore()
 
         # Add some data
-        store.create_if_absent("key1", b'data1')
-        store.create_if_absent("key2", b'data2')
+        store.create_if_absent("key1", b"data1")
+        store.create_if_absent("key2", b"data2")
 
         assert len(store.list_keys()) == 2
 

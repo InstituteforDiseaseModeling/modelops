@@ -7,15 +7,13 @@ import tempfile
 import shutil
 import hashlib
 from pathlib import Path
-from modelops_contracts import (
-    SimTask, SimReturn, UniqueParameterSet, TableArtifact, ErrorInfo
-)
+from modelops_contracts import SimTask, SimReturn, UniqueParameterSet, TableArtifact, ErrorInfo
 from modelops_contracts.simulation import AggregationTask, AggregationReturn
 from modelops.services.provenance_store import ProvenanceStore
 from modelops.services.provenance_schema import (
     ProvenanceSchema,
     BUNDLE_INVALIDATION_SCHEMA,
-    TOKEN_INVALIDATION_SCHEMA
+    TOKEN_INVALIDATION_SCHEMA,
 )
 
 # Valid test bundle references (SHA256 with 64 hex chars)
@@ -42,10 +40,7 @@ class TestProvenanceStoreBasics:
     @pytest.fixture
     def store(self, temp_storage_dir):
         """Create a ProvenanceStore with default schema."""
-        return ProvenanceStore(
-            storage_dir=temp_storage_dir,
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        return ProvenanceStore(storage_dir=temp_storage_dir, schema=BUNDLE_INVALIDATION_SCHEMA)
 
     def test_store_and_retrieve_sim(self, store):
         """Test storing and retrieving a SimReturn."""
@@ -53,7 +48,7 @@ class TestProvenanceStoreBasics:
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
-            seed=42
+            seed=42,
         )
 
         test_data = b"test data!"
@@ -61,11 +56,9 @@ class TestProvenanceStoreBasics:
             task_id="a" * 64,
             outputs={
                 "result": TableArtifact(
-                    size=len(test_data),
-                    inline=test_data,
-                    checksum=make_valid_checksum(test_data)
+                    size=len(test_data), inline=test_data, checksum=make_valid_checksum(test_data)
                 )
-            }
+            },
         )
 
         # Store the result
@@ -83,7 +76,7 @@ class TestProvenanceStoreBasics:
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         result = store.get_sim(task)
@@ -95,7 +88,7 @@ class TestProvenanceStoreBasics:
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         error_details_data = b'{"error": "division by zero"}'
@@ -103,15 +96,13 @@ class TestProvenanceStoreBasics:
             task_id="c" * 64,
             outputs={},
             error=ErrorInfo(
-                error_type="ZeroDivisionError",
-                message="division by zero",
-                retryable=False
+                error_type="ZeroDivisionError", message="division by zero", retryable=False
             ),
             error_details=TableArtifact(
                 size=len(error_details_data),
                 inline=error_details_data,
-                checksum=make_valid_checksum(error_details_data)
-            )
+                checksum=make_valid_checksum(error_details_data),
+            ),
         )
 
         store.put_sim(task, sim_return)
@@ -127,14 +118,18 @@ class TestProvenanceStoreBasics:
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         # First write
         data1 = b"data1"
         sim_return1 = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data1), inline=data1, checksum=make_valid_checksum(data1))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data1), inline=data1, checksum=make_valid_checksum(data1)
+                )
+            },
         )
         store.put_sim(task, sim_return1)
 
@@ -142,7 +137,11 @@ class TestProvenanceStoreBasics:
         data2 = b"data2"
         sim_return2 = SimReturn(
             task_id="b" * 64,
-            outputs={"result": TableArtifact(size=len(data2), inline=data2, checksum=make_valid_checksum(data2))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data2), inline=data2, checksum=make_valid_checksum(data2)
+                )
+            },
         )
         store.put_sim(task, sim_return2)
 
@@ -159,10 +158,7 @@ class TestProvenanceStoreAggregation:
     def store(self):
         """Create a ProvenanceStore with temporary directory."""
         temp_dir = tempfile.mkdtemp()
-        store = ProvenanceStore(
-            storage_dir=Path(temp_dir),
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=Path(temp_dir), schema=BUNDLE_INVALIDATION_SCHEMA)
         yield store
         shutil.rmtree(temp_dir)
 
@@ -171,8 +167,12 @@ class TestProvenanceStoreAggregation:
         data = b"data"
         sim_returns = [
             SimReturn(
-                task_id=f"{chr(97+i)}" * 64,  # a*64, b*64, etc
-                outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+                task_id=f"{chr(97 + i)}" * 64,  # a*64, b*64, etc
+                outputs={
+                    "result": TableArtifact(
+                        size=len(data), inline=data, checksum=make_valid_checksum(data)
+                    )
+                },
             )
             for i in range(3)
         ]
@@ -180,7 +180,7 @@ class TestProvenanceStoreAggregation:
         agg_task = AggregationTask(
             bundle_ref=TEST_BUNDLE_REF,
             target_entrypoint="targets.test/compute",
-            sim_returns=sim_returns
+            sim_returns=sim_returns,
         )
 
         agg_return = AggregationReturn(
@@ -188,7 +188,7 @@ class TestProvenanceStoreAggregation:
             loss=0.5,
             diagnostics={"metric1": 0.1, "metric2": 0.2},
             outputs={},
-            n_replicates=3
+            n_replicates=3,
         )
 
         # Store
@@ -207,14 +207,18 @@ class TestProvenanceStoreAggregation:
         sim_returns = [
             SimReturn(
                 task_id="a" * 64,
-                outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+                outputs={
+                    "result": TableArtifact(
+                        size=len(data), inline=data, checksum=make_valid_checksum(data)
+                    )
+                },
             )
         ]
 
         agg_task = AggregationTask(
             bundle_ref=TEST_BUNDLE_REF,
             target_entrypoint="targets.test/compute",
-            sim_returns=sim_returns
+            sim_returns=sim_returns,
         )
 
         result = store.get_agg(agg_task)
@@ -233,19 +237,13 @@ class TestInvalidationStrategies:
 
     def test_bundle_invalidation(self, temp_dir):
         """Test that bundle changes invalidate cache."""
-        store = ProvenanceStore(
-            storage_dir=temp_dir,
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=temp_dir, schema=BUNDLE_INVALIDATION_SCHEMA)
 
         params = UniqueParameterSet.from_dict({"x": 1})
 
         # Task with bundle v1
         task_v1 = SimTask(
-            bundle_ref=TEST_BUNDLE_REF_V1,
-            entrypoint="module.func/test",
-            params=params,
-            seed=42
+            bundle_ref=TEST_BUNDLE_REF_V1, entrypoint="module.func/test", params=params, seed=42
         )
 
         # Task with bundle v2 (same params/seed)
@@ -253,14 +251,18 @@ class TestInvalidationStrategies:
             bundle_ref=TEST_BUNDLE_REF_V2,  # Different bundle
             entrypoint="module.func/test",
             params=params,
-            seed=42
+            seed=42,
         )
 
         # Store result for v1
         data = b"data1"
         sim_return = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data), inline=data, checksum=make_valid_checksum(data)
+                )
+            },
         )
         store.put_sim(task_v1, sim_return)
 
@@ -275,33 +277,28 @@ class TestInvalidationStrategies:
         # Since TOKEN_INVALIDATION_SCHEMA uses model_digest (not bundle_digest),
         # and we can't actually change tokens in entrypoint (token must come after scenario),
         # we'll simulate by passing different model_digest values
-        store = ProvenanceStore(
-            storage_dir=temp_dir,
-            schema=TOKEN_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=temp_dir, schema=TOKEN_INVALIDATION_SCHEMA)
 
         params = UniqueParameterSet.from_dict({"x": 1})
 
         # Task v1 and v2 with same everything
         task_v1 = SimTask(
-            bundle_ref=TEST_BUNDLE_REF_V1,
-            entrypoint="module.func/test",
-            params=params,
-            seed=42
+            bundle_ref=TEST_BUNDLE_REF_V1, entrypoint="module.func/test", params=params, seed=42
         )
 
         task_v2 = SimTask(
-            bundle_ref=TEST_BUNDLE_REF_V1,
-            entrypoint="module.func/test",
-            params=params,
-            seed=42
+            bundle_ref=TEST_BUNDLE_REF_V1, entrypoint="module.func/test", params=params, seed=42
         )
 
         # Store result for v1
         data = b"data1"
         sim_return = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data), inline=data, checksum=make_valid_checksum(data)
+                )
+            },
         )
         store.put_sim(task_v1, sim_return)
 
@@ -314,17 +311,14 @@ class TestInvalidationStrategies:
 
     def test_params_always_invalidate(self, temp_dir):
         """Test that parameter changes always invalidate cache."""
-        store = ProvenanceStore(
-            storage_dir=temp_dir,
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=temp_dir, schema=BUNDLE_INVALIDATION_SCHEMA)
 
         # Task with params v1
         task_v1 = SimTask(
             bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         # Task with params v2
@@ -332,14 +326,18 @@ class TestInvalidationStrategies:
             bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 2}),  # Different params
-            seed=42
+            seed=42,
         )
 
         # Store result for v1
         data = b"data1"
         sim_return = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data), inline=data, checksum=make_valid_checksum(data)
+                )
+            },
         )
         store.put_sim(task_v1, sim_return)
 
@@ -362,22 +360,23 @@ class TestFileStructure:
 
     def test_creates_expected_directories(self, temp_dir):
         """Verify the directory structure matches schema."""
-        store = ProvenanceStore(
-            storage_dir=temp_dir,
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=temp_dir, schema=BUNDLE_INVALIDATION_SCHEMA)
 
         task = SimTask(
             bundle_ref=TEST_BUNDLE_REF_V1,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1, "y": 2}),
-            seed=42
+            seed=42,
         )
 
         data = b"data1"
         sim_return = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data), inline=data, checksum=make_valid_checksum(data)
+                )
+            },
         )
 
         store.put_sim(task, sim_return)
@@ -401,16 +400,13 @@ class TestFileStructure:
 
     def test_artifacts_stored_separately(self, temp_dir):
         """Verify artifacts are stored in separate files."""
-        store = ProvenanceStore(
-            storage_dir=temp_dir,
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=temp_dir, schema=BUNDLE_INVALIDATION_SCHEMA)
 
         task = SimTask(
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         data1 = b"test data1"
@@ -418,9 +414,13 @@ class TestFileStructure:
         sim_return = SimReturn(
             task_id="a" * 64,
             outputs={
-                "output1": TableArtifact(size=len(data1), inline=data1, checksum=make_valid_checksum(data1)),
-                "output2": TableArtifact(size=len(data2), inline=data2, checksum=make_valid_checksum(data2))
-            }
+                "output1": TableArtifact(
+                    size=len(data1), inline=data1, checksum=make_valid_checksum(data1)
+                ),
+                "output2": TableArtifact(
+                    size=len(data2), inline=data2, checksum=make_valid_checksum(data2)
+                ),
+            },
         )
 
         store.put_sim(task, sim_return)
@@ -445,10 +445,7 @@ class TestConcurrency:
     def store(self):
         """Create a ProvenanceStore."""
         temp_dir = tempfile.mkdtemp()
-        store = ProvenanceStore(
-            storage_dir=Path(temp_dir),
-            schema=BUNDLE_INVALIDATION_SCHEMA
-        )
+        store = ProvenanceStore(storage_dir=Path(temp_dir), schema=BUNDLE_INVALIDATION_SCHEMA)
         yield store
         shutil.rmtree(temp_dir)
 
@@ -458,13 +455,17 @@ class TestConcurrency:
             bundle_ref=TEST_BUNDLE_REF,
             entrypoint="module.func/test",
             params=UniqueParameterSet.from_dict({"x": 1}),
-            seed=42
+            seed=42,
         )
 
         data = b"test data!"
         sim_return = SimReturn(
             task_id="a" * 64,
-            outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+            outputs={
+                "result": TableArtifact(
+                    size=len(data), inline=data, checksum=make_valid_checksum(data)
+                )
+            },
         )
 
         store.put_sim(task, sim_return)
@@ -485,12 +486,16 @@ class TestConcurrency:
                 bundle_ref=TEST_BUNDLE_REF,
                 entrypoint="module.func/test",
                 params=UniqueParameterSet.from_dict({"x": i}),
-                seed=42
+                seed=42,
             )
             data = f"data{i}".encode()
             sim_return = SimReturn(
-                task_id=f"{chr(97+i)}" * 64,
-                outputs={"result": TableArtifact(size=len(data), inline=data, checksum=make_valid_checksum(data))}
+                task_id=f"{chr(97 + i)}" * 64,
+                outputs={
+                    "result": TableArtifact(
+                        size=len(data), inline=data, checksum=make_valid_checksum(data)
+                    )
+                },
             )
             tasks.append(task)
             returns.append(sim_return)

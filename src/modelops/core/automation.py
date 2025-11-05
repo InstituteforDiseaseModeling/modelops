@@ -38,14 +38,17 @@ Future Improvements:
 
 import os
 import secrets
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any
+
 import pulumi.automation as auto
-from .paths import ensure_work_dir, get_backend_url
+
 from .naming import StackNaming
+from .paths import ensure_work_dir, get_backend_url
 
 
-def get_stack_output(component: str, output_key: str, env: str = "dev") -> Optional[str]:
+def get_stack_output(component: str, output_key: str, env: str = "dev") -> str | None:
     """Get a single output value from a Pulumi stack.
 
     Args:
@@ -64,7 +67,7 @@ def get_stack_output(component: str, output_key: str, env: str = "dev") -> Optio
         if output_key in stack_outputs:
             output = stack_outputs[output_key]
             # Handle Output objects
-            if hasattr(output, 'value'):
+            if hasattr(output, "value"):
                 return output.value
             return str(output)
 
@@ -117,16 +120,16 @@ def _ensure_passphrase(verbose: bool = False):
         # print(f"[DIAG] Thread {thread_id} PID {pid}: Created passphrase file with hash: {hash_val}")
 
         # Set permissions (skip on Windows)
-        if os.name != 'nt':
+        if os.name != "nt":
             passphrase_file.chmod(0o600)
 
         if verbose:
             print(f"  ✓ Generated Pulumi passphrase: {passphrase_file}")
     # else:
-        # INSTRUMENTATION: Log that file exists and its hash
-        # content = passphrase_file.read_text().strip()
-        # hash_val = hashlib.sha256(content.encode()).hexdigest()[:8]
-        # print(f"[DIAG] Thread {thread_id} PID {pid}: Passphrase file exists with hash: {hash_val}")
+    # INSTRUMENTATION: Log that file exists and its hash
+    # content = passphrase_file.read_text().strip()
+    # hash_val = hashlib.sha256(content.encode()).hexdigest()[:8]
+    # print(f"[DIAG] Thread {thread_id} PID {pid}: Passphrase file exists with hash: {hash_val}")
 
     # Always set to use this file - don't check other env vars
     os.environ["PULUMI_CONFIG_PASSPHRASE_FILE"] = str(passphrase_file)
@@ -173,7 +176,7 @@ def workspace_options(project: str, work_dir: Path) -> auto.LocalWorkspaceOption
         # the Pulumi language host, causing "incorrect passphrase" errors.
         # This was the root cause of stacks being encrypted with different
         # passphrases. NEVER set this to None!
-        env_vars=dict(os.environ)
+        env_vars=dict(os.environ),
     )
 
 
@@ -185,9 +188,9 @@ def noop_program():
 def select_stack(
     component: str,
     env: str,
-    run_id: Optional[str] = None,
-    program: Optional[Callable] = None,
-    work_dir: Optional[str] = None
+    run_id: str | None = None,
+    program: Callable | None = None,
+    work_dir: str | None = None,
 ) -> auto.Stack:
     """Select or create a Pulumi stack with standard configuration.
 
@@ -224,15 +227,15 @@ def select_stack(
         stack_name=stack,
         project_name=project,
         program=program or noop_program,
-        opts=workspace_options(project, work_dir)
+        opts=workspace_options(project, work_dir),
     )
 
 
 def remove_stack(
     component: str,
     env: str,
-    run_id: Optional[str] = None,
-    work_dir: Optional[str] = None
+    run_id: str | None = None,
+    work_dir: str | None = None,
 ) -> None:
     """Remove a Pulumi stack completely.
 
@@ -264,10 +267,10 @@ def remove_stack(
 def outputs(
     component: str,
     env: str,
-    run_id: Optional[str] = None,
+    run_id: str | None = None,
     refresh: bool = True,
-    work_dir: Optional[str] = None
-) -> Dict[str, Any]:
+    work_dir: str | None = None,
+) -> dict[str, Any]:
     """Get outputs from a Pulumi stack.
 
     Args:
@@ -292,13 +295,13 @@ def outputs(
 def up(
     component: str,
     env: str,
-    run_id: Optional[str],
+    run_id: str | None,
     program: Callable,
-    on_output: Optional[Callable[[str], None]] = None,
-    work_dir: Optional[str] = None
-) -> Dict[str, Any]:
+    on_output: Callable[[str], None] | None = None,
+    work_dir: str | None = None,
+) -> dict[str, Any]:
     """Run pulumi up on a stack.
-    
+
     Args:
         component: Component name
         env: Environment name
@@ -306,7 +309,7 @@ def up(
         program: Pulumi program to run
         on_output: Optional callback for output messages
         work_dir: Optional custom work directory path
-        
+
     Returns:
         Stack outputs after update
     """
@@ -318,12 +321,12 @@ def up(
 def destroy(
     component: str,
     env: str,
-    run_id: Optional[str] = None,
-    on_output: Optional[Callable[[str], None]] = None,
-    work_dir: Optional[str] = None
+    run_id: str | None = None,
+    on_output: Callable[[str], None] | None = None,
+    work_dir: str | None = None,
 ) -> None:
     """Destroy a Pulumi stack.
-    
+
     Args:
         component: Component name
         env: Environment name
@@ -335,17 +338,17 @@ def destroy(
     stack.destroy(on_output=on_output or (lambda _: None))
 
 
-def get_output_value(outputs: Dict[str, Any], key: str, default: Any = None) -> Any:
+def get_output_value(outputs: dict[str, Any], key: str, default: Any = None) -> Any:
     """Extract value from Pulumi outputs dictionary safely.
-    
+
     Args:
         outputs: Pulumi stack outputs dictionary
         key: Key to extract
         default: Default value if key not found or has no value
-        
+
     Returns:
         The output value or default
-        
+
     Example:
         >>> outputs = {"namespace": {"value": "modelops-dev"}}
         >>> get_output_value(outputs, "namespace")
@@ -354,8 +357,8 @@ def get_output_value(outputs: Dict[str, Any], key: str, default: Any = None) -> 
         "default"
     """
     output = outputs.get(key)
-    if output is not None and hasattr(output, 'value'):
+    if output is not None and hasattr(output, "value"):
         return output.value
-    elif output is not None and isinstance(output, dict) and 'value' in output:
-        return output['value']
+    elif output is not None and isinstance(output, dict) and "value" in output:
+        return output["value"]
     return default

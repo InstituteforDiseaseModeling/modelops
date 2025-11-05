@@ -1,8 +1,9 @@
 """Azure Resource Group component - the root dependency for all Azure resources."""
 
+from typing import Any
+
 import pulumi
 import pulumi_azure_native as azure
-from typing import Dict, Any, Optional
 
 from ...core.naming import StackNaming
 
@@ -19,8 +20,8 @@ class ResourceGroup(pulumi.ComponentResource):
     def __init__(
         self,
         name: str,
-        config: Dict[str, Any],
-        opts: Optional[pulumi.ResourceOptions] = None
+        config: dict[str, Any],
+        opts: pulumi.ResourceOptions | None = None,
     ):
         """
         Create or reference an Azure resource group.
@@ -59,13 +60,15 @@ class ResourceGroup(pulumi.ComponentResource):
         self.location = pulumi.Output.from_input(location)
 
         # Register outputs
-        self.register_outputs({
-            "resource_group_name": self.resource_group_name,
-            "resource_group_id": self.resource_group_id,
-            "location": self.location,
-            "environment": env,
-            "username": username
-        })
+        self.register_outputs(
+            {
+                "resource_group_name": self.resource_group_name,
+                "resource_group_id": self.resource_group_id,
+                "location": self.location,
+                "environment": env,
+                "username": username,
+            }
+        )
 
     def _ensure_resource_group(
         self,
@@ -73,7 +76,7 @@ class ResourceGroup(pulumi.ComponentResource):
         rg_name: str,
         location: str,
         subscription_id: str,
-        username: Optional[str]
+        username: str | None,
     ) -> azure.resources.ResourceGroup:
         """
         Create or get existing resource group (idempotent).
@@ -98,8 +101,7 @@ class ResourceGroup(pulumi.ComponentResource):
         try:
             # Attempt to get the existing resource group
             existing_rg_result = azure.resources.get_resource_group(
-                resource_group_name=rg_name,
-                opts=pulumi.InvokeOptions(parent=self)
+                resource_group_name=rg_name, opts=pulumi.InvokeOptions(parent=self)
             )
 
             # If we get here, the RG exists in Azure
@@ -112,12 +114,12 @@ class ResourceGroup(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(
                     parent=self
                     # Note: NO protect or retain_on_delete - we use --delete-rg flag for safety
-                )
+                ),
             )
 
             return rg
 
-        except Exception as e:
+        except Exception:
             # Resource group doesn't exist or we can't access it
             # Create a new one
             pulumi.log.info(f"Creating new resource group: {rg_name}")
@@ -126,7 +128,7 @@ class ResourceGroup(pulumi.ComponentResource):
                 "managed-by": "modelops",
                 "project": "modelops",
                 "component": "resource-group",
-                "environment": self.config.get("environment", "unknown")
+                "environment": self.config.get("environment", "unknown"),
             }
 
             if username:
@@ -140,7 +142,7 @@ class ResourceGroup(pulumi.ComponentResource):
                 opts=pulumi.ResourceOptions(
                     parent=self
                     # Note: NO protect or retain_on_delete - we use --delete-rg flag for safety
-                )
+                ),
             )
 
             return rg

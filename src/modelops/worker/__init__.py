@@ -4,8 +4,8 @@ This module implements the WorkerPlugin architecture for clean
 lifecycle management and dependency injection.
 """
 
-from .plugin import ModelOpsWorkerPlugin
 from .config import RuntimeConfig
+from .plugin import ModelOpsWorkerPlugin
 
 __all__ = [
     "ModelOpsWorkerPlugin",

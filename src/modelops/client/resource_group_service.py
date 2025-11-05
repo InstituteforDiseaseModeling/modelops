@@ -1,13 +1,12 @@
 """Service for Azure Resource Group management."""
 
-from typing import Dict, Any, Optional
+from typing import Any
 
-from .base import BaseService, ComponentStatus, ComponentState, OutputCapture
-from .utils import stack_exists
-from ..core import StackNaming, automation
+from ..core import automation
 from ..core.automation import get_output_value
 from ..core.paths import ensure_work_dir
 from ..core.state_manager import PulumiStateManager
+from .base import BaseService, ComponentState, ComponentStatus, OutputCapture
 
 
 class ResourceGroupService(BaseService):
@@ -17,11 +16,7 @@ class ResourceGroupService(BaseService):
         """Initialize resource group service."""
         super().__init__(env)
 
-    def provision(
-        self,
-        config: Dict[str, Any],
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+    def provision(self, config: dict[str, Any], verbose: bool = False) -> dict[str, Any]:
         """
         Provision resource group.
 
@@ -38,10 +33,12 @@ class ResourceGroupService(BaseService):
         Raises:
             Exception: If provisioning fails
         """
+
         def pulumi_program():
             """Create ResourceGroup component."""
-            from ..infra.components.resource_group import ResourceGroup
             import pulumi
+
+            from ..infra.components.resource_group import ResourceGroup
             # import os
             # import hashlib
             # from pathlib import Path
@@ -83,9 +80,7 @@ class ResourceGroupService(BaseService):
         # - State reconciliation with Azure
         # - Environment YAML updates (though RG doesn't need env YAML)
         result = state_manager.execute_with_recovery(
-            "up",
-            program=pulumi_program,
-            on_output=capture
+            "up", program=pulumi_program, on_output=capture
         )
 
         return result.outputs if result else {}
@@ -110,10 +105,7 @@ class ResourceGroupService(BaseService):
         # State manager handles:
         # - Stale lock detection and clearing
         # - Environment YAML cleanup
-        state_manager.execute_with_recovery(
-            "destroy",
-            on_output=capture
-        )
+        state_manager.execute_with_recovery("destroy", on_output=capture)
 
     def status(self) -> ComponentStatus:
         """
@@ -133,21 +125,21 @@ class ResourceGroupService(BaseService):
                     deployed=True,
                     phase=ComponentState.READY,
                     details={
-                        "resource_group_name": get_output_value(outputs, "resource_group_name", "unknown"),
-                        "resource_group_id": get_output_value(outputs, "resource_group_id", "unknown"),
+                        "resource_group_name": get_output_value(
+                            outputs, "resource_group_name", "unknown"
+                        ),
+                        "resource_group_id": get_output_value(
+                            outputs, "resource_group_id", "unknown"
+                        ),
                         "location": get_output_value(outputs, "location", "unknown"),
-                        "environment": get_output_value(outputs, "environment", self.env)
-                    }
+                        "environment": get_output_value(outputs, "environment", self.env),
+                    },
                 )
             else:
                 return ComponentStatus(
-                    deployed=False,
-                    phase=ComponentState.NOT_DEPLOYED,
-                    details={}
+                    deployed=False, phase=ComponentState.NOT_DEPLOYED, details={}
                 )
         except Exception as e:
             return ComponentStatus(
-                deployed=False,
-                phase=ComponentState.FAILED,
-                details={"error": str(e)}
+                deployed=False, phase=ComponentState.FAILED, details={"error": str(e)}
             )

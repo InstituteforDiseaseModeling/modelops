@@ -1,52 +1,55 @@
 """CLI commands for managing and viewing simulation results."""
 
-import typer
 import json
+import os
 from pathlib import Path
-from typing import Optional
-from datetime import datetime
 
-from ..services.provenance_store import ProvenanceStore
+import typer
+
 from ..services.provenance_schema import (
-    ProvenanceSchema,
     BUNDLE_INVALIDATION_SCHEMA,
-    TOKEN_INVALIDATION_SCHEMA
+    TOKEN_INVALIDATION_SCHEMA,
 )
-from .display import console, success, warning, error, info, section, info_dict
+from ..services.provenance_store import ProvenanceStore
+from .display import console, error, info, info_dict, section, success, warning
 
-app = typer.Typer(
-    name="results",
-    help="View and manage simulation results",
-    no_args_is_help=True
-)
+app = typer.Typer(name="results", help="View and manage simulation results", no_args_is_help=True)
 
 
-@app.command()
-def list(
+# Helper functions
+def _safe_str(x) -> str:
+    """Convert value to string, handling None safely."""
+    return "" if x is None else str(x)
+
+
+def _relpath_maybe(p: str, root: os.PathLike) -> str:
+    """Get relative path safely, falling back to original on error."""
+    try:
+        return os.path.relpath(p, root)
+    except (ValueError, TypeError):
+        return p
+
+
+def _ellipsize(s: str, maxlen: int) -> str:
+    """Add ellipsis only if string exceeds maxlen."""
+    s = s or ""
+    return s if len(s) <= maxlen else s[: maxlen - 1] + "…"
+
+
+@app.command("list")
+def cmd_list(
     storage_dir: Path = typer.Option(
         Path("/tmp/modelops/provenance"),
         "--storage-dir",
         "-s",
-        help="Storage directory for provenance store"
+        help="Storage directory for provenance store",
     ),
     result_type: str = typer.Option(
-        "sim",
-        "--type",
-        "-t",
-        help="Type of results to list: sim or agg"
+        "sim", "--type", "-t", help="Type of results to list: sim or agg"
     ),
-    limit: int = typer.Option(
-        20,
-        "--limit",
-        "-n",
-        help="Maximum number of results to show"
-    ),
-    schema: str = typer.Option(
-        "bundle",
-        "--schema",
-        help="Schema to use: bundle or token"
-    )
-):
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum number of results to show"),
+    schema: str = typer.Option("bundle", "--schema", help="Schema to use: bundle or token"),
+) -> None:
     """List stored simulation or aggregation results."""
     try:
         # Select schema
@@ -79,12 +82,19 @@ def list(
             table.add_column("Path", style="dim")
 
             for r in results:
+                bundle_ref = _safe_str(r.get("bundle_ref"))
+                entrypoint = _safe_str(r.get("entrypoint"))
+                param_id = _safe_str(r.get("param_id"))[:8]
+                seed = _safe_str(r.get("seed"))
+                path = _safe_str(r.get("path"))
+                rel_path = _relpath_maybe(path, storage_dir)
+
                 table.add_row(
-                    r.get("bundle_ref", "")[:20] + "..." if len(r.get("bundle_ref", "")) > 20 else r.get("bundle_ref", ""),
-                    r.get("entrypoint", ""),
-                    r.get("param_id", "")[:8],
-                    str(r.get("seed", "")),
-                    r.get("path", "").replace(str(storage_dir) + "/", "")[:40] + "..."
+                    _ellipsize(bundle_ref, 20),
+                    entrypoint,
+                    param_id,
+                    seed,
+                    _ellipsize(rel_path, 60),
                 )
         else:  # agg
             table.add_column("Bundle Ref", style="dim")
@@ -93,11 +103,17 @@ def list(
             table.add_column("Path", style="dim")
 
             for r in results:
+                bundle_ref = _safe_str(r.get("bundle_ref"))
+                target = _safe_str(r.get("target_entrypoint"))
+                n_results = _safe_str(r.get("n_sim_returns"))
+                path = _safe_str(r.get("path"))
+                rel_path = _relpath_maybe(path, storage_dir)
+
                 table.add_row(
-                    r.get("bundle_ref", "")[:20] + "..." if len(r.get("bundle_ref", "")) > 20 else r.get("bundle_ref", ""),
-                    r.get("target_entrypoint", ""),
-                    str(r.get("n_sim_returns", "")),
-                    r.get("path", "").replace(str(storage_dir) + "/", "")[:40] + "..."
+                    _ellipsize(bundle_ref, 20),
+                    target,
+                    n_results,
+                    _ellipsize(rel_path, 60),
                 )
 
         console.print(table)
@@ -109,17 +125,11 @@ def list(
 
 @app.command()
 def show(
-    path: Path = typer.Argument(
-        ...,
-        help="Path to result directory (from list command)"
-    ),
+    path: Path = typer.Argument(..., help="Path to result directory (from list command)"),
     output_format: str = typer.Option(
-        "summary",
-        "--format",
-        "-f",
-        help="Output format: summary, json, or artifacts"
-    )
-):
+        "summary", "--format", "-f", help="Output format: summary, json, or artifacts"
+    ),
+) -> None:
     """Show details of a specific result."""
     try:
         if not path.exists():
@@ -132,13 +142,13 @@ def show(
             error(f"No metadata.json found in {path}")
             raise typer.Exit(code=1)
 
-        with open(metadata_file, "r") as f:
+        with open(metadata_file) as f:
             metadata = json.load(f)
 
         # Load result
         result_file = path / "result.json"
         if result_file.exists():
-            with open(result_file, "r") as f:
+            with open(result_file) as f:
                 result = json.load(f)
         else:
             result = None
@@ -146,7 +156,7 @@ def show(
         # Load manifest if present
         manifest_file = path / "manifest.json"
         if manifest_file.exists():
-            with open(manifest_file, "r") as f:
+            with open(manifest_file) as f:
                 manifest = json.load(f)
         else:
             manifest = None
@@ -154,11 +164,7 @@ def show(
         # Display based on format
         if output_format == "json":
             # Full JSON output
-            output = {
-                "metadata": metadata,
-                "result": result,
-                "manifest": manifest
-            }
+            output = {"metadata": metadata, "result": result, "manifest": manifest}
             console.print_json(data=output)
 
         elif output_format == "artifacts":
@@ -177,12 +183,18 @@ def show(
             # Summary view
             section("Result Summary")
 
-            info_dict({
-                "Bundle": metadata.get("bundle_ref", "N/A"),
-                "Entrypoint": metadata.get("entrypoint", metadata.get("target_entrypoint", "N/A")),
-                "Params": metadata.get("param_id", "N/A")[:16] if metadata.get("param_id") else "N/A",
-                "Seed": metadata.get("seed", "N/A")
-            })
+            info_dict(
+                {
+                    "Bundle": metadata.get("bundle_ref", "N/A"),
+                    "Entrypoint": metadata.get(
+                        "entrypoint", metadata.get("target_entrypoint", "N/A")
+                    ),
+                    "Params": metadata.get("param_id", "N/A")[:16]
+                    if metadata.get("param_id")
+                    else "N/A",
+                    "Seed": metadata.get("seed", "N/A"),
+                }
+            )
 
             if result:
                 section("Outputs")
@@ -205,20 +217,13 @@ def clear(
         Path("/tmp/modelops/provenance"),
         "--storage-dir",
         "-s",
-        help="Storage directory for provenance store"
+        help="Storage directory for provenance store",
     ),
-    schema_name: Optional[str] = typer.Option(
-        None,
-        "--schema",
-        help="Schema to clear (default: current schema)"
+    schema_name: str | None = typer.Option(
+        None, "--schema", help="Schema to clear (default: current schema)"
     ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Skip confirmation prompt"
-    )
-):
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
+) -> None:
     """Clear cached results for a schema."""
     try:
         # Confirm if not forced
@@ -246,9 +251,9 @@ def stats(
         Path("/tmp/modelops/provenance"),
         "--storage-dir",
         "-s",
-        help="Storage directory for provenance store"
-    )
-):
+        help="Storage directory for provenance store",
+    ),
+) -> None:
     """Show storage statistics."""
     try:
         if not storage_dir.exists():
@@ -265,21 +270,23 @@ def stats(
             if path.is_file():
                 total_size += path.stat().st_size
                 if path.name == "metadata.json":
-                    if "sims" in str(path):
+                    if "sims" in path.parts:
                         num_sims += 1
-                    elif "aggs" in str(path):
+                    elif "aggs" in path.parts:
                         num_aggs += 1
                 elif path.name.startswith("artifact_"):
                     num_artifacts += 1
 
         section("Storage Statistics")
-        info_dict({
-            "Storage directory": str(storage_dir),
-            "Total size": f"{total_size / (1024*1024):.2f} MB",
-            "Simulation results": str(num_sims),
-            "Aggregation results": str(num_aggs),
-            "Artifact files": str(num_artifacts)
-        })
+        info_dict(
+            {
+                "Storage directory": str(storage_dir),
+                "Total size": f"{total_size / (1024 * 1024):.2f} MB",
+                "Simulation results": str(num_sims),
+                "Aggregation results": str(num_aggs),
+                "Artifact files": str(num_artifacts),
+            }
+        )
 
         # Show schema breakdown
         schema_dirs = [d for d in storage_dir.iterdir() if d.is_dir()]
@@ -287,7 +294,7 @@ def stats(
             section("Schemas")
             for schema_dir in schema_dirs:
                 schema_size = sum(f.stat().st_size for f in schema_dir.rglob("*") if f.is_file())
-                info(f"  {schema_dir.name}: {schema_size / (1024*1024):.2f} MB")
+                info(f"  {schema_dir.name}: {schema_size / (1024 * 1024):.2f} MB")
 
     except Exception as e:
         error(f"Failed to get statistics: {e}")
@@ -296,41 +303,29 @@ def stats(
 
 @app.command()
 def download(
-    job_id: Optional[str] = typer.Argument(
-        None,
-        help="Job ID to download results for (or latest if not specified)"
+    job_id: str | None = typer.Argument(
+        None, help="Job ID to download results for (or latest if not specified)"
     ),
     output_dir: Path = typer.Option(
         Path("./results"),
         "--output",
         "-o",
-        help="Output directory for downloaded files"
+        help="Output directory for downloaded files",
     ),
-    targets: Optional[str] = typer.Option(
+    targets: str | None = typer.Option(
         None,
         "--targets",
         "-t",
-        help="Comma-separated list of targets to download (default: all)"
+        help="Comma-separated list of targets to download (default: all)",
     ),
-    format: str = typer.Option(
-        "parquet",
-        "--format",
-        "-f",
-        help="Download format: parquet, manifest, or all"
+    fmt: str = typer.Option(
+        "parquet", "--format", "-f", help="Download format: parquet, manifest, or all"
     ),
-    env: Optional[str] = typer.Option(
-        None,
-        "--env",
-        "-e",
-        help="Environment name (dev, staging, prod)"
+    env: str | None = typer.Option(
+        None, "--env", "-e", help="Environment name (dev, staging, prod)"
     ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show detailed progress"
-    ),
-):
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress"),
+) -> None:
     """Download job results from Azure blob storage.
 
     Downloads Parquet files and manifest for completed jobs from Azure.
@@ -343,6 +338,7 @@ def download(
         mops results download --targets prevalence,incidence  # Specific targets
     """
     import os
+
     from azure.storage.blob import BlobServiceClient
 
     try:
@@ -362,7 +358,9 @@ def download(
 
             # Try to get from storage component
             if verbose:
-                info(f"Getting connection string from Pulumi stack (storage component, env={actual_env})...")
+                info(
+                    f"Getting connection string from Pulumi stack (storage component, env={actual_env})..."
+                )
 
             conn_str = get_stack_output("storage", "connection_string", actual_env)
 
@@ -371,12 +369,14 @@ def download(
                 conn_str = get_stack_output("infra", "storageConnectionString", actual_env)
 
             if not conn_str:
-                error(f"Could not get Azure storage connection string from Pulumi stacks.")
+                error("Could not get Azure storage connection string from Pulumi stacks.")
                 info(f"Tried stacks: modelops-storage-{actual_env}, modelops-infra-{actual_env}")
                 info("\nOptions:")
                 info("1. Ensure storage is deployed: mops infra up")
                 info("2. Set AZURE_STORAGE_CONNECTION_STRING environment variable")
-                info(f"3. Get it manually: pulumi stack output connectionString --stack modelops-storage-{actual_env}")
+                info(
+                    f"3. Get it manually: pulumi stack output connectionString --stack modelops-storage-{actual_env}"
+                )
                 raise typer.Exit(code=1)
 
         # Create blob service client
@@ -385,33 +385,41 @@ def download(
 
         # If no job_id, try to find the latest
         if not job_id:
-            info("Looking for latest job...")
-            # List all job directories with their timestamps
+            if verbose:
+                info("Looking for latest completed job (by manifest)...")
+            else:
+                info("Looking for latest job...")
+            # List all job manifest files to find latest completed job
             prefix = "views/jobs/"
             blobs = container_client.list_blobs(name_starts_with=prefix)
 
-            # Track latest job by modification time
+            # Track latest job by manifest.json modification time
             latest_job = None
             latest_time = None
 
             for blob in blobs:
-                # Extract job ID from path
-                parts = blob.name.split("/")
-                if len(parts) >= 3 and (parts[2].startswith("job-") or parts[2].startswith("calib-")):
-                    job_id_candidate = parts[2]
-                    blob_time = blob.last_modified
+                # Only look at manifest.json files as proxy for completed jobs
+                if blob.name.endswith("/manifest.json"):
+                    parts = blob.name.split("/")
+                    if len(parts) >= 3 and (
+                        parts[2].startswith("job-") or parts[2].startswith("calib-")
+                    ):
+                        job_id_candidate = parts[2]
+                        blob_time = blob.last_modified
 
-                    # Track the latest by actual modification time
-                    if latest_time is None or blob_time > latest_time:
-                        latest_time = blob_time
-                        latest_job = job_id_candidate
+                        # Track the latest by manifest modification time
+                        if latest_time is None or blob_time > latest_time:
+                            latest_time = blob_time
+                            latest_job = job_id_candidate
 
             if not latest_job:
-                error("No jobs found in Azure storage")
+                error("No completed jobs (with manifest.json) found in Azure storage")
                 raise typer.Exit(code=1)
 
             job_id = latest_job
-            info(f"Using latest job: {job_id} (modified: {latest_time.strftime('%Y-%m-%d %H:%M:%S UTC')})")
+            info(
+                f"Using latest job: {job_id} (modified: {latest_time.strftime('%Y-%m-%d %H:%M:%S UTC')})"
+            )
 
         # Create output directory
         job_output_dir = output_dir / job_id
@@ -420,7 +428,7 @@ def download(
         section(f"Downloading results for job {job_id}")
 
         # Download manifest if requested
-        if format in ["manifest", "all"]:
+        if fmt in ["manifest", "all"]:
             manifest_blob = f"views/jobs/{job_id}/manifest.json"
             manifest_path = job_output_dir / "manifest.json"
             try:
@@ -431,7 +439,7 @@ def download(
                 success(f"Downloaded manifest to {manifest_path}")
 
                 # Parse manifest to show summary
-                with open(manifest_path, "r") as f:
+                with open(manifest_path) as f:
                     manifest = json.load(f)
                     if "targets" in manifest:
                         info(f"Available targets: {', '.join(manifest['targets'].keys())}")
@@ -440,7 +448,7 @@ def download(
                     warning(f"Could not download manifest: {e}")
 
         # Download Parquet files
-        if format in ["parquet", "all"]:
+        if fmt in ["parquet", "all"]:
             # List all parquet files for this job
             prefix = f"views/jobs/{job_id}/targets/"
             blobs = container_client.list_blobs(name_starts_with=prefix)
@@ -493,15 +501,17 @@ def download(
                 download_stream = blob_client.download_blob()
                 f.write(download_stream.readall())
 
-            success(f"Downloaded calibration summary")
+            success("Downloaded calibration summary")
 
             # Parse and display calibration summary
-            with open(calib_path, "r") as f:
+            with open(calib_path) as f:
                 calib_data = json.load(f)
                 section("Calibration Results")
                 info(f"  Algorithm: {calib_data.get('algorithm', 'N/A')}")
                 summary = calib_data.get("summary", {})
-                info(f"  Trials completed: {summary.get('n_completed', 'N/A')}/{summary.get('n_trials', 'N/A')}")
+                info(
+                    f"  Trials completed: {summary.get('n_completed', 'N/A')}/{summary.get('n_trials', 'N/A')}"
+                )
                 info(f"  Best loss: {summary.get('best_value', 'N/A')}")
                 if calib_data.get("best_params"):
                     info("  Best parameters:")
@@ -526,5 +536,6 @@ def download(
         error(f"Failed to download results: {e}")
         if verbose:
             import traceback
+
             console.print(traceback.format_exc())
         raise typer.Exit(code=1)

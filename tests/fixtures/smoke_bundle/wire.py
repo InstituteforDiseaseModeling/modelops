@@ -35,14 +35,12 @@ def wire(entrypoint: str, params: Dict[str, Any], seed: int) -> Dict[str, bytes]
 
     # Serialize the result as JSON bytes
     # In a real Calabaria model, this would be Arrow IPC format
-    result_bytes = json.dumps(result).encode('utf-8')
+    result_bytes = json.dumps(result).encode("utf-8")
 
     # Return as a dictionary of named artifacts
     return {
         "result": result_bytes,
-        "metadata": json.dumps({
-            "entrypoint": entrypoint,
-            "status": "completed",
-            "model_type": "smoke_test"
-        }).encode('utf-8')
+        "metadata": json.dumps(
+            {"entrypoint": entrypoint, "status": "completed", "model_type": "smoke_test"}
+        ).encode("utf-8"),
     }

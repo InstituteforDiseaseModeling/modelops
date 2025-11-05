@@ -5,7 +5,6 @@ Single source of truth for default infrastructure configurations.
 
 from datetime import datetime
 
-
 DEFAULT_INFRA_TEMPLATE = """# ModelOps Infrastructure Configuration
 # Generated: {timestamp}
 # Run 'mops infra up' to deploy (uses this file by default)
@@ -72,7 +71,7 @@ def get_infra_template(**kwargs) -> str:
     Returns:
         Formatted infrastructure YAML template
     """
-    kwargs.setdefault('timestamp', datetime.now().isoformat())
-    kwargs.setdefault('location', 'eastus2')
-    kwargs.setdefault('k8s_version', '1.30')
+    kwargs.setdefault("timestamp", datetime.now().isoformat())
+    kwargs.setdefault("location", "eastus2")
+    kwargs.setdefault("k8s_version", "1.30")
     return DEFAULT_INFRA_TEMPLATE.format(**kwargs)

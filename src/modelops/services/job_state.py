@@ -4,11 +4,11 @@ Defines the job lifecycle states and valid transitions, along with
 the data structure for tracking job state.
 """
 
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from enum import Enum
-from typing import Optional, Set, Dict, Any, List
 import json
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Any
 
 
 class JobStatus(str, Enum):
@@ -19,29 +19,37 @@ class JobStatus(str, Enum):
     """
 
     # Initial states
-    PENDING = "pending"          # Job created, not yet submitted to K8s
-    SUBMITTING = "submitting"    # Being submitted to Kubernetes
+    PENDING = "pending"  # Job created, not yet submitted to K8s
+    SUBMITTING = "submitting"  # Being submitted to Kubernetes
 
     # Running states
-    SCHEDULED = "scheduled"      # K8s Job created, waiting for pod
-    RUNNING = "running"          # Pod running, executing tasks
-    VALIDATING = "validating"    # K8s complete, checking outputs exist
+    SCHEDULED = "scheduled"  # K8s Job created, waiting for pod
+    RUNNING = "running"  # Pod running, executing tasks
+    VALIDATING = "validating"  # K8s complete, checking outputs exist
 
     # Terminal states (no transitions out)
-    SUCCEEDED = "succeeded"      # All outputs verified present
+    SUCCEEDED = "succeeded"  # All outputs verified present
     PARTIAL_SUCCESS = "partial"  # Some outputs missing (resumable)
-    FAILED = "failed"           # Infrastructure or execution failure
-    CANCELLED = "cancelled"     # User-cancelled or SIGTERM
+    FAILED = "failed"  # Infrastructure or execution failure
+    CANCELLED = "cancelled"  # User-cancelled or SIGTERM
 
 
 # Legal state transitions to prevent invalid states
-TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
+TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.PENDING: {JobStatus.SUBMITTING, JobStatus.CANCELLED},
     JobStatus.SUBMITTING: {JobStatus.SCHEDULED, JobStatus.FAILED},
     JobStatus.SCHEDULED: {JobStatus.RUNNING, JobStatus.FAILED, JobStatus.CANCELLED},
-    JobStatus.RUNNING: {JobStatus.VALIDATING, JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED},  # SUCCEEDED for backward compat
-    JobStatus.VALIDATING: {JobStatus.SUCCEEDED, JobStatus.PARTIAL_SUCCESS, JobStatus.FAILED},
-
+    JobStatus.RUNNING: {
+        JobStatus.VALIDATING,
+        JobStatus.SUCCEEDED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    },  # SUCCEEDED for backward compat
+    JobStatus.VALIDATING: {
+        JobStatus.SUCCEEDED,
+        JobStatus.PARTIAL_SUCCESS,
+        JobStatus.FAILED,
+    },
     # Terminal states - no outbound transitions
     JobStatus.SUCCEEDED: set(),
     JobStatus.PARTIAL_SUCCESS: set(),
@@ -52,7 +60,12 @@ TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
 
 def is_terminal(status: JobStatus) -> bool:
     """Check if a status is terminal (no transitions out)."""
-    return status in {JobStatus.SUCCEEDED, JobStatus.PARTIAL_SUCCESS, JobStatus.FAILED, JobStatus.CANCELLED}
+    return status in {
+        JobStatus.SUCCEEDED,
+        JobStatus.PARTIAL_SUCCESS,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
 
 
 def validate_transition(from_status: JobStatus, to_status: JobStatus) -> bool:
@@ -70,7 +83,7 @@ def validate_transition(from_status: JobStatus, to_status: JobStatus) -> bool:
 
 def now_iso() -> str:
     """Get current UTC time as ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -88,39 +101,39 @@ class JobState:
     updated_at: str
 
     # Kubernetes metadata
-    k8s_name: Optional[str] = None
-    k8s_namespace: Optional[str] = None
-    k8s_uid: Optional[str] = None  # For correlation with K8s events
+    k8s_name: str | None = None
+    k8s_namespace: str | None = None
+    k8s_uid: str | None = None  # For correlation with K8s events
 
     # Progress tracking
     tasks_total: int = 0
     tasks_completed: int = 0
 
     # Error information
-    error_message: Optional[str] = None
-    error_code: Optional[str] = None
+    error_message: str | None = None
+    error_code: str | None = None
 
     # Results
-    results_path: Optional[str] = None
+    results_path: str | None = None
 
     # Validation tracking
-    expected_outputs: List[Dict] = field(default_factory=list)  # OutputSpec dicts
-    verified_outputs: List[str] = field(default_factory=list)   # Paths that exist
-    missing_outputs: List[str] = field(default_factory=list)    # Paths not found
-    tasks_verified: int = 0                                     # Count of verified tasks
-    validation_started_at: Optional[str] = None                 # When validation began
-    validation_completed_at: Optional[str] = None               # When validation finished
-    validation_attempts: int = 0                                # Number of validation attempts
-    last_validation_error: Optional[str] = None                 # Last validation error
+    expected_outputs: list[dict] = field(default_factory=list)  # OutputSpec dicts
+    verified_outputs: list[str] = field(default_factory=list)  # Paths that exist
+    missing_outputs: list[str] = field(default_factory=list)  # Paths not found
+    tasks_verified: int = 0  # Count of verified tasks
+    validation_started_at: str | None = None  # When validation began
+    validation_completed_at: str | None = None  # When validation finished
+    validation_attempts: int = 0  # Number of validation attempts
+    last_validation_error: str | None = None  # Last validation error
 
     # Additional metadata
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         data = asdict(self)
         # Convert enum to string
-        data['status'] = self.status.value if isinstance(self.status, JobStatus) else self.status
+        data["status"] = self.status.value if isinstance(self.status, JobStatus) else self.status
         return data
 
     def to_json(self) -> str:
@@ -128,27 +141,28 @@ class JobState:
         return json.dumps(self.to_dict(), indent=2)
 
     @classmethod
-    def from_dict(cls, data: dict) -> 'JobState':
+    def from_dict(cls, data: dict) -> "JobState":
         """Create from dictionary."""
         # Convert status string to enum
-        if 'status' in data and isinstance(data['status'], str):
-            data['status'] = JobStatus(data['status'])
+        if "status" in data and isinstance(data["status"], str):
+            data["status"] = JobStatus(data["status"])
 
         # Filter out unknown fields for backward compatibility
         # This allows old job records with extra fields to still be read
         from dataclasses import fields
+
         valid_fields = {f.name for f in fields(cls)}
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
 
         return cls(**filtered_data)
 
     @classmethod
-    def from_json(cls, json_str: str) -> 'JobState':
+    def from_json(cls, json_str: str) -> "JobState":
         """Deserialize from JSON string."""
         data = json.loads(json_str)
         return cls.from_dict(data)
 
-    def copy_with(self, **changes) -> 'JobState':
+    def copy_with(self, **changes) -> "JobState":
         """Create a copy with specified changes.
 
         Useful for updates while maintaining immutability.
@@ -158,7 +172,7 @@ class JobState:
         return self.from_dict(data)
 
     @property
-    def progress_percent(self) -> Optional[float]:
+    def progress_percent(self) -> float | None:
         """Calculate progress percentage if applicable."""
         if self.tasks_total > 0:
             return (self.tasks_completed / self.tasks_total) * 100
@@ -172,14 +186,17 @@ class JobState:
 
 class InvalidTransitionError(Exception):
     """Raised when attempting an invalid state transition."""
+
     pass
 
 
 class TerminalStateError(Exception):
     """Raised when attempting to modify a terminal state."""
+
     pass
 
 
 class JobExistsError(Exception):
     """Raised when attempting to register a job that already exists."""
+
     pass

@@ -2,10 +2,10 @@
 
 import os
 import subprocess
-from typing import Any, Dict, Optional, List, Union
 from pathlib import Path
 
-def get_pulumi_env() -> Dict[str, str]:
+
+def get_pulumi_env() -> dict[str, str]:
     """Get environment with Pulumi passphrase properly configured.
 
     Returns:
@@ -31,11 +31,11 @@ def get_pulumi_env() -> Dict[str, str]:
 
 
 def run_pulumi_command(
-    cmd: List[str],
-    cwd: Optional[Union[str, Path]] = None,
+    cmd: list[str],
+    cwd: str | Path | None = None,
     capture_output: bool = True,
     text: bool = True,
-    **kwargs
+    **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run a Pulumi command with proper environment setup.
 
@@ -56,11 +56,4 @@ def run_pulumi_command(
     if "env" in kwargs:
         env.update(kwargs.pop("env"))
 
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=capture_output,
-        text=text,
-        env=env,
-        **kwargs
-    )
+    return subprocess.run(cmd, cwd=cwd, capture_output=capture_output, text=text, env=env, **kwargs)

@@ -7,6 +7,7 @@ This is a minimal simulation that validates the complete flow:
 4. Results returned through Dask
 """
 
+
 def simulate(params, seed):
     """Minimal simulation for smoke testing OCI bundle integration.
 
@@ -26,5 +27,5 @@ def simulate(params, seed):
         "bundle_integration": "working",
         # Include some computation to verify execution
         "computed_value": params.get("value", 1.0) * seed,
-        "model_type": params.get("model", "smoke_test")
+        "model_type": params.get("model", "smoke_test"),
     }

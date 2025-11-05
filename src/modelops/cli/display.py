@@ -1,7 +1,8 @@
 """Consolidated display utilities for CLI commands."""
+
+from typing import Any
+
 from rich.console import Console
-from rich.table import Table
-from typing import Dict, List, Optional, Any, Tuple
 
 console = Console()
 
@@ -31,13 +32,13 @@ def section(title: str) -> None:
     console.print(f"\n[bold]{title}[/bold]")
 
 
-def info_dict(data: Dict[str, Any], indent: str = "  ") -> None:
+def info_dict(data: dict[str, Any], indent: str = "  ") -> None:
     """Print a dictionary as indented key-value pairs."""
     for key, value in data.items():
         console.print(f"{indent}{key}: {value}")
 
 
-def commands(cmds: List[Tuple[str, str]], indent: str = "  ") -> None:
+def commands(cmds: list[tuple[str, str]], indent: str = "  ") -> None:
     """Print a list of commands with optional descriptions."""
     for desc, cmd in cmds:
         if desc:
@@ -45,7 +46,7 @@ def commands(cmds: List[Tuple[str, str]], indent: str = "  ") -> None:
         console.print(f"{indent}{cmd}")
 
 
-def urls(url_map: Dict[str, str], indent: str = "  ") -> None:
+def urls(url_map: dict[str, str], indent: str = "  ") -> None:
     """Print URLs with highlighting."""
     for label, url in url_map.items():
         if url.startswith("http"):
@@ -54,16 +55,29 @@ def urls(url_map: Dict[str, str], indent: str = "  ") -> None:
             console.print(f"{indent}{label}: {url}")
 
 
-def workspace_info(outputs: Dict, env: str, stack_name: str) -> None:
+def workspace_info(outputs: dict, env: str, stack_name: str) -> None:
     """Standard workspace info display."""
     from ..core import StackNaming
-    namespace = outputs.get('namespace', {}).value if outputs.get('namespace') else StackNaming.get_namespace("dask", env)
-    workers = outputs.get('worker_count', {}).value if outputs.get('worker_count') else 'unknown'
+
+    namespace = (
+        outputs.get("namespace", {}).value
+        if outputs.get("namespace")
+        else StackNaming.get_namespace("dask", env)
+    )
+    workers = outputs.get("worker_count", {}).value if outputs.get("worker_count") else "unknown"
 
     # Get autoscaling info from outputs
-    autoscaling_enabled = outputs.get('autoscaling_enabled', {}).value if outputs.get('autoscaling_enabled') else False
-    autoscaling_min = outputs.get('autoscaling_min', {}).value if outputs.get('autoscaling_min') else 'N/A'
-    autoscaling_max = outputs.get('autoscaling_max', {}).value if outputs.get('autoscaling_max') else 'N/A'
+    autoscaling_enabled = (
+        outputs.get("autoscaling_enabled", {}).value
+        if outputs.get("autoscaling_enabled")
+        else False
+    )
+    autoscaling_min = (
+        outputs.get("autoscaling_min", {}).value if outputs.get("autoscaling_min") else "N/A"
+    )
+    autoscaling_max = (
+        outputs.get("autoscaling_max", {}).value if outputs.get("autoscaling_max") else "N/A"
+    )
 
     # Format workers display based on autoscaling
     if autoscaling_enabled:
@@ -71,36 +85,45 @@ def workspace_info(outputs: Dict, env: str, stack_name: str) -> None:
     else:
         workers_display = f"{workers} (fixed)"
 
-    info_dict({
-        "Environment": env,
-        "Stack": stack_name,
-        "Namespace": namespace,
-        "Workers": workers_display,
-        "Autoscaling": "✓ Enabled" if autoscaling_enabled else "✗ Disabled"
-    })
-    
+    info_dict(
+        {
+            "Environment": env,
+            "Stack": stack_name,
+            "Namespace": namespace,
+            "Workers": workers_display,
+            "Autoscaling": "✓ Enabled" if autoscaling_enabled else "✗ Disabled",
+        }
+    )
+
     section("Port-forward commands:")
-    commands([
-        ("For Dask client connections:", f"kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786"),
-        ("For dashboard:", f"kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787")
-    ])
-    
+    commands(
+        [
+            (
+                "For Dask client connections:",
+                f"kubectl port-forward -n {namespace} svc/dask-scheduler 8786:8786",
+            ),
+            (
+                "For dashboard:",
+                f"kubectl port-forward -n {namespace} svc/dask-scheduler 8787:8787",
+            ),
+        ]
+    )
+
     section("Access URLs (after port-forwarding):")
-    urls({
-        "Scheduler": "tcp://localhost:8786",
-        "Dashboard": "http://localhost:8787"
-    })
+    urls({"Scheduler": "tcp://localhost:8786", "Dashboard": "http://localhost:8787"})
 
 
 def workspace_commands(namespace: str) -> None:
     """Display useful workspace commands."""
     section("Useful commands:")
-    info_dict({
-        "Logs": f"kubectl logs -n {namespace} -l app=dask-scheduler",
-        "Workers": f"kubectl get pods -n {namespace} -l app=dask-worker",
-        "HPA Status": f"kubectl get hpa -n {namespace}",
-        "HPA Details": f"kubectl describe hpa -n {namespace} dask-workers-hpa"
-    })
+    info_dict(
+        {
+            "Logs": f"kubectl logs -n {namespace} -l app=dask-scheduler",
+            "Workers": f"kubectl get pods -n {namespace} -l app=dask-worker",
+            "HPA Status": f"kubectl get hpa -n {namespace}",
+            "HPA Details": f"kubectl describe hpa -n {namespace} dask-workers-hpa",
+        }
+    )
 
 
 def dim(message: str) -> None:

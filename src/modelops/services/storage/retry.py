@@ -5,16 +5,17 @@ in concurrent scenarios.
 """
 
 import json
-import time
-import random
 import logging
-from typing import Any, Callable, TypeVar, Optional
+import random
+import time
+from collections.abc import Callable
+from typing import TypeVar
 
-from .versioned import VersionedStore, TooManyRetriesError
+from .versioned import TooManyRetriesError, VersionedStore
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def update_with_retry(
@@ -22,7 +23,7 @@ def update_with_retry(
     key: str,
     update_fn: Callable[[dict], dict],
     max_attempts: int = 5,
-    initial_delay: float = 0.1
+    initial_delay: float = 0.1,
 ) -> dict:
     """Update a JSON value with CAS retry logic.
 
@@ -56,20 +57,20 @@ def update_with_retry(
 
         # Decode JSON
         try:
-            current_value = json.loads(current_bytes.decode('utf-8'))
+            current_value = json.loads(current_bytes.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise ValueError(f"Invalid JSON in {key}: {e}")
 
         # Apply update
         try:
             new_value = update_fn(current_value)
-        except Exception as e:
+        except Exception:
             # Don't retry on update function errors - re-raise them
             # This allows business logic exceptions to propagate correctly
             raise
 
         # Encode back to bytes
-        new_bytes = json.dumps(new_value, indent=2).encode('utf-8')
+        new_bytes = json.dumps(new_value, indent=2).encode("utf-8")
 
         # Try to write back
         if store.put(key, new_bytes, version):
@@ -78,7 +79,7 @@ def update_with_retry(
 
         # Conflict - retry with exponential backoff + jitter
         if attempt < max_attempts - 1:
-            delay = (2 ** attempt) * initial_delay  # 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
+            delay = (2**attempt) * initial_delay  # 0.1s, 0.2s, 0.4s, 0.8s, 1.6s
             jitter = random.uniform(0, initial_delay)  # Up to 100ms jitter
             total_delay = delay + jitter
 
@@ -90,17 +91,10 @@ def update_with_retry(
         else:
             logger.warning(f"CAS conflict on {key}, no more retries")
 
-    raise TooManyRetriesError(
-        f"Failed to update {key} after {max_attempts} attempts"
-    )
+    raise TooManyRetriesError(f"Failed to update {key} after {max_attempts} attempts")
 
 
-def create_with_retry(
-    store: VersionedStore,
-    key: str,
-    value: dict,
-    max_attempts: int = 3
-) -> bool:
+def create_with_retry(store: VersionedStore, key: str, value: dict, max_attempts: int = 3) -> bool:
     """Create a new JSON value with retry logic.
 
     Simpler than update_with_retry since create_if_absent is already atomic.
@@ -118,7 +112,7 @@ def create_with_retry(
     Raises:
         Exception: If creation fails for reasons other than existence
     """
-    value_bytes = json.dumps(value, indent=2).encode('utf-8')
+    value_bytes = json.dumps(value, indent=2).encode("utf-8")
 
     for attempt in range(max_attempts):
         try:
@@ -131,9 +125,7 @@ def create_with_retry(
 
         except Exception as e:
             if attempt < max_attempts - 1:
-                logger.warning(
-                    f"Failed to create {key} on attempt {attempt + 1}: {e}, retrying"
-                )
+                logger.warning(f"Failed to create {key} on attempt {attempt + 1}: {e}, retrying")
                 time.sleep(0.1 * (attempt + 1))
             else:
                 raise
@@ -141,7 +133,7 @@ def create_with_retry(
     return False  # Should never reach here
 
 
-def get_json(store: VersionedStore, key: str) -> Optional[dict]:
+def get_json(store: VersionedStore, key: str) -> dict | None:
     """Get and decode a JSON value.
 
     Convenience function that handles JSON decoding.
@@ -159,7 +151,7 @@ def get_json(store: VersionedStore, key: str) -> Optional[dict]:
 
     data_bytes, _ = result
     try:
-        return json.loads(data_bytes.decode('utf-8'))
+        return json.loads(data_bytes.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
         logger.error(f"Invalid JSON in {key}: {e}")
         return None

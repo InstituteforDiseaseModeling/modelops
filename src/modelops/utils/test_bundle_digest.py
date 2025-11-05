@@ -16,14 +16,13 @@ The key difference from production hashing:
 DO NOT use this for production bundle creation or verification!
 """
 
-from pathlib import Path
 import hashlib
 import os
 import stat
-from typing import Set
+from pathlib import Path
 
 # Files and directories to ignore for deterministic hashing
-DEFAULT_IGNORES: Set[str] = {
+DEFAULT_IGNORES: set[str] = {
     "__pycache__",
     ".git",
     ".DS_Store",
@@ -130,7 +129,7 @@ def compute_test_bundle_digest(root: Path, include_mode: bool = False) -> str:
                     # Read in chunks for memory efficiency
                     while chunk := f.read(8192):
                         h.update(chunk)
-            except (OSError, IOError):
+            except OSError:
                 # File might have been deleted or be unreadable
                 h.update(b"UNREADABLE")
 

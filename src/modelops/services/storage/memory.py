@@ -5,8 +5,8 @@ the CAS semantics of cloud storage providers.
 """
 
 import threading
-from typing import Optional, Dict, Any
-from .versioned import VersionedStore, VersionToken
+
+from .versioned import VersionToken
 
 
 class InMemoryVersionedStore:
@@ -18,20 +18,17 @@ class InMemoryVersionedStore:
 
     def __init__(self):
         """Initialize empty store with thread safety."""
-        self._data: Dict[str, bytes] = {}
-        self._versions: Dict[str, int] = {}
+        self._data: dict[str, bytes] = {}
+        self._versions: dict[str, int] = {}
         self._version_counter = 0
         self._lock = threading.Lock()
 
-    def get(self, key: str) -> Optional[tuple[bytes, VersionToken]]:
+    def get(self, key: str) -> tuple[bytes, VersionToken] | None:
         """Get current value and version."""
         with self._lock:
             if key not in self._data:
                 return None
-            return (
-                self._data[key],
-                VersionToken(self._versions[key])
-            )
+            return (self._data[key], VersionToken(self._versions[key]))
 
     def put(self, key: str, value: bytes, version: VersionToken) -> bool:
         """Update if version matches (CAS)."""
@@ -66,10 +63,7 @@ class InMemoryVersionedStore:
     def list_keys(self, prefix: str = "") -> list[str]:
         """List keys with prefix."""
         with self._lock:
-            return [
-                key for key in self._data.keys()
-                if key.startswith(prefix)
-            ]
+            return [key for key in self._data.keys() if key.startswith(prefix)]
 
     def delete(self, key: str) -> bool:
         """Delete a key."""

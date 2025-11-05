@@ -6,29 +6,30 @@ adapters (Dask) and secondary adapters (ExecutionEnvironment).
 
 from dataclasses import replace
 
-from modelops_contracts import SimTask, SimReturn
+from modelops_contracts import SimReturn, SimTask
 from modelops_contracts.ports import ExecutionEnvironment
+
 from modelops.telemetry import TelemetryCollector
 
 
 class SimulationExecutor:
     """Application service layer for simulation execution.
-    
+
     This is the seam between:
     - Inbound: Primary adapters (DaskSimulationService)
     - Outbound: Secondary adapters (ExecutionEnvironment)
-    
+
     Even though thin now, this is where domain logic belongs:
     - Validation & normalization (coming soon)
     - Fingerprinting & caching (future)
     - Policy & routing decisions (future)
     - Observability & metrics (future)
-    
+
     Infrastructure concerns stay in ExecutionEnvironment.
     The executor used to have bundle_repo and cas dependencies too,
     but those are infrastructure concerns that belong in ExecutionEnvironment.
     """
-    
+
     def __init__(self, exec_env: ExecutionEnvironment):
         """Initialize with single dependency.
 
@@ -37,7 +38,7 @@ class SimulationExecutor:
         """
         self.exec_env = exec_env
         self.telemetry = TelemetryCollector()
-    
+
     def execute(self, task: SimTask) -> SimReturn:
         """Execute a simulation task.
 
@@ -79,11 +80,11 @@ class SimulationExecutor:
             )
 
             return result
-    
+
     def shutdown(self):
         """Clean shutdown of executor.
-        
+
         Ensures all resources are properly released.
         """
-        if hasattr(self.exec_env, 'shutdown'):
+        if hasattr(self.exec_env, "shutdown"):
             self.exec_env.shutdown()

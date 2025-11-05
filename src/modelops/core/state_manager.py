@@ -1,15 +1,15 @@
 """Pulumi state management with automatic lock recovery and state reconciliation."""
 
 import json
-import os
 import subprocess
-from .subprocess_utils import run_pulumi_command
-import time
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, Callable
+
 import psutil
 import pulumi.automation as auto
+
+from .subprocess_utils import run_pulumi_command
 
 
 class PulumiStateManager:
@@ -43,8 +43,8 @@ class PulumiStateManager:
             component: Component name (storage, registry, cluster, workspace)
             env: Environment name (dev, staging, prod)
         """
-        from .paths import ensure_work_dir
         from .automation import _ensure_passphrase
+        from .paths import ensure_work_dir
 
         self.component = component
         self.env = env
@@ -58,10 +58,10 @@ class PulumiStateManager:
     def execute_with_recovery(
         self,
         operation: str,
-        program: Optional[Callable] = None,
-        on_output: Optional[Callable[[str], None]] = None,
-        **kwargs
-    ) -> Optional[auto.UpResult]:
+        program: Callable | None = None,
+        on_output: Callable[[str], None] | None = None,
+        **kwargs,
+    ) -> auto.UpResult | None:
         """Execute Pulumi operation with automatic lock recovery.
 
         Args:
@@ -149,7 +149,7 @@ class PulumiStateManager:
                     if self._is_lock_stale(lock_data, lock_file):
                         return True
 
-                except (json.JSONDecodeError, IOError):
+                except (OSError, json.JSONDecodeError):
                     # Corrupted lock file is considered stale
                     return True
 
@@ -197,7 +197,9 @@ class PulumiStateManager:
                 age_seconds = (now - lock_time).total_seconds()
 
                 if age_seconds > self.lock_timeout_seconds:
-                    print(f"    Lock is {int(age_seconds/60)} minutes old (timeout: {self.lock_timeout_seconds/60} min)")
+                    print(
+                        f"    Lock is {int(age_seconds / 60)} minutes old (timeout: {self.lock_timeout_seconds / 60} min)"
+                    )
                     return True
         except (ValueError, TypeError) as e:
             print(f"    Could not parse lock timestamp: {e}")
@@ -216,7 +218,7 @@ class PulumiStateManager:
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
             )
 
             if result.returncode == 0:
@@ -244,18 +246,20 @@ class PulumiStateManager:
             pending_ops = self._check_pending_operations()
 
             if pending_ops:
-                print(f"  ⚠ Found {len(pending_ops)} pending operations, running interactive refresh...")
+                print(
+                    f"  ⚠ Found {len(pending_ops)} pending operations, running interactive refresh..."
+                )
                 # For pending CREATE operations, we need to run refresh with --yes to clear them
                 result = run_pulumi_command(
                     ["pulumi", "refresh", "--yes", "--skip-preview", "-s", stack_name],
                     cwd=self.work_dir,
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=60,
                 )
 
                 if result.returncode == 0:
-                    print(f"  ✓ Cleared pending operations and refreshed state")
+                    print("  ✓ Cleared pending operations and refreshed state")
                 else:
                     print(f"  ⚠ Refresh completed with warnings: {result.stderr}")
             else:
@@ -264,16 +268,16 @@ class PulumiStateManager:
                 result = stack.refresh(on_output=lambda x: None)
 
                 if result.summary.result == "succeeded":
-                    print(f"  ✓ State refreshed successfully")
+                    print("  ✓ State refreshed successfully")
                 else:
-                    print(f"  ⚠ State refresh had issues but continuing")
+                    print("  ⚠ State refresh had issues but continuing")
 
         except subprocess.TimeoutExpired:
-            print(f"  ⚠ Refresh timed out, continuing anyway")
+            print("  ⚠ Refresh timed out, continuing anyway")
         except Exception as e:
             # Don't fail the operation if refresh fails
             print(f"  ⚠ Could not refresh state: {e}")
-            print(f"    Continuing with potentially stale state...")
+            print("    Continuing with potentially stale state...")
 
     def _check_pending_operations(self) -> list:
         """Check for pending operations in the stack.
@@ -290,7 +294,7 @@ class PulumiStateManager:
                 cwd=self.work_dir,
                 capture_output=True,
                 text=True,
-                timeout=10
+                timeout=10,
             )
 
             if result.returncode == 0:
@@ -304,7 +308,7 @@ class PulumiStateManager:
 
         return []
 
-    def _get_stack(self, program: Optional[Callable] = None) -> auto.Stack:
+    def _get_stack(self, program: Callable | None = None) -> auto.Stack:
         """Get or create Pulumi stack.
 
         Args:
@@ -317,10 +321,7 @@ class PulumiStateManager:
 
         # Use the centralized select_stack function
         return automation.select_stack(
-            self.component,
-            self.env,
-            program=program,
-            work_dir=str(self.work_dir)
+            self.component, self.env, program=program, work_dir=str(self.work_dir)
         )
 
     def _get_stack_name(self) -> str:
@@ -330,8 +331,8 @@ class PulumiStateManager:
             Stack name in format modelops-{component}-{env}
         """
         from .naming import StackNaming
-        return StackNaming.get_stack_name(self.component, self.env)
 
+        return StackNaming.get_stack_name(self.component, self.env)
 
     def _handle_lock_error(self, error: Exception):
         """Handle lock errors with helpful messages.
@@ -340,8 +341,8 @@ class PulumiStateManager:
             error: The lock error exception
         """
         print(f"\n  Error: {error}")
-        print(f"\n  The stack appears to be locked. Try:")
-        print(f"    1. Wait for the current operation to complete")
-        print(f"    2. If the operation is stuck, clear the lock:")
+        print("\n  The stack appears to be locked. Try:")
+        print("    1. Wait for the current operation to complete")
+        print("    2. If the operation is stuck, clear the lock:")
         print(f"       cd {self.work_dir} && pulumi cancel")
-        print(f"    3. Then retry your operation")
+        print("    3. Then retry your operation")
