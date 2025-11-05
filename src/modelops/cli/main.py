@@ -88,7 +88,7 @@ app.add_typer(
     help=" Infrastructure management - setup, status, teardown (RECOMMENDED)",
 )
 
-app.add_typer(adaptive.app, name="job", help="🔬 Run experiments and simulations")
+app.add_typer(adaptive.app, name="job", help=" Run simulation and calibration jobs")
 
 app.add_typer(results.app, name="results", help=" View and manage experiment results")
 
@@ -125,12 +125,12 @@ app.add_typer(
 app.add_typer(
     adaptive.app,
     name="adaptive",
-    help="[dim]Manage adaptive optimization runs (alias: run)[/dim]",
+    help="[dim]Manage infrastructure for adaptive (e.g. calibration) jobs[/dim]",
     hidden=False,
 )
 
 # Utility commands
-app.add_typer(config_cli.app, name="config", help="⚙️ Configure ModelOps settings")
+app.add_typer(config_cli.app, name="config", help=" Configure ModelOps settings")
 
 # Developer tools
 app.add_typer(dev.app, name="dev", help=" Developer tools and testing utilities")
