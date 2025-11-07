@@ -109,7 +109,7 @@ If you prefer to install manually or are developing ModelOps:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install ModelOps with all components
-uv tool install "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
+uv tool install --python  ">=3.12"  "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
 ```
 
 ### For Developers
