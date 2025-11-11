@@ -484,6 +484,294 @@ def list_workspaces():
 
 
 @app.command()
+def update(
+    env: str | None = env_option(),
+    # Resource overrides
+    scheduler_memory: str | None = typer.Option(
+        None, "--scheduler-memory", help="Scheduler memory (e.g., '2Gi')"
+    ),
+    scheduler_cpu: str | None = typer.Option(
+        None, "--scheduler-cpu", help="Scheduler CPU (e.g., '1' or '500m')"
+    ),
+    worker_memory: str | None = typer.Option(
+        None, "--worker-memory", help="Worker memory (e.g., '8Gi')"
+    ),
+    worker_cpu: str | None = typer.Option(None, "--worker-cpu", help="Worker CPU (e.g., '3.5')"),
+    worker_replicas: int | None = typer.Option(
+        None,
+        "--worker-replicas",
+        help="Fixed number of worker replicas (requires --disable-autoscaling)",
+    ),
+    worker_processes: int | None = typer.Option(
+        None, "--worker-processes", help="Number of processes per worker pod"
+    ),
+    worker_threads: int | None = typer.Option(
+        None, "--worker-threads", help="Number of threads per worker process"
+    ),
+    # Autoscaling overrides
+    enable_autoscaling: bool = typer.Option(
+        False, "--enable-autoscaling", help="Enable HorizontalPodAutoscaler for workers"
+    ),
+    disable_autoscaling: bool = typer.Option(
+        False, "--disable-autoscaling", help="Disable autoscaling and use fixed replicas"
+    ),
+    min_workers: int | None = typer.Option(
+        None, "--min-workers", help="Minimum workers for autoscaling"
+    ),
+    max_workers: int | None = typer.Option(
+        None, "--max-workers", help="Maximum workers for autoscaling"
+    ),
+    target_cpu_percent: int | None = typer.Option(
+        None, "--target-cpu", help="Target CPU utilization percentage for autoscaling"
+    ),
+    # Control flags
+    yes: bool = yes_option(),
+):
+    """Update workspace resources with zero downtime.
+
+    This command performs rolling updates to workspace resources without destroying
+    the workspace. Most changes (worker resources, autoscaling) can be applied with
+    zero downtime using Kubernetes rolling updates.
+
+    Examples:
+        # Increase worker resources
+        mops workspace update --worker-cpu 4 --worker-memory 16Gi
+
+        # Scale to fixed replicas
+        mops workspace update --disable-autoscaling --worker-replicas 10
+
+        # Enable autoscaling with new limits
+        mops workspace update --enable-autoscaling --min-workers 5 --max-workers 20
+
+        # Update scheduler resources (brief downtime)
+        mops workspace update --scheduler-cpu 2 --scheduler-memory 4Gi
+
+    Note:
+        - Worker updates use RollingUpdate strategy (zero downtime)
+        - Scheduler updates use Recreate strategy (brief downtime to prevent split-brain)
+        - Changes are validated before applying to prevent errors
+    """
+    from ..core.unified_config import UnifiedModelOpsConfig
+    from .validators import validate_all_workspace_params
+    from .workspace_overrides import (
+        apply_overrides,
+        build_cli_overrides,
+        compute_changes,
+        requires_replacement,
+        show_config_diff,
+    )
+
+    env = resolve_env(env)
+
+    # Validate all parameters
+    try:
+        validate_all_workspace_params(
+            scheduler_memory=scheduler_memory,
+            scheduler_cpu=scheduler_cpu,
+            worker_memory=worker_memory,
+            worker_cpu=worker_cpu,
+            worker_replicas=worker_replicas,
+            worker_processes=worker_processes,
+            worker_threads=worker_threads,
+            enable_autoscaling=enable_autoscaling if enable_autoscaling else None,
+            disable_autoscaling=disable_autoscaling if disable_autoscaling else None,
+            min_workers=min_workers,
+            max_workers=max_workers,
+            target_cpu_percent=target_cpu_percent,
+        )
+    except typer.BadParameter as e:
+        error(f"Validation error: {e}")
+        raise typer.Exit(1)
+
+    # Load current unified config
+    if not UNIFIED_CONFIG_FILE.exists():
+        error(f"Configuration file not found: {UNIFIED_CONFIG_FILE}")
+        info("Run 'mops init' to generate modelops.yaml")
+        raise typer.Exit(1)
+
+    try:
+        unified_config = UnifiedModelOpsConfig.from_yaml(UNIFIED_CONFIG_FILE)
+        current_workspace = unified_config.workspace
+    except Exception as e:
+        error(f"Failed to load config: {e}")
+        raise typer.Exit(1)
+
+    # Build overrides from CLI params
+    overrides = build_cli_overrides(
+        scheduler_memory=scheduler_memory,
+        scheduler_cpu=scheduler_cpu,
+        worker_memory=worker_memory,
+        worker_cpu=worker_cpu,
+        worker_replicas=worker_replicas,
+        worker_processes=worker_processes,
+        worker_threads=worker_threads,
+        autoscaling_enabled=(
+            False if disable_autoscaling else (True if enable_autoscaling else None)
+        ),
+        autoscaling_min_workers=min_workers,
+        autoscaling_max_workers=max_workers,
+        autoscaling_target_cpu=target_cpu_percent,
+    )
+
+    # Check if any changes were requested
+    if not overrides:
+        warning("No changes specified")
+        info("Use --help to see available options")
+        raise typer.Exit(0)
+
+    # Apply overrides and compute changes
+    updated_workspace = apply_overrides(current_workspace, overrides)
+    changes = compute_changes(current_workspace, updated_workspace)
+
+    if not changes:
+        success("Configuration is already up to date")
+        raise typer.Exit(0)
+
+    # Show changes
+    section(f"Workspace Update Plan (Environment: {env})")
+    show_config_diff(changes, console)
+
+    # Check if replacement needed
+    if requires_replacement(changes):
+        warning("\n⚠️  These changes require full workspace restart")
+        info("This will cause temporary downtime while resources are recreated")
+
+    # Confirm changes
+    if not yes:
+        import typer
+
+        confirm = typer.confirm("\nApply these changes?")
+        if not confirm:
+            info("Update cancelled")
+            raise typer.Exit(0)
+
+    # Convert updated workspace spec to WorkspaceConfig
+    validated_config = WorkspaceConfig(
+        apiVersion="modelops/v1",
+        kind="Workspace",
+        metadata={"name": "default-workspace"},
+        spec={
+            "scheduler": {
+                "image": updated_workspace.scheduler_image,
+                "resources": {
+                    "requests": {
+                        "memory": updated_workspace.scheduler_memory,
+                        "cpu": updated_workspace.scheduler_cpu,
+                    },
+                    "limits": {
+                        "memory": updated_workspace.scheduler_memory,
+                        "cpu": updated_workspace.scheduler_cpu,
+                    },
+                },
+            },
+            "workers": {
+                "replicas": updated_workspace.worker_replicas,
+                "image": updated_workspace.worker_image,
+                "resources": {
+                    "requests": {
+                        "memory": updated_workspace.worker_memory,
+                        "cpu": updated_workspace.worker_cpu,
+                    },
+                    "limits": {
+                        "memory": updated_workspace.worker_memory,
+                        "cpu": updated_workspace.worker_cpu,
+                    },
+                },
+                "processes": updated_workspace.worker_processes,
+                "threads": updated_workspace.worker_threads,
+            },
+            "autoscaling": {
+                "enabled": updated_workspace.autoscaling_enabled,
+                "min_workers": updated_workspace.autoscaling_min_workers,
+                "max_workers": updated_workspace.autoscaling_max_workers,
+                "target_cpu": updated_workspace.autoscaling_target_cpu,
+            },
+        },
+    )
+
+    # Apply update via WorkspaceService
+    service = WorkspaceService(env)
+
+    try:
+        info("\n[yellow]Applying workspace update...[/yellow]")
+        outputs = service.provision(config=validated_config, infra_stack_ref=None, verbose=False)
+
+        success("\n✓ Workspace updated successfully!")
+
+        # Show updated status
+        info("\nWorkspace Status:")
+        workspace_info(outputs, env, StackNaming.get_stack_name("workspace", env))
+
+    except Exception as e:
+        error(f"\nError updating workspace: {e}")
+        handle_pulumi_error(
+            e,
+            "~/.modelops/pulumi/workspace",
+            StackNaming.get_stack_name("workspace", env),
+        )
+        raise typer.Exit(1)
+
+
+@app.command()
+def scale(
+    min_workers: int | None = typer.Option(
+        None, "--min-workers", "-n", help="Minimum workers for autoscaling"
+    ),
+    max_workers: int | None = typer.Option(
+        None, "--max-workers", "-x", help="Maximum workers for autoscaling"
+    ),
+    replicas: int | None = typer.Option(
+        None,
+        "--replicas",
+        "-r",
+        help="Fixed number of replicas (disables autoscaling)",
+    ),
+    env: str | None = env_option(),
+    yes: bool = yes_option(),
+):
+    """Quick scaling adjustment for workers.
+
+    This is a convenience command that wraps 'mops workspace update' for
+    common scaling operations.
+
+    Examples:
+        # Adjust autoscaling range
+        mops workspace scale --min-workers 5 --max-workers 20
+
+        # Set fixed replicas
+        mops workspace scale --replicas 10
+
+    Note: For more control, use 'mops workspace update' instead.
+    """
+    env = resolve_env(env)
+
+    # Validate that user provided some scaling parameter
+    if min_workers is None and max_workers is None and replicas is None:
+        error("No scaling parameters specified")
+        info("Use --min-workers, --max-workers, or --replicas")
+        info("Example: mops workspace scale --min-workers 5 --max-workers 20")
+        raise typer.Exit(1)
+
+    # Determine which update parameters to use
+    update_params = {"env": env, "yes": yes}
+
+    if replicas is not None:
+        # Fixed replicas - disable autoscaling
+        update_params["disable_autoscaling"] = True
+        update_params["worker_replicas"] = replicas
+    else:
+        # Autoscaling parameters
+        if min_workers is not None:
+            update_params["min_workers"] = min_workers
+        if max_workers is not None:
+            update_params["max_workers"] = max_workers
+
+    # Delegate to update command
+    info(f"Scaling workspace in environment: {env}")
+    update(**update_params)
+
+
+@app.command()
 def port_forward(
     env: str | None = env_option(),
     target: str = typer.Option(

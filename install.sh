@@ -279,14 +279,24 @@ install_modelops() {
     echo -e "${CYAN}  • cb${NC} - Calabaria experiment design"
     echo ""
 
+    # Support branch-specific installation via MODELOPS_BRANCH env var
+    # Default to main branch if not specified
+    local branch="${MODELOPS_BRANCH:-main}"
+    local git_ref="@git+https://github.com/institutefordiseasemodeling/modelops.git"
+
+    if [ "$branch" != "main" ]; then
+        info "Installing from branch: ${branch}"
+        git_ref="@git+https://github.com/institutefordiseasemodeling/modelops.git@${branch}"
+    fi
+
     # Try to install with full extras, specifying Python 3.12+
     # Use --force to update if already installed (gets latest from GitHub)
-    if uv tool install --force --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git" 2>/dev/null; then
+    if uv tool install --force --python ">=3.12" "modelops[full]${git_ref}" 2>/dev/null; then
         success "ModelOps suite installed successfully!"
     else
         # If uv is not in PATH yet, try with full path
         if [ -x "$HOME/.local/bin/uv" ]; then
-            "$HOME/.local/bin/uv" tool install --force --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
+            "$HOME/.local/bin/uv" tool install --force --python ">=3.12" "modelops[full]${git_ref}"
             if [ $? -eq 0 ]; then
                 success "ModelOps suite installed successfully!"
             else

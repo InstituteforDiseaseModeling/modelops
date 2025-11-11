@@ -364,6 +364,12 @@ class DaskWorkspace(pulumi.ComponentResource):
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
                 replicas=1,
+                # CRITICAL: Use Recreate strategy to prevent two schedulers running simultaneously
+                # Dask cannot have multiple schedulers behind one Service (causes split-brain)
+                # Brief downtime during scheduler updates is acceptable vs data consistency risk
+                strategy=k8s.apps.v1.DeploymentStrategyArgs(
+                    type="Recreate",
+                ),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-scheduler"}),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -380,6 +386,9 @@ class DaskWorkspace(pulumi.ComponentResource):
                         },
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
+                        # Graceful termination: Allow 60s for scheduler to finish cleanup
+                        # Scheduler handles connection draining and state persistence
+                        termination_grace_period_seconds=60,
                         # Security: Run containers as non-root to prevent privilege escalation
                         # Default K8s behavior runs as root (uid 0), enabling container escape attacks
                         security_context=k8s.core.v1.PodSecurityContextArgs(
@@ -499,6 +508,15 @@ class DaskWorkspace(pulumi.ComponentResource):
                 replicas=worker_count
                 if not autoscaling_config.get("enabled", True)
                 else autoscaling_config.get("min_workers", 2),
+                # Use RollingUpdate for zero-downtime worker updates
+                # Workers are stateless and can be safely replaced incrementally
+                strategy=k8s.apps.v1.DeploymentStrategyArgs(
+                    type="RollingUpdate",
+                    rolling_update=k8s.apps.v1.RollingUpdateDeploymentArgs(
+                        max_surge="50%",  # Allow 50% more pods during update for faster rollout
+                        max_unavailable="25%",  # At most 25% workers down during update
+                    ),
+                ),
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-worker"}),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -509,6 +527,9 @@ class DaskWorkspace(pulumi.ComponentResource):
                         annotations=worker_annotations if worker_annotations else None,
                     ),
                     spec=k8s.core.v1.PodSpecArgs(
+                        # Graceful termination: Allow 180s for workers to finish running tasks
+                        # Workers may be executing long-running simulations that need time to complete
+                        termination_grace_period_seconds=180,
                         # Security: Run containers as non-root to prevent privilege escalation
                         # Workers process untrusted code, so security isolation is critical
                         security_context=k8s.core.v1.PodSecurityContextArgs(
@@ -521,6 +542,15 @@ class DaskWorkspace(pulumi.ComponentResource):
                                 image_pull_policy="Always"
                                 if worker_image.endswith(":latest")
                                 else "IfNotPresent",
+                                # Graceful shutdown: preStop hook delays SIGTERM to allow task drainage
+                                # Dask workers need time to finish in-flight tasks before shutdown
+                                lifecycle=k8s.core.v1.LifecycleArgs(
+                                    pre_stop=k8s.core.v1.LifecycleHandlerArgs(
+                                        exec=k8s.core.v1.ExecActionArgs(
+                                            command=["/bin/sh", "-c", "sleep 30"],
+                                        ),
+                                    ),
+                                ),
                                 # Security: Drop all capabilities and prevent privilege escalation
                                 # Workers don't need kernel capabilities for computation tasks
                                 security_context=k8s.core.v1.SecurityContextArgs(
@@ -565,6 +595,30 @@ class DaskWorkspace(pulumi.ComponentResource):
                 provider=k8s_provider,
                 parent=self,
                 depends_on=[scheduler] + ([bundle_secret] if bundle_secret else []),
+            ),
+        )
+
+        # Create PodDisruptionBudget for workers to ensure minimum availability during disruptions
+        # Prevents voluntary evictions (node drains, autoscaler scale-downs) from taking down too many workers
+        worker_pdb = k8s.policy.v1.PodDisruptionBudget(
+            f"{name}-workers-pdb",
+            metadata=k8s.meta.v1.ObjectMetaArgs(
+                namespace=namespace,
+                name="dask-workers-pdb",
+                labels={"modelops.io/component": "workers", "app": "dask-worker"},
+            ),
+            spec=k8s.policy.v1.PodDisruptionBudgetSpecArgs(
+                selector=k8s.meta.v1.LabelSelectorArgs(
+                    match_labels={"app": "dask-worker"},
+                ),
+                # Keep at least 75% of workers available during voluntary disruptions
+                # Allows rolling updates and node drains while maintaining compute capacity
+                min_available="75%",
+            ),
+            opts=pulumi.ResourceOptions(
+                provider=k8s_provider,
+                parent=self,
+                depends_on=[workers],
             ),
         )
 
