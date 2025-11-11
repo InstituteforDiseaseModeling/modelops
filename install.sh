@@ -206,12 +206,13 @@ install_modelops() {
     echo ""
 
     # Try to install with full extras, specifying Python 3.12+
-    if uv tool install --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git" 2>/dev/null; then
+    # Use --force to update if already installed (gets latest from GitHub)
+    if uv tool install --force --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git" 2>/dev/null; then
         success "ModelOps suite installed successfully!"
     else
         # If uv is not in PATH yet, try with full path
         if [ -x "$HOME/.local/bin/uv" ]; then
-            "$HOME/.local/bin/uv" tool install --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
+            "$HOME/.local/bin/uv" tool install --force --python ">=3.12" "modelops[full]@git+https://github.com/institutefordiseasemodeling/modelops.git"
             if [ $? -eq 0 ]; then
                 success "ModelOps suite installed successfully!"
             else
