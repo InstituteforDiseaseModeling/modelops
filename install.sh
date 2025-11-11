@@ -109,6 +109,30 @@ is_in_path() {
     esac
 }
 
+# Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
+version_ge() {
+    local v1="$1"
+    local v2="$2"
+
+    # Split versions into arrays
+    IFS='.' read -ra v1_parts <<< "$v1"
+    IFS='.' read -ra v2_parts <<< "$v2"
+
+    # Compare major, minor, patch
+    for i in 0 1 2; do
+        local n1="${v1_parts[$i]:-0}"
+        local n2="${v2_parts[$i]:-0}"
+
+        if ((n1 > n2)); then
+            return 0
+        elif ((n1 < n2)); then
+            return 1
+        fi
+    done
+
+    return 0  # Equal versions
+}
+
 # Install uv if not present
 install_uv() {
     if command_exists uv; then
@@ -137,6 +161,56 @@ install_uv() {
         success "uv installed successfully!"
     else
         warning "uv installed but not yet in PATH. Will be available after PATH configuration."
+    fi
+}
+
+# Check Azure CLI installation and version
+check_azure_cli() {
+    local min_version="2.31.0"
+
+    if ! command_exists az; then
+        warning "Azure CLI is not installed"
+        echo ""
+        echo "Azure CLI is required for:"
+        echo "  • Authenticating to Azure Container Registry (ACR)"
+        echo "  • Managing Azure resources"
+        echo "  • Deploying ModelOps infrastructure"
+        echo ""
+        echo "To install, visit: https://docs.microsoft.com/cli/azure/install-azure-cli"
+        echo ""
+        if [[ "$OSTYPE" == "darwin"* ]] && command_exists brew; then
+            echo "Quick install: ${GREEN}brew install azure-cli${NC}"
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            echo "Quick install: ${GREEN}curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash${NC}"
+        fi
+        echo ""
+        echo "After installing, run: ${BOLD}az login${NC}"
+        echo ""
+        return 1
+    fi
+
+    # Get version
+    local az_version=$(az version --query '"azure-cli"' -o tsv 2>/dev/null)
+    if [ -z "$az_version" ]; then
+        warning "Could not determine Azure CLI version"
+        return 1
+    fi
+
+    # Check version
+    if version_ge "$az_version" "$min_version"; then
+        success "Azure CLI is installed (version $az_version)"
+        return 0
+    else
+        warning "Azure CLI version $az_version is too old (need >= $min_version)"
+        echo ""
+        echo "Please upgrade Azure CLI:"
+        if [[ "$OSTYPE" == "darwin"* ]] && command_exists brew; then
+            echo "  ${GREEN}brew upgrade azure-cli${NC}"
+        else
+            echo "  ${GREEN}az upgrade${NC}"
+        fi
+        echo ""
+        return 1
     fi
 }
 
@@ -374,23 +448,27 @@ main() {
     info "Starting ModelOps installation..."
     echo ""
 
-    # Step 1: Install uv
+    # Step 1: Check Azure CLI
+    check_azure_cli
+    echo ""
+
+    # Step 2: Install uv
     install_uv
     echo ""
 
-    # Step 2: Install Pulumi CLI
+    # Step 3: Install Pulumi CLI
     install_pulumi
     echo ""
 
-    # Step 3: Install ModelOps
+    # Step 4: Install ModelOps
     install_modelops
     echo ""
 
-    # Step 4: Configure PATH
+    # Step 5: Configure PATH
     configure_path
     echo ""
 
-    # Step 5: Verify
+    # Step 6: Verify
     verify_installation
 }
 
