@@ -638,8 +638,6 @@ def update(
 
     # Confirm changes
     if not yes:
-        import typer
-
         confirm = typer.confirm("\nApply these changes?")
         if not confirm:
             info("Update cancelled")
