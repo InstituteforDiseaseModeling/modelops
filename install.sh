@@ -271,6 +271,21 @@ install_pulumi() {
     fi
 }
 
+# Clean up old installations to avoid duplicates
+cleanup_old_installations() {
+    info "Cleaning up old installations..."
+
+    # Remove old uv tool installations (will be reinstalled with --force)
+    if command_exists uv; then
+        uv tool uninstall modelops 2>/dev/null && success "  Removed old modelops installation" || true
+        uv tool uninstall modelops-bundle 2>/dev/null && success "  Removed old modelops-bundle installation" || true
+        uv tool uninstall calabaria 2>/dev/null && success "  Removed old calabaria installation" || true
+    fi
+
+    # Note: We don't remove binaries from ~/.local/bin as uv tool install will handle that
+    success "Cleanup complete"
+}
+
 # Install ModelOps suite
 install_modelops() {
     info "Installing ModelOps suite with all components..."
@@ -460,15 +475,19 @@ main() {
     install_pulumi
     echo ""
 
-    # Step 4: Install ModelOps
+    # Step 4: Clean up old installations
+    cleanup_old_installations
+    echo ""
+
+    # Step 5: Install ModelOps
     install_modelops
     echo ""
 
-    # Step 5: Configure PATH
+    # Step 6: Configure PATH
     configure_path
     echo ""
 
-    # Step 6: Verify
+    # Step 7: Verify
     verify_installation
 }
 
