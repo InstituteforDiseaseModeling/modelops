@@ -750,23 +750,24 @@ def scale(
         info("Example: mops workspace scale --min-workers 5 --max-workers 20")
         raise typer.Exit(1)
 
-    # Determine which update parameters to use
-    update_params = {"env": env, "yes": yes}
-
-    if replicas is not None:
-        # Fixed replicas - disable autoscaling
-        update_params["disable_autoscaling"] = True
-        update_params["worker_replicas"] = replicas
-    else:
-        # Autoscaling parameters
-        if min_workers is not None:
-            update_params["min_workers"] = min_workers
-        if max_workers is not None:
-            update_params["max_workers"] = max_workers
-
-    # Delegate to update command
+    # Delegate to update command with all parameters
     info(f"Scaling workspace in environment: {env}")
-    update(**update_params)
+    update(
+        env=env,
+        scheduler_memory=None,
+        scheduler_cpu=None,
+        worker_memory=None,
+        worker_cpu=None,
+        worker_replicas=replicas if replicas is not None else None,
+        worker_processes=None,
+        worker_threads=None,
+        enable_autoscaling=False if replicas is not None else False,
+        disable_autoscaling=True if replicas is not None else False,
+        min_workers=min_workers,
+        max_workers=max_workers,
+        target_cpu_percent=None,
+        yes=yes,
+    )
 
 
 @app.command()
