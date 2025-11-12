@@ -139,6 +139,76 @@ mops workspace status --env dev
 mops workspace status --env dev --json
 ```
 
+#### `mops workspace update`
+Update workspace resources with zero downtime (new in v0.8).
+
+```bash
+# Increase worker resources
+mops workspace update --worker-cpu 4 --worker-memory 16Gi
+
+# Adjust autoscaling range
+mops workspace update --min-workers 5 --max-workers 20 --target-cpu 80
+
+# Switch to fixed replicas
+mops workspace update --disable-autoscaling --worker-replicas 10
+
+# Update scheduler (brief downtime)
+mops workspace update --scheduler-cpu 2 --scheduler-memory 4Gi
+
+# Combined update
+mops workspace update \
+  --worker-cpu 4 \
+  --worker-memory 16Gi \
+  --worker-processes 2 \
+  --min-workers 5 \
+  --max-workers 20
+```
+
+**Options:**
+- `--scheduler-memory TEXT` - Scheduler memory (e.g., '2Gi', '4Gi')
+- `--scheduler-cpu TEXT` - Scheduler CPU (e.g., '1', '2')
+- `--worker-memory TEXT` - Worker memory (e.g., '8Gi', '16Gi')
+- `--worker-cpu TEXT` - Worker CPU (e.g., '3.5', '4')
+- `--worker-replicas INTEGER` - Fixed replicas (requires --disable-autoscaling)
+- `--worker-processes INTEGER` - Processes per worker pod
+- `--worker-threads INTEGER` - Threads per process
+- `--enable-autoscaling` - Enable HorizontalPodAutoscaler
+- `--disable-autoscaling` - Disable autoscaling
+- `--min-workers INTEGER` - Minimum workers for autoscaling
+- `--max-workers INTEGER` - Maximum workers for autoscaling
+- `--target-cpu INTEGER` - Target CPU utilization % (0-100)
+- `--yes, -y` - Skip confirmation prompt
+- `--env, -e` - Environment name
+
+**Behavior:**
+- Shows configuration diff before applying
+- Validates inputs (memory/CPU formats, flag conflicts)
+- Worker updates use RollingUpdate (zero downtime)
+- Scheduler updates use Recreate (brief downtime to prevent split-brain)
+- Maintains 75% worker availability during updates (PodDisruptionBudget)
+- 180s graceful termination for workers to complete tasks
+- Active calibration jobs continue running during updates
+
+#### `mops workspace scale`
+Quick scaling adjustment (convenience command).
+
+```bash
+# Adjust autoscaling range
+mops workspace scale -n 5 -x 20
+
+# Set fixed replicas
+mops workspace scale -r 10
+```
+
+**Options:**
+- `--min-workers, -n INTEGER` - Minimum workers for autoscaling
+- `--max-workers, -x INTEGER` - Maximum workers for autoscaling
+- `--replicas, -r INTEGER` - Fixed replicas (disables autoscaling)
+- `--yes, -y` - Skip confirmation
+- `--env, -e` - Environment name
+
+**Note:** This command wraps `mops workspace update` for common scaling operations.
+
 ### `mops jobs` - Job Submission
 
 Submit and manage simulation jobs.

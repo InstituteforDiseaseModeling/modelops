@@ -339,7 +339,37 @@ cb diagnostics report results/views/jobs/<job-id>/targets/incidence/data.parquet
 open results/views/jobs/<job-id>/targets/incidence/data_diagnostic_report.pdf
 ```
 
-### 8. Clean Up
+### 8. Scaling Resources for Large Calibrations
+
+For computationally intensive calibrations or large parameter sweeps, you can dynamically adjust workspace resources without downtime:
+
+```bash
+# Increase worker resources for memory-intensive models
+mops workspace update --worker-memory 16Gi --worker-cpu 4
+
+# Scale up for faster exploration (more parallel trials)
+mops workspace scale -n 10 -x 30
+# Autoscales between 10-30 workers based on CPU load
+
+# For very large sweeps, use fixed high replica count
+mops workspace update --disable-autoscaling --worker-replicas 20
+```
+
+**When to scale:**
+- **Worker memory**: Your simulations hit OOM errors or use >6GB RAM
+- **Worker CPU**: CPU-bound models benefit from more cores per pod
+- **Worker count**: More workers = more parallel trials = faster calibration
+- **Processes/threads**: Match your simulation's parallelism (pure Python → processes, NumPy → threads)
+
+**Key benefits:**
+- ✅ **Zero downtime**: Active calibrations continue running during updates
+- ✅ **Cost control**: Scale down after calibration completes
+- ✅ **Instant effect**: Changes applied in 2-5 minutes
+- ✅ **Safe**: Input validation prevents configuration errors
+
+See `mops workspace update --help` for all options.
+
+### 9. Clean Up
 
 When you're done experimenting, tear down the cloud resources to avoid
 unnecessary charges. This removes all Azure resources but preserves your local

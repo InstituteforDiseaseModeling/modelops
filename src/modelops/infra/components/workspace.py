@@ -546,7 +546,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                                 # Dask workers need time to finish in-flight tasks before shutdown
                                 lifecycle=k8s.core.v1.LifecycleArgs(
                                     pre_stop=k8s.core.v1.LifecycleHandlerArgs(
-                                        exec=k8s.core.v1.ExecActionArgs(
+                                        exec_=k8s.core.v1.ExecActionArgs(
                                             command=["/bin/sh", "-c", "sleep 30"],
                                         ),
                                     ),
