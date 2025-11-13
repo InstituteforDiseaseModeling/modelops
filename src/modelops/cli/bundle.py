@@ -13,15 +13,19 @@ except ImportError:
     app = typer.Typer(
         name="bundle",
         help="Bundle packaging and registry management (requires modelops-bundle)",
-        no_args_is_help=True,
     )
 
     @app.callback(invoke_without_command=True)
-    def bundle_not_installed():
+    def bundle_not_installed(ctx: typer.Context):
         """Show helpful error if modelops-bundle is missing."""
+        # Only show error if not asking for help
+        if ctx.resilient_parsing:
+            return
+
         error("modelops-bundle is not installed!")
-        console.print("\n[yellow]To use bundle commands, install:[/yellow]")
-        console.print("  uv pip install 'modelops[full]'")
-        console.print("  # or")
-        console.print("  uv pip install modelops-bundle")
+        console.print("\n[yellow]To reinstall ModelOps with bundle support:[/yellow]")
+        console.print("  curl -sSL https://raw.githubusercontent.com/institutefordiseasemodeling/modelops/main/install.sh | bash")
+        console.print("\n[dim]Or for development:[/dim]")
+        console.print("  cd <modelops-repo>")
+        console.print("  uv sync --group bundle")
         raise typer.Exit(1)
