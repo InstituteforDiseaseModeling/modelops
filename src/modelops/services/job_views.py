@@ -89,6 +89,9 @@ def write_job_view(
                 logger.warning(f"No task group for result {i}")
                 continue
 
+            # Extract seed information from tasks
+            seeds = [task.seed for task in tasks]
+
             row = {
                 "job_id": job.job_id,
                 "param_id": param_id,
@@ -96,6 +99,7 @@ def write_job_view(
                 "entrypoint": first_task.entrypoint,
                 "loss": float(result.loss) if result.loss is not None else None,
                 "n_replicates": result.n_replicates,
+                "seeds": seeds,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
 
