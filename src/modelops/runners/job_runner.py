@@ -237,7 +237,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
         try:
             from pathlib import Path
 
-            from modelops.services.job_views import write_job_view
+            from modelops.services.job_views import write_job_view, write_replicates_view
             from modelops.services.provenance_store import ProvenanceStore
 
             logger.info("Writing job results to Parquet views...")
@@ -267,6 +267,15 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                 view_path = write_job_view(job, results, prov_store=prov_store)
 
             logger.info(f"Job view written to: {view_path}")
+
+            # Write per-replicate view if we have the data
+            if results_by_target:
+                try:
+                    replicates_path = write_replicates_view(job, results_by_target, prov_store=prov_store)
+                    if replicates_path:
+                        logger.info(f"Per-replicate view written to: {replicates_path}")
+                except Exception as e:
+                    logger.warning(f"Could not write per-replicate view: {e}")
         except ImportError as e:
             logger.warning(f"Could not write job views (missing dependency): {e}")
         except Exception as e:

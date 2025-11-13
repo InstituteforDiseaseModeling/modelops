@@ -164,10 +164,15 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
 
                 raise RuntimeError(format_aggregation_error(result))
 
+            # Build diagnostics, including per-replicate losses if available
+            diagnostics = result.get("diagnostics", {})
+            if "per_replicate_losses" in result:
+                diagnostics["per_replicate_losses"] = result["per_replicate_losses"]
+
             agg_return = AggregationReturn(
                 aggregation_id=task.aggregation_id(),
                 loss=result["loss"],
-                diagnostics=result.get("diagnostics", {}),
+                diagnostics=diagnostics,
                 outputs={},  # Could add aggregated outputs
                 n_replicates=result.get("n_replicates", len(task.sim_returns)),
             )

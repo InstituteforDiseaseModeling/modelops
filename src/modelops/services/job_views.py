@@ -211,6 +211,104 @@ def write_job_view(
     return job_dir
 
 
+def write_replicates_view(
+    job: SimJob,
+    results_by_target: dict[str, list[AggregationReturn]],
+    output_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
+    prov_store: Any | None = None,
+) -> Path | None:
+    """Write per-replicate results to separate Parquet file.
+
+    Extracts per-replicate losses from AggregationReturn.diagnostics and
+    writes them to a replicates.parquet file for detailed analysis.
+
+    Args:
+        job: The SimJob that was executed
+        results_by_target: Dict mapping target names to lists of AggregationReturn
+        output_dir: Base directory for job views
+        prov_store: Optional ProvenanceStore for Azure uploads
+
+    Returns:
+        Path to replicates file, or None if no per-replicate data available
+    """
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError:
+        logger.error("pyarrow not installed. Cannot write replicates view.")
+        return None
+
+    # Get task groups for seed information
+    task_groups = list(job.get_task_groups().items())
+
+    # Collect per-replicate rows
+    rows = []
+    has_per_replicate_data = False
+
+    for target_name, target_results in results_by_target.items():
+        for i, result in enumerate(target_results):
+            if not isinstance(result, AggregationReturn):
+                continue
+
+            # Check if diagnostics contains per-replicate losses
+            per_rep_losses = result.diagnostics.get("per_replicate_losses")
+            if not per_rep_losses:
+                continue
+
+            has_per_replicate_data = True
+
+            # Get corresponding task group
+            if i >= len(task_groups):
+                logger.warning(f"No task group for result {i}")
+                continue
+
+            param_id, tasks = task_groups[i]
+
+            # Create one row per replicate
+            for rep_idx, (task, loss) in enumerate(zip(tasks, per_rep_losses)):
+                rows.append({
+                    "job_id": job.job_id,
+                    "param_id": param_id,
+                    "target_name": target_name,
+                    "replicate_idx": rep_idx,
+                    "seed": task.seed,
+                    "loss": float(loss),
+                })
+
+    if not has_per_replicate_data:
+        logger.info("No per-replicate loss data found in diagnostics")
+        return None
+
+    # Create job directory
+    job_dir = output_dir / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write replicates Parquet
+    table = pa.table({col: [row[col] for row in rows] for col in rows[0].keys()})
+    replicates_path = job_dir / "replicates.parquet"
+    pq.write_table(table, replicates_path, compression="snappy")
+
+    logger.info(f"Wrote {len(rows)} per-replicate results to {replicates_path}")
+
+    # Upload to Azure if available
+    if prov_store and hasattr(prov_store, "_azure_backend") and prov_store._azure_backend:
+        try:
+            logger.info("Uploading replicates view to Azure...")
+            remote_prefix = f"views/jobs/{job.job_id}"
+            # Upload just the replicates file
+            from pathlib import Path as P
+            temp_dir = P(replicates_path).parent
+            prov_store._azure_backend.upload_file(
+                str(replicates_path),
+                f"{remote_prefix}/replicates.parquet"
+            )
+            logger.info(f"Replicates view uploaded to Azure: {remote_prefix}/replicates.parquet")
+        except Exception as e:
+            logger.error(f"Failed to upload replicates view to Azure: {e}")
+
+    return replicates_path
+
+
 def _serialize_target_spec(spec: TargetSpec | None) -> dict[str, Any] | None:
     """Serialize TargetSpec to dict for JSON storage."""
     if not spec:
