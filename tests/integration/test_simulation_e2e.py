@@ -6,7 +6,6 @@ import pytest
 from pathlib import Path
 from modelops_contracts import SimTask, SimReturn
 from modelops.services.dask_simulation import DaskSimulationService
-from modelops.worker.config import RuntimeConfig
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
@@ -17,18 +16,14 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def simulation_service(dask_cluster):
-    """Create a DaskSimulationService with test configuration."""
-    # Get the path to the examples directory relative to this test file
-    test_dir = Path(__file__).parent.parent.parent  # Go up to repo root
-    examples_dir = test_dir / "examples"
+    """Create a DaskSimulationService with test configuration.
 
-    config = RuntimeConfig(
-        bundle_source="file",
-        bundles_dir=str(examples_dir),
-        force_fresh_venv=False,  # Allow process reuse
-    )
-    service = DaskSimulationService(dask_cluster, config)
+    Note: Test configuration is set in conftest.py via os.environ
+    before the dask cluster is created, so workers inherit the settings.
+    """
+    service = DaskSimulationService(dask_cluster)
     yield service
+    # Cleanup happens when client closes
 
 
 class TestSimulationE2E:

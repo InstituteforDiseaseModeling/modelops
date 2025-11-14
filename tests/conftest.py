@@ -47,6 +47,15 @@ def dask_cluster(request):
         CI: Set to "true" to enable CI-specific resource limits.
         DASK_ADDRESS: Optional address of external Dask scheduler.
     """
+    # Set default test configuration in environment for workers to inherit
+    # Workers are subprocesses of LocalCluster and inherit os.environ
+    test_dir = Path(__file__).parent
+    examples_dir = test_dir.parent / "examples"
+
+    os.environ.setdefault("MODELOPS_BUNDLE_SOURCE", "file")
+    os.environ.setdefault("MODELOPS_BUNDLES_DIR", str(examples_dir))
+    os.environ.setdefault("MODELOPS_FORCE_FRESH_VENV", "false")
+
     addr = request.config.getoption("--dask-address") or os.getenv("DASK_ADDRESS")
     IS_CI = os.getenv("CI") == "true"
 

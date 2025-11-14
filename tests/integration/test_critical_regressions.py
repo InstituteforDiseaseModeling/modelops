@@ -13,7 +13,6 @@ from modelops_contracts import SimTask
 from modelops_contracts.simulation import ReplicateSet
 
 from modelops.services.dask_simulation import DaskSimulationService
-from modelops.worker.config import RuntimeConfig
 
 # CI detection
 IS_CI = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
@@ -29,13 +28,7 @@ class TestJSONRPCBufferFix:
 
     def test_large_params_handling(self, dask_cluster, test_bundle_ref):
         """Test handling of large parameters (>65KB)."""
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=str(Path(__file__).parent.parent.parent / "examples"),
-            force_fresh_venv=False,
-        )
-
-        service = DaskSimulationService(dask_cluster, config)
+        service = DaskSimulationService(dask_cluster)
 
         # Create task with large params (but not too large for CI)
         large_data = "x" * (70_000 if not IS_CI else 30_000)
@@ -62,13 +55,7 @@ class TestAggregationScale:
     @pytest.mark.skipif(IS_CI, reason="Too resource-intensive for CI")
     def test_moderate_scale_aggregation(self, dask_cluster, test_bundle_ref):
         """Test aggregation with moderate number of replicates."""
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=str(Path(__file__).parent.parent.parent / "examples"),
-            force_fresh_venv=False,
-        )
-
-        service = DaskSimulationService(dask_cluster, config)
+        service = DaskSimulationService(dask_cluster)
 
         # Scale appropriately
         n_replicates = 25 if IS_CI else 50
@@ -96,13 +83,7 @@ class TestAggregationScale:
 
     def test_partial_failure_aggregation(self, dask_cluster, test_bundle_ref):
         """Test aggregation handles partial failures correctly."""
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=str(Path(__file__).parent.parent.parent / "examples"),
-            force_fresh_venv=False,
-        )
-
-        service = DaskSimulationService(dask_cluster, config)
+        service = DaskSimulationService(dask_cluster)
 
         # Create tasks where some will fail - use non-existent scenario
         tasks_with_errors = []
@@ -139,14 +120,8 @@ class TestWorkerPluginInitialization:
 
     def test_plugin_installs_on_workers(self, dask_cluster, test_bundle_ref):
         """Test that ModelOpsWorkerPlugin installs on all workers."""
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=str(Path(__file__).parent.parent.parent / "examples"),
-            force_fresh_venv=False,
-        )
-
         # Creating service should install plugin
-        service = DaskSimulationService(dask_cluster, config)
+        service = DaskSimulationService(dask_cluster)
 
         # Submit a task to verify plugin works
         task = SimTask.from_components(
@@ -170,13 +145,7 @@ class TestRapidTaskSubmission:
 
     def test_rapid_submission_no_corruption(self, dask_cluster, test_bundle_ref):
         """Test rapid task submission doesn't cause JSON-RPC corruption."""
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=str(Path(__file__).parent.parent.parent / "examples"),
-            force_fresh_venv=False,
-        )
-
-        service = DaskSimulationService(dask_cluster, config)
+        service = DaskSimulationService(dask_cluster)
 
         # Rapidly submit tasks (this triggered the original bug)
         n_tasks = 10 if IS_CI else 20
