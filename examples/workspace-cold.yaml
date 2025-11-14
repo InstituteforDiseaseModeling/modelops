@@ -1,0 +1,100 @@
+# Dask Workspace Configuration for ModelOps - Cold Executor
+# Usage: mops workspace up --config examples/workspace-cold.yaml --env dev
+#
+# IMPORTANT: This workspace uses the COLD executor for maximum process isolation.
+# Use this configuration to diagnose and fix C++ state leakage issues where:
+# - Simulations fail after 4+ unique parameter sets
+# - Static/global variables in pybind11 extensions persist across tasks
+# - Tests pass with 1-3 unique params but fail at 4+
+#
+# Performance Impact:
+# - ~10x slower than warm executor (~500-1000ms overhead per task)
+# - Fresh Python process spawned for EVERY task
+# - Each process exits after ONE task (no reuse)
+# - C++ statics completely reset between tasks
+#
+# See COLD_EXECUTOR_DEPLOYMENT_GUIDE.md for detailed documentation.
+
+apiVersion: modelops/v1
+kind: Workspace
+metadata:
+  name: cold-executor-workspace
+  # Namespace is auto-generated based on environment: modelops-dask-{env}
+
+spec:
+  # Dask Scheduler Configuration
+  scheduler:
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-scheduler:latest
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1"
+      limits:
+        memory: "2Gi"
+        cpu: "1"
+    env:
+      - name: DASK_SCHEDULER__DASHBOARD__ENABLED
+        value: "true"
+      - name: DASK_SCHEDULER__PRELOAD
+        value: "dask_kubernetes"
+
+  # Dask Workers Configuration - COLD EXECUTOR
+  workers:
+    replicas: 4  # Initial replicas (ignored when autoscaling is enabled)
+    image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2"
+      limits:
+        memory: "4Gi"
+        cpu: "2"
+
+    # Process and thread configuration
+    # Cold executor spawns fresh subprocess per task, so worker process count
+    # mainly affects parallelism (how many tasks can run concurrently per pod)
+    processes: 4  # Number of worker processes per pod (--nprocs)
+    threads: 1    # Number of threads per worker process (--nthreads)
+
+    # Environment variables for workers
+    env:
+      # Memory management
+      - name: DASK_WORKER__MEMORY__TARGET
+        value: "0.90"  # Spill to disk at 90% memory
+      - name: DASK_WORKER__MEMORY__SPILL
+        value: "0.95"  # Spill aggressively at 95%
+      - name: DASK_WORKER__MEMORY__PAUSE
+        value: "0.98"  # Pause execution at 98%
+
+      # COLD EXECUTOR - Fresh process per task
+      # This is the KEY setting that enables maximum isolation
+      - name: MODELOPS_EXECUTOR_TYPE
+        value: "cold"
+
+      # OPTIONAL: Force fresh venv per task (even slower but most isolated)
+      # Uncomment if cold with cached venvs still shows state issues
+      # - name: MODELOPS_FORCE_FRESH_VENV
+      #   value: "true"
+
+  # Autoscaling Configuration
+  # Keep autoscaling enabled but with conservative settings
+  # Cold executor is slower, so tasks will take longer to complete
+  autoscaling:
+    enabled: true
+    min_workers: 2  # Start with minimum workers
+    max_workers: 8  # Lower max since cold is slower (avoid over-provisioning)
+    target_cpu: 70  # Target CPU utilization percentage
+    scale_down_delay: 300  # Seconds to wait before scaling down
+
+  # Optional: Authentication for private registries
+  # Uncomment to use GitHub Container Registry with PAT
+  # imagePullSecrets:
+  #   - name: ghcr-creds
+
+  # Optional: Tolerations for tainted nodes
+  # Uncomment if your CPU nodes have taints
+  # tolerations:
+  #   - key: "modelops.io/role"
+  #     operator: "Equal"
+  #     value: "cpu"
+  #     effect: "NoSchedule"

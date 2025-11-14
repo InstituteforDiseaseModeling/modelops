@@ -171,15 +171,17 @@ class DaskSimulationService(SimulationService):
     manages the WorkerPlugin lifecycle.
     """
 
-    def __init__(self, client: Client, config: RuntimeConfig | None = None):
+    def __init__(self, client: Client):
         """Initialize the service.
 
         Args:
             client: Dask client connected to a cluster
-            config: Runtime configuration (uses env if not provided)
+
+        Note:
+            Workers create their own RuntimeConfig from environment variables.
+            This ensures workers read THEIR env vars, not the runner's.
         """
         self.client = client
-        self.config = config or RuntimeConfig.from_env()
         self._plugin_installed = False
 
         # Install the worker plugin
@@ -192,8 +194,8 @@ class DaskSimulationService(SimulationService):
 
         logger.info("Installing ModelOps worker plugin on all workers")
 
-        # Create the plugin
-        plugin = ModelOpsWorkerPlugin(self.config)
+        # Create the plugin (workers will read their own environment)
+        plugin = ModelOpsWorkerPlugin()
 
         # Register it with the cluster
         # Use the current API - register_plugin() handles all plugin types

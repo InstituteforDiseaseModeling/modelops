@@ -75,7 +75,11 @@ class RuntimeConfig:
         )
 
         # Execution environment
-        config.executor_type = os.environ.get("MODELOPS_EXECUTOR_TYPE", config.executor_type)
+        # Support both MODELOPS_EXECUTOR_TYPE and MODELOPS_EXECUTOR (synonym for UX)
+        config.executor_type = os.environ.get(
+            "MODELOPS_EXECUTOR_TYPE",
+            os.environ.get("MODELOPS_EXECUTOR", config.executor_type),
+        )
         config.venvs_dir = os.environ.get("MODELOPS_VENVS_DIR", config.venvs_dir)
         config.storage_dir = os.environ.get("MODELOPS_STORAGE_DIR", config.storage_dir)
         config.max_warm_processes = int(
@@ -132,5 +136,9 @@ class RuntimeConfig:
                 )
 
         # Executor type validation
-        if self.executor_type not in ["isolated_warm", "direct"]:
-            raise ValueError(f"Invalid executor_type: {self.executor_type}")
+        if self.executor_type not in ["isolated_warm", "direct", "cold"]:
+            raise ValueError(
+                f"Invalid executor_type: {self.executor_type}. "
+                f"Valid options: isolated_warm (warm pool, fast), "
+                f"direct (no pool, in-process), cold (fresh process per task, slowest)"
+            )

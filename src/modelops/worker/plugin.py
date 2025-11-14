@@ -22,13 +22,14 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
     No singletons, no globals, no LRU tricks needed!
     """
 
-    def __init__(self, config: RuntimeConfig | None = None):
-        """Initialize plugin with optional config override.
+    def __init__(self):
+        """Initialize plugin.
 
-        Args:
-            config: Runtime configuration. If None, loaded from environment.
+        Workers create their own RuntimeConfig from environment variables.
+        This ensures workers read THEIR env vars, not the runner's.
         """
-        self.config = config
+        # No config stored - workers read their own environment in setup()
+        pass
 
     def setup(self, worker):
         """Setup hook called when plugin is installed on worker.
@@ -38,8 +39,9 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         Args:
             worker: The Dask worker instance
         """
-        # Get configuration (from env or override)
-        config = self.config or RuntimeConfig.from_env()
+        # Workers ALWAYS read from their own environment
+        # This ensures MODELOPS_EXECUTOR_TYPE is read from the worker pod, not the runner
+        config = RuntimeConfig.from_env()
         config.validate()
 
         # Storage directory for provenance store
@@ -64,6 +66,10 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         worker.modelops_exec_env = exec_env
 
         print(f"ModelOps runtime initialized on worker {worker.id}")
+        print(f"  Executor: {config.executor_type}")
+        print(f"  Bundle source: {config.bundle_source}")
+        if config.executor_type == "cold":
+            print(f"  Fresh venv per task: {config.force_fresh_venv}")
 
     def teardown(self, worker):
         """Teardown hook called when worker is shutting down.
@@ -181,6 +187,17 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
             return DirectExecEnv(
                 bundle_repo=bundle_repo,
                 storage_dir=storage_dir,
+                azure_backend=azure_backend,
+            )
+        elif config.executor_type == "cold":
+            # Cold execution - fresh process per task for maximum isolation
+            from modelops.adapters.exec_env.cold import ColdExecEnv
+
+            return ColdExecEnv(
+                bundle_repo=bundle_repo,
+                venvs_dir=Path(config.venvs_dir),
+                storage_dir=storage_dir,
+                force_fresh_venv=config.force_fresh_venv,
                 azure_backend=azure_backend,
             )
         else:
