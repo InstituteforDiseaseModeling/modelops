@@ -76,8 +76,9 @@ def write_job_view(
 
         for i, result in enumerate(target_results):
             if not isinstance(result, AggregationReturn):
-                logger.warning(
-                    f"Skipping non-AggregationReturn result at index {i}: type={type(result).__name__}"
+                logger.error(
+                    f"Expected AggregationReturn but got {type(result).__name__} at index {i}. "
+                    f"This indicates a bug in job submission logic."
                 )
                 continue
 

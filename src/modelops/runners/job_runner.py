@@ -185,33 +185,27 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     first_target = target_entrypoints[0] if target_entrypoints else None
 
     for param_id, replicate_tasks in task_groups.items():
-        if len(replicate_tasks) > 1:
-            # Multiple replicates - use ReplicateSet for grouped submission
-            base_task = replicate_tasks[0]
-            replicate_set = ReplicateSet(
-                base_task=base_task,
-                n_replicates=len(replicate_tasks),
-                seed_offset=0,  # Seeds already set in tasks
+        # Always use ReplicateSet for consistent return types (AggregationReturn)
+        # This works for n_replicates=1 and avoids SimReturn/AggregationReturn branching
+        base_task = replicate_tasks[0]
+        replicate_set = ReplicateSet(
+            base_task=base_task,
+            n_replicates=len(replicate_tasks),
+            seed_offset=0,  # Seeds already set in tasks
+        )
+        # Submit with first target for now
+        future = sim_service.submit_replicate_set(replicate_set, first_target)
+        futures.append((param_id, future))
+        if first_target:
+            logger.info(
+                f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} with target aggregation"
             )
-            # Submit with first target for now
-            future = sim_service.submit_replicate_set(replicate_set, first_target)
-            futures.append((param_id, future))
-            if first_target:
-                logger.info(
-                    f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} with target aggregation"
-                )
-            else:
-                logger.info(
-                    f"  Submitted {len(replicate_tasks)} replicates for param {param_id[:8]} as group"
-                )
         else:
-            # Single task - no grouping needed
-            task = replicate_tasks[0]
-            future = sim_service.submit(task)
-            futures.append((param_id, future))
-            logger.info(f"  Submitted single task for param {param_id[:8]}")
+            logger.info(
+                f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} as group"
+            )
 
-    # Gather results - these are either SimReturn or AggregationReturn for first target
+    # Gather results - these are AggregationReturn objects for first target
     param_futures_list = futures  # Save the (param_id, future) pairs
     results = sim_service.gather([f for _, f in futures])
     logger.info(f"Job complete: {len(results)} results")
