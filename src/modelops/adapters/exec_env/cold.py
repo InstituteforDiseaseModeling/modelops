@@ -214,12 +214,14 @@ class ColdExecEnv(ExecutionEnvironment):
                 logger.error(f"Cold aggregation subprocess failed: {result.stderr[:500]}")
                 # Return error aggregation
                 return AggregationReturn(
+                    aggregation_id=task.aggregation_id(),
                     loss=None,
                     n_replicates=len(task.sim_returns),
                     diagnostics={
                         "error": result.stderr[:1000],
                         "exit_code": result.returncode,
                     },
+                    outputs={},
                 )
 
             # 6. Parse AggregationReturn
@@ -230,27 +232,33 @@ class ColdExecEnv(ExecutionEnvironment):
             except Exception as e:
                 logger.error(f"Failed to parse AggregationReturn: {e}")
                 return AggregationReturn(
+                    aggregation_id=task.aggregation_id(),
                     loss=None,
                     n_replicates=len(task.sim_returns),
                     diagnostics={
                         "error": f"Parse error: {e}",
                         "stdout": result.stdout[:500],
                     },
+                    outputs={},
                 )
 
         except subprocess.TimeoutExpired:
             logger.error(f"Aggregation timed out after {self.timeout_seconds}s")
             return AggregationReturn(
+                aggregation_id=task.aggregation_id(),
                 loss=None,
                 n_replicates=len(task.sim_returns) if hasattr(task, "sim_returns") else 0,
                 diagnostics={"error": f"Timeout after {self.timeout_seconds}s"},
+                outputs={},
             )
         except Exception as e:
             logger.exception("Cold aggregation failed")
             return AggregationReturn(
+                aggregation_id=task.aggregation_id(),
                 loss=None,
                 n_replicates=len(task.sim_returns) if hasattr(task, "sim_returns") else 0,
                 diagnostics={"error": str(e)},
+                outputs={},
             )
 
     def _get_or_create_venv(self, digest: str, bundle_path: Path) -> Path:
@@ -281,12 +289,25 @@ class ColdExecEnv(ExecutionEnvironment):
             logger.debug(f"Reusing venv: {venv_path}")
             return venv_path
 
-        # Create fresh venv
+        # Create fresh venv (inline - TODO: extract to venv_manager module)
         logger.info(f"Creating fresh venv: {venv_path}")
-        from ..worker.venv_manager import create_venv, install_bundle
+        try:
+            subprocess.run(
+                ["uv", "venv", str(venv_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            logger.info(f"Created venv: {venv_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to create venv: {e.stderr}")
+            raise RuntimeError(f"Failed to create venv: {e.stderr}") from e
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Venv creation timed out after 120s")
 
-        create_venv(venv_path)
-        install_bundle(venv_path, bundle_path)
+        # Note: Dependencies will be installed by cold_runner.py when it starts
+        # (similar to subprocess_runner.py pattern)
 
         return venv_path
 

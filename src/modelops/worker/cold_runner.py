@@ -15,11 +15,15 @@ Usage:
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Configure logging to stderr (stdout is for result JSON)
@@ -29,6 +33,152 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 logger = logging.getLogger(__name__)
+
+
+def ensure_dependencies_installed(bundle_path: Path) -> None:
+    """Ensure bundle dependencies are installed in current venv.
+
+    Uses file locking to prevent concurrent installations. This is
+    similar to subprocess_runner.py but simplified for cold executor.
+
+    Args:
+        bundle_path: Path to unpacked bundle
+    """
+    venv_path = Path(sys.prefix)  # Current venv path
+    deps_marker = venv_path / ".deps_installed"
+
+    # Check if dependencies are already installed
+    if deps_marker.exists():
+        # Verify installation by trying to discover wire function
+        try:
+            from importlib.metadata import entry_points
+            eps = list(entry_points(group="modelops.wire"))
+            if eps:
+                logger.info(f"Dependencies already installed and verified")
+                return
+        except Exception:
+            # Discovery failed, need to reinstall
+            logger.warning("Marker exists but wire discovery failed, will reinstall")
+            deps_marker.unlink()
+
+    # Install dependencies with file locking
+    lock_file = venv_path / ".install.lock"
+    lock_file.touch(exist_ok=True)
+
+    with open(lock_file, "r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            # Double-check after acquiring lock
+            if deps_marker.exists():
+                logger.info("Dependencies installed by another process")
+                return
+
+            logger.info(f"Installing dependencies for bundle: {bundle_path}")
+            _install_bundle_dependencies(bundle_path)
+
+            # Write marker on success
+            deps_marker.write_text("installed")
+            logger.info("Dependencies installed successfully")
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _install_bundle_dependencies(bundle_path: Path) -> None:
+    """Install bundle dependencies using uv or pip.
+
+    Args:
+        bundle_path: Path to unpacked bundle
+    """
+    pyproject = bundle_path / "pyproject.toml"
+    requirements = bundle_path / "requirements.txt"
+
+    # Prefer uv if available (faster)
+    uv = shutil.which("uv")
+
+    if pyproject.exists():
+        logger.info(f"Installing from pyproject.toml with {'uv' if uv else 'pip'}")
+        if uv:
+            result = subprocess.run(
+                [
+                    uv,
+                    "pip",
+                    "install",
+                    "--index-url",
+                    "https://pypi.org/simple",
+                    "--python",
+                    sys.executable,
+                    str(bundle_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"uv install failed: {result.stderr}")
+                raise RuntimeError(f"Failed to install dependencies: {result.stderr}")
+        else:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    str(bundle_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"pip install failed: {result.stderr}")
+                raise RuntimeError(f"Failed to install dependencies: {result.stderr}")
+
+    elif requirements.exists():
+        logger.info(f"Installing from requirements.txt with {'uv' if uv else 'pip'}")
+        if uv:
+            result = subprocess.run(
+                [
+                    uv,
+                    "pip",
+                    "install",
+                    "--index-url",
+                    "https://pypi.org/simple",
+                    "--python",
+                    sys.executable,
+                    "-r",
+                    str(requirements),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"uv install failed: {result.stderr}")
+                raise RuntimeError(f"Failed to install dependencies: {result.stderr}")
+        else:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "-r",
+                    str(requirements),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                logger.error(f"pip install failed: {result.stderr}")
+                raise RuntimeError(f"Failed to install dependencies: {result.stderr}")
+
+    else:
+        logger.warning("No pyproject.toml or requirements.txt found")
+
+    # Ensure bundle itself is on sys.path
+    if str(bundle_path) not in sys.path:
+        sys.path.insert(0, str(bundle_path))
 
 
 def run_simulation_task(bundle_path: Path, task_json: str) -> str:
@@ -214,6 +364,7 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
 
         # Return error aggregation
         agg_return = AggregationReturn(
+            aggregation_id=task.aggregation_id(),
             loss=None,
             n_replicates=len(task.sim_returns),
             diagnostics={
@@ -221,6 +372,7 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
                 "type": type(e).__name__,
                 "pid": pid,
             },
+            outputs={},
         )
 
         return agg_return.model_dump_json()
@@ -245,6 +397,13 @@ def main():
 
     pid = os.getpid()
     logger.info(f"Cold runner started: PID {pid}, bundle={args.bundle_path}")
+
+    # Install dependencies before running any tasks
+    try:
+        ensure_dependencies_installed(args.bundle_path)
+    except Exception as e:
+        logger.exception(f"Failed to install dependencies: {e}")
+        sys.exit(1)
 
     # Read task JSON from stdin
     task_json = sys.stdin.read()
