@@ -14,65 +14,73 @@ def test_plugin_creates_executor_with_azure_uploads():
     """Test that the plugin correctly wires up Azure uploads."""
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create config with Azure uploads enabled
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=tmpdir,
-            bundles_cache_dir=tmpdir,
-            executor_type="direct",
-            upload_to_azure=True,
-            azure_connection_string="DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test;EndpointSuffix=core.windows.net",
-            azure_container="testresults",
-        )
+        # Set environment variables for config
+        old_env = dict(os.environ)
+        try:
+            os.environ["MODELOPS_BUNDLE_SOURCE"] = "file"
+            os.environ["MODELOPS_BUNDLES_DIR"] = tmpdir
+            os.environ["MODELOPS_BUNDLES_CACHE_DIR"] = tmpdir
+            os.environ["MODELOPS_EXECUTOR_TYPE"] = "direct"
+            os.environ["MODELOPS_UPLOAD_TO_AZURE"] = "true"
+            os.environ["AZURE_STORAGE_CONNECTION_STRING"] = "DefaultEndpointsProtocol=https;AccountName=test;AccountKey=test;EndpointSuffix=core.windows.net"
+            os.environ["MODELOPS_AZURE_CONTAINER"] = "testresults"
 
-        # Create plugin
-        plugin = ModelOpsWorkerPlugin(config=config)
+            # Create plugin (reads from environment)
+            plugin = ModelOpsWorkerPlugin()
 
-        # Create mock worker
-        mock_worker = MagicMock()
-        mock_worker.id = "test-worker"
+            # Create mock worker
+            mock_worker = MagicMock()
+            mock_worker.id = "test-worker"
 
-        # Setup should not fail
-        plugin.setup(mock_worker)
+            # Setup should not fail
+            plugin.setup(mock_worker)
 
-        # Verify executor was created
-        assert hasattr(mock_worker, "modelops_runtime")
-        assert hasattr(mock_worker, "modelops_exec_env")
+            # Verify executor was created
+            assert hasattr(mock_worker, "modelops_runtime")
+            assert hasattr(mock_worker, "modelops_exec_env")
 
-        # Teardown
-        plugin.teardown(mock_worker)
+            # Teardown
+            plugin.teardown(mock_worker)
 
-        print("✓ Plugin setup with Azure uploads succeeded")
+            print("✓ Plugin setup with Azure uploads succeeded")
+        finally:
+            # Restore environment
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_plugin_validates_azure_config():
     """Test that plugin validates Azure configuration."""
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create config with Azure uploads but missing credentials
-        config = RuntimeConfig(
-            bundle_source="file",
-            bundles_dir=tmpdir,
-            bundles_cache_dir=tmpdir,
-            executor_type="direct",
-            upload_to_azure=True,
-            # Missing both azure_connection_string and azure_storage_account
-        )
-
-        # Create plugin
-        plugin = ModelOpsWorkerPlugin(config=config)
-
-        # Create mock worker
-        mock_worker = MagicMock()
-        mock_worker.id = "test-worker"
-
-        # Setup should fail validation
+        # Set environment variables with Azure uploads but missing credentials
+        old_env = dict(os.environ)
         try:
-            plugin.setup(mock_worker)
-            assert False, "Should have raised ValueError"
-        except ValueError as e:
-            assert "upload_to_azure is enabled" in str(e)
-            print("✓ Validation correctly caught missing Azure config")
+            os.environ["MODELOPS_BUNDLE_SOURCE"] = "file"
+            os.environ["MODELOPS_BUNDLES_DIR"] = tmpdir
+            os.environ["MODELOPS_BUNDLES_CACHE_DIR"] = tmpdir
+            os.environ["MODELOPS_EXECUTOR_TYPE"] = "direct"
+            os.environ["MODELOPS_UPLOAD_TO_AZURE"] = "true"
+            # Missing both azure_connection_string and azure_storage_account
+
+            # Create plugin (reads from environment)
+            plugin = ModelOpsWorkerPlugin()
+
+            # Create mock worker
+            mock_worker = MagicMock()
+            mock_worker.id = "test-worker"
+
+            # Setup should fail validation
+            try:
+                plugin.setup(mock_worker)
+                assert False, "Should have raised ValueError"
+            except ValueError as e:
+                assert "upload_to_azure is enabled" in str(e)
+                print("✓ Validation correctly caught missing Azure config")
+        finally:
+            # Restore environment
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 if __name__ == "__main__":
