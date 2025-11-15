@@ -119,7 +119,9 @@ class ColdExecEnv(ExecutionEnvironment):
             task_json = json.dumps(task_data)
 
             # 4. Get cold_runner script path (installed with modelops)
-            runner_script = Path(__file__).parent.parent / "worker" / "cold_runner.py"
+            # __file__ is .../modelops/adapters/exec_env/cold.py
+            # Need .../modelops/worker/cold_runner.py
+            runner_script = Path(__file__).parent.parent.parent / "worker" / "cold_runner.py"
             if not runner_script.exists():
                 raise RuntimeError(f"Cold runner script not found: {runner_script}")
 
@@ -217,7 +219,9 @@ class ColdExecEnv(ExecutionEnvironment):
             task_json = json.dumps(agg_data)
 
             # 4. Get cold_runner script path
-            runner_script = Path(__file__).parent.parent / "worker" / "cold_runner.py"
+            # __file__ is .../modelops/adapters/exec_env/cold.py
+            # Need .../modelops/worker/cold_runner.py
+            runner_script = Path(__file__).parent.parent.parent / "worker" / "cold_runner.py"
             if not runner_script.exists():
                 raise RuntimeError(f"Cold runner script not found: {runner_script}")
 
