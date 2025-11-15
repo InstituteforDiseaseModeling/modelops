@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import pickle
 import subprocess
 import sys
 import tempfile
@@ -109,8 +110,13 @@ class ColdExecEnv(ExecutionEnvironment):
             if not python_exe.exists():
                 raise RuntimeError(f"Python executable not found: {python_exe}")
 
-            # 3. Serialize task to JSON
-            task_json = task.model_dump_json()
+            # 3. Serialize task fields (not whole object - follow warm executor pattern)
+            task_data = {
+                "entrypoint": str(task.entrypoint) if task.entrypoint else "main",
+                "params": dict(task.params.params),
+                "seed": task.seed,
+            }
+            task_json = json.dumps(task_data)
 
             # 4. Prepare clean environment for subprocess
             env = self._prepare_subprocess_env()
@@ -142,9 +148,21 @@ class ColdExecEnv(ExecutionEnvironment):
                 )
                 return self._create_error_return(task, result.stderr, result.returncode)
 
-            # 7. Parse SimReturn from stdout
+            # 7. Parse SimReturn from stdout (JSON dict format)
             try:
-                sim_return = SimReturn.model_validate_json(result.stdout)
+                result_dict = json.loads(result.stdout)
+                # Reconstruct SimReturn from dict
+                outputs = {}
+                for name, art_dict in result_dict["outputs"].items():
+                    outputs[name] = TableArtifact(
+                        size=art_dict["size"],
+                        checksum=art_dict["checksum"],
+                        inline=base64.b64decode(art_dict["inline"]) if art_dict["inline"] else None,
+                    )
+                sim_return = SimReturn(
+                    task_id=result_dict["task_id"],
+                    outputs=outputs,
+                )
                 logger.debug(
                     f"Cold exec success: {param_id_short}-seed{task.seed} "
                     f"(check stderr for child PID)"
@@ -184,9 +202,15 @@ class ColdExecEnv(ExecutionEnvironment):
             venv_path = self._get_or_create_venv(digest, bundle_path)
             python_exe = venv_path / "bin" / "python"
 
-            # 3. Serialize aggregation task
-            # We need to serialize the entire AggregationTask including sim_returns
-            task_json = task.model_dump_json()
+            # 3. Serialize aggregation task (follow warm executor pattern)
+            # Don't serialize whole AggregationTask - break it into simple fields
+            serialized_returns = self._serialize_sim_returns(task.sim_returns)
+            agg_data = {
+                "target_entrypoint": str(task.target_entrypoint),
+                "sim_returns": serialized_returns,
+                "target_data": task.target_data,
+            }
+            task_json = json.dumps(agg_data)
 
             # 4. Prepare environment
             env = self._prepare_subprocess_env()
@@ -212,54 +236,62 @@ class ColdExecEnv(ExecutionEnvironment):
 
             if result.returncode != 0:
                 logger.error(f"Cold aggregation subprocess failed: {result.stderr[:500]}")
-                # Return error aggregation
-                return AggregationReturn(
-                    aggregation_id=task.aggregation_id(),
-                    loss=None,
-                    n_replicates=len(task.sim_returns),
-                    diagnostics={
-                        "error": result.stderr[:1000],
-                        "exit_code": result.returncode,
-                    },
-                    outputs={},
+                # Raise exception instead of returning invalid AggregationReturn
+                raise RuntimeError(
+                    f"Aggregation subprocess failed (exit {result.returncode}): {result.stderr[:1000]}"
                 )
 
-            # 6. Parse AggregationReturn
+            # 6. Parse AggregationReturn from JSON dict
             try:
-                agg_return = AggregationReturn.model_validate_json(result.stdout)
+                result_dict = json.loads(result.stdout)
+                agg_return = AggregationReturn(
+                    aggregation_id=result_dict["aggregation_id"],
+                    loss=result_dict["loss"],
+                    diagnostics=result_dict["diagnostics"],
+                    outputs=result_dict.get("outputs", {}),
+                    n_replicates=result_dict["n_replicates"],
+                )
                 logger.debug("Cold aggregation success")
                 return agg_return
             except Exception as e:
                 logger.error(f"Failed to parse AggregationReturn: {e}")
-                return AggregationReturn(
-                    aggregation_id=task.aggregation_id(),
-                    loss=None,
-                    n_replicates=len(task.sim_returns),
-                    diagnostics={
-                        "error": f"Parse error: {e}",
-                        "stdout": result.stdout[:500],
-                    },
-                    outputs={},
-                )
+                logger.error(f"Subprocess stdout: {result.stdout[:500]}")
+                raise RuntimeError(f"Failed to parse AggregationReturn: {e}\\nStdout: {result.stdout[:200]}") from e
 
         except subprocess.TimeoutExpired:
             logger.error(f"Aggregation timed out after {self.timeout_seconds}s")
-            return AggregationReturn(
-                aggregation_id=task.aggregation_id(),
-                loss=None,
-                n_replicates=len(task.sim_returns) if hasattr(task, "sim_returns") else 0,
-                diagnostics={"error": f"Timeout after {self.timeout_seconds}s"},
-                outputs={},
-            )
+            raise RuntimeError(f"Aggregation timed out after {self.timeout_seconds}s")
         except Exception as e:
             logger.exception("Cold aggregation failed")
-            return AggregationReturn(
-                aggregation_id=task.aggregation_id(),
-                loss=None,
-                n_replicates=len(task.sim_returns) if hasattr(task, "sim_returns") else 0,
-                diagnostics={"error": str(e)},
-                outputs={},
-            )
+            raise
+
+    def _serialize_sim_returns(self, sim_returns: list[SimReturn]) -> list[dict]:
+        """Serialize SimReturns for subprocess communication.
+
+        Args:
+            sim_returns: List of SimReturns with inline data
+
+        Returns:
+            List of serialized SimReturn dicts
+        """
+        serialized_returns = []
+        for sr in sim_returns:
+            sr_dict = {"task_id": sr.task_id, "outputs": {}}
+
+            for name, artifact in sr.outputs.items():
+                # For cold executor, always use inline data
+                if not artifact.inline:
+                    raise ValueError(f"Artifact {name} missing inline data for aggregation")
+
+                sr_dict["outputs"][name] = {
+                    "size": artifact.size,
+                    "checksum": artifact.checksum,
+                    "inline": base64.b64encode(artifact.inline).decode("ascii"),
+                }
+
+            serialized_returns.append(sr_dict)
+
+        return serialized_returns
 
     def _get_or_create_venv(self, digest: str, bundle_path: Path) -> Path:
         """Get or create venv for bundle.

@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -191,16 +192,18 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
     Returns:
         JSON-serialized SimReturn
     """
-    from modelops_contracts import SimReturn, SimTask, TableArtifact
+    from modelops_contracts import SimReturn, TableArtifact
 
     pid = os.getpid()
 
-    # Parse task
-    task = SimTask.model_validate_json(task_json)
-    param_id_short = task.params.param_id[:8]
+    # Parse task data (simple JSON dict, not whole SimTask object)
+    task_data = json.loads(task_json)
+    entrypoint = task_data["entrypoint"]
+    params = task_data["params"]
+    seed = task_data["seed"]
 
-    logger.info(f"Child process PID {pid}: Starting simulation {param_id_short}-seed{task.seed}")
-    logger.info(f"Child PID {pid}: Parameters: {dict(task.params.params)}")
+    logger.info(f"Child process PID {pid}: Starting simulation seed{seed}")
+    logger.info(f"Child PID {pid}: Parameters: {params}")
 
     # Add bundle to sys.path (ONLY the bundle, no other paths)
     sys.path.insert(0, str(bundle_path))
@@ -230,9 +233,9 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
         # Execute simulation (THIS PROCESS RUNS ONE TASK ONLY!)
         logger.info(f"Child PID {pid}: Executing wire function")
         result_bytes = wire_fn(
-            str(task.entrypoint) if task.entrypoint else "main",
-            dict(task.params.params),
-            task.seed,
+            entrypoint,
+            params,
+            seed,
         )
 
         # Convert result to SimReturn
@@ -252,48 +255,57 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
                 checksum=checksum,
             )
 
-        # Create task ID
-        tid_components = f"{task.params.param_id[:16]}-{task.seed}-{','.join(sorted(outputs.keys()))}"
+        # Create task ID (simplified - just use seed + outputs)
+        tid_components = f"cold-sim-{seed}-{','.join(sorted(outputs.keys()))}"
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
         sim_return = SimReturn(task_id=tid, outputs=outputs)
 
         logger.info(f"Child PID {pid}: Simulation complete, exiting")
 
-        # Return JSON to stdout (parent reads this)
-        return sim_return.model_dump_json()
+        # Return JSON dict to stdout (parent reconstructs SimReturn)
+        return json.dumps({
+            "task_id": sim_return.task_id,
+            "outputs": {
+                name: {
+                    "size": art.size,
+                    "checksum": art.checksum,
+                    "inline": base64.b64encode(art.inline).decode('ascii') if art.inline else None,
+                }
+                for name, art in sim_return.outputs.items()
+            }
+        })
 
     except Exception as e:
         logger.exception(f"Child PID {pid}: Simulation failed")
 
         # Create error return
-        tid_components = f"{task.params.param_id[:16]}-{task.seed}-error"
+        tid_components = f"cold-sim-{seed}-error"
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
         error_data = json.dumps(
             {
                 "error": str(e),
                 "type": type(e).__name__,
-                "params": dict(task.params.params),
-                "seed": task.seed,
+                "params": params,
+                "seed": seed,
                 "pid": pid,
             }
         ).encode()
 
         checksum = hashlib.blake2b(error_data, digest_size=32).hexdigest()
 
-        sim_return = SimReturn(
-            task_id=tid,
-            outputs={
-                "error": TableArtifact(
-                    size=len(error_data),
-                    inline=error_data,
-                    checksum=checksum,
-                )
-            },
-        )
-
-        return sim_return.model_dump_json()
+        # Return JSON dict
+        return json.dumps({
+            "task_id": tid,
+            "outputs": {
+                "error": {
+                    "size": len(error_data),
+                    "checksum": checksum,
+                    "inline": base64.b64encode(error_data).decode('ascii'),
+                }
+            }
+        })
 
 
 def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
@@ -306,26 +318,42 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
     Returns:
         JSON-serialized AggregationReturn
     """
-    from modelops_contracts.simulation import AggregationReturn, AggregationTask
+    from modelops_contracts import SimReturn, TableArtifact
+    from modelops_contracts.simulation import AggregationReturn
 
     pid = os.getpid()
 
-    # Parse aggregation task
-    task = AggregationTask.model_validate_json(task_json)
+    # Parse aggregation data (simple JSON dict)
+    agg_data = json.loads(task_json)
+    target_entrypoint = agg_data["target_entrypoint"]
+    serialized_returns = agg_data["sim_returns"]
+    target_data = agg_data.get("target_data")
+
+    # Reconstruct SimReturn objects from serialized dicts
+    sim_returns = []
+    for sr_dict in serialized_returns:
+        outputs = {}
+        for name, art_dict in sr_dict["outputs"].items():
+            outputs[name] = TableArtifact(
+                size=art_dict["size"],
+                checksum=art_dict["checksum"],
+                inline=base64.b64decode(art_dict["inline"]) if art_dict.get("inline") else None,
+            )
+        sim_returns.append(SimReturn(task_id=sr_dict["task_id"], outputs=outputs))
 
     logger.info(f"Child process PID {pid}: Starting aggregation")
-    logger.info(f"Child PID {pid}: Target: {task.target_entrypoint}")
-    logger.info(f"Child PID {pid}: Num sim returns: {len(task.sim_returns)}")
+    logger.info(f"Child PID {pid}: Target: {target_entrypoint}")
+    logger.info(f"Child PID {pid}: Num sim returns: {len(sim_returns)}")
 
     # Add bundle to sys.path
     sys.path.insert(0, str(bundle_path))
 
     try:
         # Parse target entrypoint
-        if ":" not in task.target_entrypoint:
-            raise ValueError(f"Invalid target entrypoint format: {task.target_entrypoint}")
+        if ":" not in target_entrypoint:
+            raise ValueError(f"Invalid target entrypoint format: {target_entrypoint}")
 
-        module_path, target_name = task.target_entrypoint.rsplit(":", 1)
+        module_path, target_name = target_entrypoint.rsplit(":", 1)
 
         logger.info(f"Child PID {pid}: Importing {module_path}")
 
@@ -345,9 +373,9 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
 
         logger.info(f"Child PID {pid}: Calling target function")
 
-        # Call target function with sim returns
+        # Call target function with reconstructed sim returns
         # Target function signature: (sim_returns: list[SimReturn]) -> AggregationReturn
-        agg_return = target_callable(task.sim_returns)
+        agg_return = target_callable(sim_returns)
 
         if not isinstance(agg_return, AggregationReturn):
             raise TypeError(
@@ -357,25 +385,19 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
 
         logger.info(f"Child PID {pid}: Aggregation complete, loss={agg_return.loss}")
 
-        return agg_return.model_dump_json()
+        # Return JSON dict (parent will reconstruct AggregationReturn)
+        return json.dumps({
+            "aggregation_id": agg_return.aggregation_id,
+            "loss": agg_return.loss,
+            "diagnostics": agg_return.diagnostics,
+            "outputs": {},  # TODO: serialize outputs if needed
+            "n_replicates": agg_return.n_replicates,
+        })
 
     except Exception as e:
         logger.exception(f"Child PID {pid}: Aggregation failed")
-
-        # Return error aggregation
-        agg_return = AggregationReturn(
-            aggregation_id=task.aggregation_id(),
-            loss=None,
-            n_replicates=len(task.sim_returns),
-            diagnostics={
-                "error": str(e),
-                "type": type(e).__name__,
-                "pid": pid,
-            },
-            outputs={},
-        )
-
-        return agg_return.model_dump_json()
+        # Let the exception propagate - parent will see non-zero exit code
+        raise
 
 
 def main():
