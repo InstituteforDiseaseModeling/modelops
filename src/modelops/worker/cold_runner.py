@@ -270,7 +270,7 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
                 name: {
                     "size": art.size,
                     "checksum": art.checksum,
-                    "inline": base64.b64encode(art.inline).decode('ascii') if art.inline else None,
+                    "inline": base64.b64encode(art.inline).decode('ascii') if art.inline is not None else None,
                 }
                 for name, art in sim_return.outputs.items()
             }
@@ -337,7 +337,7 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
             outputs[name] = TableArtifact(
                 size=art_dict["size"],
                 checksum=art_dict["checksum"],
-                inline=base64.b64decode(art_dict["inline"]) if art_dict.get("inline") else None,
+                inline=base64.b64decode(art_dict["inline"]) if art_dict.get("inline") is not None else None,
             )
         sim_returns.append(SimReturn(task_id=sr_dict["task_id"], outputs=outputs))
 

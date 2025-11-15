@@ -163,7 +163,7 @@ class ColdExecEnv(ExecutionEnvironment):
                     outputs[name] = TableArtifact(
                         size=art_dict["size"],
                         checksum=art_dict["checksum"],
-                        inline=base64.b64decode(art_dict["inline"]) if art_dict["inline"] else None,
+                        inline=base64.b64decode(art_dict["inline"]) if art_dict["inline"] is not None else None,
                     )
                 sim_return = SimReturn(
                     task_id=result_dict["task_id"],
