@@ -118,16 +118,20 @@ class ColdExecEnv(ExecutionEnvironment):
             }
             task_json = json.dumps(task_data)
 
-            # 4. Prepare clean environment for subprocess
+            # 4. Get cold_runner script path (installed with modelops)
+            runner_script = Path(__file__).parent.parent / "worker" / "cold_runner.py"
+            if not runner_script.exists():
+                raise RuntimeError(f"Cold runner script not found: {runner_script}")
+
+            # 5. Prepare clean environment for subprocess
             env = self._prepare_subprocess_env()
 
-            # 5. Spawn fresh subprocess (exits after one task!)
+            # 6. Spawn fresh subprocess (exits after one task!)
             result = subprocess.run(
                 [
                     str(python_exe),
                     "-u",  # Unbuffered output
-                    "-m",
-                    "modelops.worker.cold_runner",
+                    str(runner_script),  # Direct script path, not -m module
                     "--bundle-path",
                     str(bundle_path),
                 ],
@@ -212,16 +216,20 @@ class ColdExecEnv(ExecutionEnvironment):
             }
             task_json = json.dumps(agg_data)
 
-            # 4. Prepare environment
+            # 4. Get cold_runner script path
+            runner_script = Path(__file__).parent.parent / "worker" / "cold_runner.py"
+            if not runner_script.exists():
+                raise RuntimeError(f"Cold runner script not found: {runner_script}")
+
+            # 5. Prepare environment
             env = self._prepare_subprocess_env()
 
-            # 5. Spawn fresh subprocess for aggregation
+            # 6. Spawn fresh subprocess for aggregation
             result = subprocess.run(
                 [
                     str(python_exe),
                     "-u",
-                    "-m",
-                    "modelops.worker.cold_runner",
+                    str(runner_script),  # Direct script path, not -m module
                     "--bundle-path",
                     str(bundle_path),
                     "--aggregation",  # Flag to indicate aggregation mode
