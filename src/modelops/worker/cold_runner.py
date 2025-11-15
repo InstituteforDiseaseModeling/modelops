@@ -232,11 +232,15 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
 
         # Execute simulation (THIS PROCESS RUNS ONE TASK ONLY!)
         logger.info(f"Child PID {pid}: Executing wire function")
-        result_bytes = wire_fn(
-            entrypoint,
-            params,
-            seed,
-        )
+
+        # Redirect stdout to stderr during execution to prevent contaminating JSON output
+        import contextlib
+        with contextlib.redirect_stdout(sys.stderr):
+            result_bytes = wire_fn(
+                entrypoint,
+                params,
+                seed,
+            )
 
         # Convert result to SimReturn
         outputs = {}
@@ -382,7 +386,11 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
         ):
             # Calabaria target - call with no args, returns Target object
             logger.info(f"Child PID {pid}: Detected Calabaria-style target")
-            target_obj = target_callable()  # Decorator handles data_paths
+
+            # Redirect stdout to stderr to prevent contaminating JSON output
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr):
+                target_obj = target_callable()  # Decorator handles data_paths
 
             # Convert SimReturns to Calabaria SimOutputs (DataFrames)
             import polars as pl
@@ -392,8 +400,8 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
             for sim_return in sim_returns:
                 sim_output = {}
                 for name, artifact in sim_return.outputs.items():
-                    # Skip metadata (JSON, not Arrow)
-                    if name == "metadata":
+                    # Skip non-Arrow outputs (JSON metadata or errors)
+                    if name in ("metadata", "error"):
                         continue
 
                     # Decode Arrow bytes
@@ -408,7 +416,8 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
 
             # Evaluate the Target with sim_outputs
             logger.info(f"Child PID {pid}: Evaluating Calabaria target")
-            target_eval = target_obj.evaluate(sim_outputs)
+            with contextlib.redirect_stdout(sys.stderr):
+                target_eval = target_obj.evaluate(sim_outputs)
 
             # Build AggregationReturn from Calabaria TargetEvaluation
             agg_id_input = f"{target_entrypoint}:{','.join(sorted([sr.task_id for sr in sim_returns]))}"
@@ -429,7 +438,11 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
         else:
             # Old-style target - takes sim_returns directly
             logger.info(f"Child PID {pid}: Old-style target function")
-            agg_return = target_callable(sim_returns)
+
+            # Redirect stdout to stderr to prevent contaminating JSON output
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr):
+                agg_return = target_callable(sim_returns)
 
             if not isinstance(agg_return, AggregationReturn):
                 raise TypeError(
