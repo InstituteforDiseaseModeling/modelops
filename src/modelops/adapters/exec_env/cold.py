@@ -141,6 +141,7 @@ class ColdExecEnv(ExecutionEnvironment):
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
+                cwd=str(bundle_path),  # Run from bundle directory so relative paths work
                 env=env,
                 check=False,
             )
@@ -242,6 +243,7 @@ class ColdExecEnv(ExecutionEnvironment):
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
+                cwd=str(bundle_path),  # Run from bundle directory so relative paths work
                 env=env,
                 check=False,
             )
