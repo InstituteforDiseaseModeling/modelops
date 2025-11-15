@@ -373,15 +373,69 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
 
         logger.info(f"Child PID {pid}: Calling target function")
 
-        # Call target function with reconstructed sim returns
-        # Target function signature: (sim_returns: list[SimReturn]) -> AggregationReturn
-        agg_return = target_callable(sim_returns)
+        # Check if this is a Calabaria-style target (decorated with @calibration_target)
+        import inspect
+        sig = inspect.signature(target_callable)
 
-        if not isinstance(agg_return, AggregationReturn):
-            raise TypeError(
-                f"Target function returned {type(agg_return).__name__}, "
-                f"expected AggregationReturn"
+        if len(sig.parameters) == 0 or (
+            len(sig.parameters) == 1 and "data_paths" in sig.parameters
+        ):
+            # Calabaria target - call with no args, returns Target object
+            logger.info(f"Child PID {pid}: Detected Calabaria-style target")
+            target_obj = target_callable()  # Decorator handles data_paths
+
+            # Convert SimReturns to Calabaria SimOutputs (DataFrames)
+            import polars as pl
+            import io
+
+            sim_outputs = []
+            for sim_return in sim_returns:
+                sim_output = {}
+                for name, artifact in sim_return.outputs.items():
+                    # Skip metadata (JSON, not Arrow)
+                    if name == "metadata":
+                        continue
+
+                    # Decode Arrow bytes
+                    if artifact.inline:
+                        try:
+                            df = pl.read_ipc(io.BytesIO(artifact.inline))
+                            sim_output[name] = df
+                        except Exception as e:
+                            logger.warning(f"Failed to read Arrow data for {name}: {e}")
+
+                sim_outputs.append(sim_output)
+
+            # Evaluate the Target with sim_outputs
+            logger.info(f"Child PID {pid}: Evaluating Calabaria target")
+            target_eval = target_obj.evaluate(sim_outputs)
+
+            # Build AggregationReturn from Calabaria TargetEvaluation
+            agg_id_input = f"{target_entrypoint}:{','.join(sorted([sr.task_id for sr in sim_returns]))}"
+            agg_id = hashlib.blake2b(agg_id_input.encode(), digest_size=32).hexdigest()[:16]
+
+            agg_return = AggregationReturn(
+                aggregation_id=agg_id,
+                loss=float(target_eval.loss),
+                diagnostics={
+                    "target_type": type(target_obj).__name__,
+                    "model_output": target_obj.model_output,
+                    "target_name": target_eval.name if hasattr(target_eval, "name") else None,
+                    "weight": target_eval.weight if hasattr(target_eval, "weight") else None,
+                },
+                outputs={},
+                n_replicates=len(sim_returns),
             )
+        else:
+            # Old-style target - takes sim_returns directly
+            logger.info(f"Child PID {pid}: Old-style target function")
+            agg_return = target_callable(sim_returns)
+
+            if not isinstance(agg_return, AggregationReturn):
+                raise TypeError(
+                    f"Target function returned {type(agg_return).__name__}, "
+                    f"expected AggregationReturn"
+                )
 
         logger.info(f"Child PID {pid}: Aggregation complete, loss={agg_return.loss}")
 
