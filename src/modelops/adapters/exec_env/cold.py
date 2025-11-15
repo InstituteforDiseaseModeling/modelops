@@ -292,7 +292,7 @@ class ColdExecEnv(ExecutionEnvironment):
 
             for name, artifact in sr.outputs.items():
                 # For cold executor, always use inline data
-                if not artifact.inline:
+                if artifact.inline is None:
                     raise ValueError(f"Artifact {name} missing inline data for aggregation")
 
                 sr_dict["outputs"][name] = {
