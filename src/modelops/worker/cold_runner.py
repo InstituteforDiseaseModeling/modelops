@@ -212,7 +212,10 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
     try:
         # Discover wire function via entry points
         from importlib.metadata import entry_points
+        import importlib
 
+        # Invalidate import caches after modifying sys.path (matches subprocess_runner.py:519-520)
+        importlib.invalidate_caches()
         eps = list(entry_points(group="modelops.wire"))
 
         if not eps:
@@ -356,6 +359,8 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
         # Import target module
         import importlib
 
+        # Invalidate import caches after modifying sys.path (matches subprocess_runner.py:589)
+        importlib.invalidate_caches()
         target_module = importlib.import_module(module_path)
 
         # Get target function/class
