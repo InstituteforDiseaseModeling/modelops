@@ -28,8 +28,10 @@ from modelops_contracts.simulation import AggregationReturn, AggregationTask
 
 logger = logging.getLogger(__name__)
 
-# Path to ultra_cold_runner.py (relative to this file)
-RUNNER_PATH = Path(__file__).parents[4] / "tools" / "ultra_cold_runner.py"
+# Path to ultra_cold_runner.py
+# __file__ is .../modelops/adapters/exec_env/cold_debug.py
+# Runner is at .../modelops/tools/ultra_cold_runner.py
+RUNNER_PATH = Path(__file__).parents[2] / "tools" / "ultra_cold_runner.py"
 
 
 class ColdDebugExecEnv(ExecutionEnvironment):
