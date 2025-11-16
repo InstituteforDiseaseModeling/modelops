@@ -9,6 +9,12 @@
 # - For simulation workloads (pure Python): Use processes=2, threads=1
 # - For data science (NumPy/Pandas): Use processes=1, threads=4
 # See docs/dask-configuration.md for detailed guidance
+#
+# Executor Type Configuration (MODELOPS_EXECUTOR_TYPE):
+# - isolated_warm: Warm subprocess pool, fast but reuses processes (default)
+# - direct: No subprocess pool, runs in worker process (faster but no isolation)
+# - cold: Fresh process per task, slowest but maximum isolation (for debugging C++ state issues)
+# See DISABLE_THREADING_AND_WARM_PROCESSES.md and CPP_STATE_LEAKAGE_FIX.md
 
 apiVersion: modelops/v1
 kind: Workspace
@@ -56,12 +62,23 @@ spec:
     threads: 1    # Number of threads per worker process (--nthreads)
     # Environment variables for workers
     env:
+      # Memory management
       - name: DASK_WORKER__MEMORY__TARGET
         value: "0.90"  # Spill to disk at 90% memory
       - name: DASK_WORKER__MEMORY__SPILL
         value: "0.95"  # Spill aggressively at 95%
       - name: DASK_WORKER__MEMORY__PAUSE
         value: "0.98"  # Pause execution at 98%
+
+      # Executor type (uncomment ONE of these):
+      # - name: MODELOPS_EXECUTOR_TYPE
+      #   value: "isolated_warm"  # Default: warm subprocess pool (fast, reuses processes)
+      # - name: MODELOPS_EXECUTOR_TYPE
+      #   value: "cold"  # Cold: fresh process per task (slow, maximum isolation for debugging)
+
+      # Optional: Force fresh venv per task (slowest, most isolated)
+      # - name: MODELOPS_FORCE_FRESH_VENV
+      #   value: "true"
 
   # Autoscaling Configuration
   # When enabled, the number of workers scales based on CPU utilization

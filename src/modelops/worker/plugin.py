@@ -190,15 +190,13 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
                 azure_backend=azure_backend,
             )
         elif config.executor_type == "cold":
-            # Cold execution - fresh process per task for maximum isolation
-            from modelops.adapters.exec_env.cold import ColdExecEnv
+            # Cold debug execution - fresh process per task for maximum isolation
+            # Uses ultra_cold_runner.py for debugging state leakage issues
+            from modelops.adapters.exec_env.cold_debug import ColdDebugExecEnv
 
-            return ColdExecEnv(
+            return ColdDebugExecEnv(
                 bundle_repo=bundle_repo,
-                venvs_dir=Path(config.venvs_dir),
-                storage_dir=storage_dir,
-                force_fresh_venv=config.force_fresh_venv,
-                azure_backend=azure_backend,
+                timeout_seconds=3600,  # 1 hour timeout
             )
         else:
             raise ValueError(f"Unknown executor type: {config.executor_type}")
