@@ -192,7 +192,8 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
     Returns:
         JSON-serialized SimReturn
     """
-    from modelops_contracts import SimReturn, TableArtifact
+    # NOTE: Do NOT import modelops_contracts here! This runs in the bundle's venv
+    # which only has bundle dependencies, not modelops itself. Work with plain dicts.
 
     pid = os.getpid()
 
@@ -242,7 +243,7 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
                 seed,
             )
 
-        # Convert result to SimReturn
+        # Convert result to dict (no modelops_contracts imports needed)
         outputs = {}
         for name, data in result_bytes.items():
             if not isinstance(data, bytes):
@@ -253,31 +254,22 @@ def run_simulation_task(bundle_path: Path, task_json: str) -> str:
                     data = json.dumps(data).encode()
 
             checksum = hashlib.blake2b(data, digest_size=32).hexdigest()
-            outputs[name] = TableArtifact(
-                size=len(data),
-                inline=data,  # Cold executor always inlines
-                checksum=checksum,
-            )
+            outputs[name] = {
+                "size": len(data),
+                "checksum": checksum,
+                "inline": base64.b64encode(data).decode('ascii'),  # Always inline for cold executor
+            }
 
         # Create task ID (simplified - just use seed + outputs)
         tid_components = f"cold-sim-{seed}-{','.join(sorted(outputs.keys()))}"
         tid = hashlib.blake2b(tid_components.encode(), digest_size=32).hexdigest()
 
-        sim_return = SimReturn(task_id=tid, outputs=outputs)
-
         logger.info(f"Child PID {pid}: Simulation complete, exiting")
 
         # Return JSON dict to stdout (parent reconstructs SimReturn)
         return json.dumps({
-            "task_id": sim_return.task_id,
-            "outputs": {
-                name: {
-                    "size": art.size,
-                    "checksum": art.checksum,
-                    "inline": base64.b64encode(art.inline).decode('ascii') if art.inline is not None else None,
-                }
-                for name, art in sim_return.outputs.items()
-            }
+            "task_id": tid,
+            "outputs": outputs
         })
 
     except Exception as e:
@@ -322,8 +314,8 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
     Returns:
         JSON-serialized AggregationReturn
     """
-    from modelops_contracts import SimReturn, TableArtifact
-    from modelops_contracts.simulation import AggregationReturn
+    # NOTE: Do NOT import modelops_contracts here! This runs in the bundle's venv
+    # which only has bundle dependencies, not modelops itself. Work with plain dicts.
 
     pid = os.getpid()
 
@@ -333,17 +325,17 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
     serialized_returns = agg_data["sim_returns"]
     target_data = agg_data.get("target_data")
 
-    # Reconstruct SimReturn objects from serialized dicts
+    # Keep SimReturns as plain dicts (decode base64 inline data to bytes)
     sim_returns = []
     for sr_dict in serialized_returns:
         outputs = {}
         for name, art_dict in sr_dict["outputs"].items():
-            outputs[name] = TableArtifact(
-                size=art_dict["size"],
-                checksum=art_dict["checksum"],
-                inline=base64.b64decode(art_dict["inline"]) if art_dict.get("inline") is not None else None,
-            )
-        sim_returns.append(SimReturn(task_id=sr_dict["task_id"], outputs=outputs))
+            outputs[name] = {
+                "size": art_dict["size"],
+                "checksum": art_dict["checksum"],
+                "inline": base64.b64decode(art_dict["inline"]) if art_dict.get("inline") is not None else None,
+            }
+        sim_returns.append({"task_id": sr_dict["task_id"], "outputs": outputs})
 
     logger.info(f"Child process PID {pid}: Starting aggregation")
     logger.info(f"Child PID {pid}: Target: {target_entrypoint}")
@@ -399,15 +391,15 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
             sim_outputs = []
             for sim_return in sim_returns:
                 sim_output = {}
-                for name, artifact in sim_return.outputs.items():
+                for name, artifact in sim_return["outputs"].items():
                     # Skip non-Arrow outputs (JSON metadata or errors)
                     if name in ("metadata", "error"):
                         continue
 
                     # Decode Arrow bytes
-                    if artifact.inline:
+                    if artifact["inline"]:
                         try:
-                            df = pl.read_ipc(io.BytesIO(artifact.inline))
+                            df = pl.read_ipc(io.BytesIO(artifact["inline"]))
                             sim_output[name] = df
                         except Exception as e:
                             logger.warning(f"Failed to read Arrow data for {name}: {e}")
@@ -419,47 +411,43 @@ def run_aggregation_task(bundle_path: Path, task_json: str) -> str:
             with contextlib.redirect_stdout(sys.stderr):
                 target_eval = target_obj.evaluate(sim_outputs)
 
-            # Build AggregationReturn from Calabaria TargetEvaluation
-            agg_id_input = f"{target_entrypoint}:{','.join(sorted([sr.task_id for sr in sim_returns]))}"
+            # Build aggregation result as plain dict (no AggregationReturn import)
+            agg_id_input = f"{target_entrypoint}:{','.join(sorted([sr['task_id'] for sr in sim_returns]))}"
             agg_id = hashlib.blake2b(agg_id_input.encode(), digest_size=32).hexdigest()[:16]
 
-            agg_return = AggregationReturn(
-                aggregation_id=agg_id,
-                loss=float(target_eval.loss),
-                diagnostics={
+            agg_result = {
+                "aggregation_id": agg_id,
+                "loss": float(target_eval.loss),
+                "diagnostics": {
                     "target_type": type(target_obj).__name__,
                     "model_output": target_obj.model_output,
                     "target_name": target_eval.name if hasattr(target_eval, "name") else None,
                     "weight": target_eval.weight if hasattr(target_eval, "weight") else None,
                 },
-                outputs={},
-                n_replicates=len(sim_returns),
-            )
+                "outputs": {},
+                "n_replicates": len(sim_returns),
+            }
         else:
-            # Old-style target - takes sim_returns directly
+            # Old-style target - takes sim_returns directly and returns dict
             logger.info(f"Child PID {pid}: Old-style target function")
 
             # Redirect stdout to stderr to prevent contaminating JSON output
             import contextlib
             with contextlib.redirect_stdout(sys.stderr):
-                agg_return = target_callable(sim_returns)
+                agg_result = target_callable(sim_returns)
 
-            if not isinstance(agg_return, AggregationReturn):
+            # Validate result is a dict with required fields
+            if not isinstance(agg_result, dict):
                 raise TypeError(
-                    f"Target function returned {type(agg_return).__name__}, "
-                    f"expected AggregationReturn"
+                    f"Target function must return dict, got {type(agg_result).__name__}"
                 )
+            if "loss" not in agg_result:
+                raise ValueError("Target function must return dict with 'loss' key")
 
-        logger.info(f"Child PID {pid}: Aggregation complete, loss={agg_return.loss}")
+        logger.info(f"Child PID {pid}: Aggregation complete, loss={agg_result['loss']}")
 
         # Return JSON dict (parent will reconstruct AggregationReturn)
-        return json.dumps({
-            "aggregation_id": agg_return.aggregation_id,
-            "loss": agg_return.loss,
-            "diagnostics": agg_return.diagnostics,
-            "outputs": {},  # TODO: serialize outputs if needed
-            "n_replicates": agg_return.n_replicates,
-        })
+        return json.dumps(agg_result)
 
     except Exception as e:
         logger.exception(f"Child PID {pid}: Aggregation failed")
