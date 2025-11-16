@@ -116,8 +116,61 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
 
     logger.info("Installing bundle dependencies...")
 
-    if pyproject.exists():
+    # Check for problematic dependency configurations (ported from subprocess_runner.py)
+    suspects = []
+    for fname in ("pyproject.toml", "uv.lock", "requirements.txt", ".constraints.txt"):
+        p = bundle_path / fname
+        if p.exists():
+            t = p.read_text()
+            # Check for malformed numpy git URLs
+            if "github.com/numpy/" in t and "github.com/numpy/numpy" not in t:
+                suspects.append(f"{fname}: malformed numpy git URL detected")
+            # Check for problematic uv sources
+            if "[tool.uv.sources]" in t and "numpy" in t:
+                suspects.append(f"{fname}: uv sources override for numpy detected")
+            # Check for local file dependencies that won't work in container
+            if "file:///" in t and "/Users/" in t:
+                suspects.append(f"{fname}: local file:// dependency won't work in container")
+
+    if suspects:
+        logger.warning(
+            "Bundle has problematic dependency configurations:\n  - %s",
+            "\n  - ".join(suspects),
+        )
+        # Clean up problematic files that might interfere
+        for fname in (".constraints.txt", "uv.lock"):
+            p = bundle_path / fname
+            if p.exists():
+                logger.warning(f"Removing {fname} to avoid dependency resolution issues")
+                p.unlink()
+
+        # If pyproject.toml has issues but requirements.txt is good, prefer requirements
+        if any("pyproject.toml" in s for s in suspects) and requirements.exists():
+            logger.warning("Preferring requirements.txt due to pyproject.toml issues")
+
+    # Prefer requirements.txt over pyproject.toml to avoid malformed/auto-generated project files
+    if requirements.exists():
+        # Install from requirements.txt
+        logger.info("Installing from requirements.txt")
+        if shutil.which("uv"):
+            subprocess.run(
+                [
+                    "uv", "pip", "install",
+                    "--python", str(python_exe),
+                    "-r", str(requirements),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        else:
+            subprocess.run(
+                [str(python_exe), "-m", "pip", "install", "-r", str(requirements)],
+                check=True,
+                capture_output=True,
+            )
+    elif pyproject.exists():
         # Install bundle as package (editable to avoid copying)
+        logger.info("Installing from pyproject.toml")
         if shutil.which("uv"):
             result = subprocess.run(
                 [
@@ -134,24 +187,6 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
         else:
             subprocess.run(
                 [str(python_exe), "-m", "pip", "install", "-e", str(bundle_path)],
-                check=True,
-                capture_output=True,
-            )
-    elif requirements.exists():
-        # Install from requirements.txt
-        if shutil.which("uv"):
-            subprocess.run(
-                [
-                    "uv", "pip", "install",
-                    "--python", str(python_exe),
-                    "-r", str(requirements),
-                ],
-                check=True,
-                capture_output=True,
-            )
-        else:
-            subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "-r", str(requirements)],
                 check=True,
                 capture_output=True,
             )
