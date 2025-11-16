@@ -298,6 +298,6 @@ class ColdDebugExecEnv(ExecutionEnvironment):
             error_details=TableArtifact(
                 size=len(error_data),
                 inline=error_data,
-                checksum=hashlib.blake2b(error_data).hexdigest(),
+                checksum=hashlib.blake2b(error_data, digest_size=32).hexdigest(),
             ),
         )
