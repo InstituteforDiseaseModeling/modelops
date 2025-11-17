@@ -44,6 +44,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _configure_git_auth() -> None:
+    """Configure git to use GitHub token if available."""
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if github_token:
+        logger.info("Configuring git authentication for private repos")
+        # Configure git to use the token for GitHub
+        # This sets it globally for this process and subprocesses
+        subprocess.run(
+            [
+                "git",
+                "config",
+                "--global",
+                f"url.https://x-access-token:{github_token}@github.com/.insteadOf",
+                "https://github.com/",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,  # Don't fail if git config fails
+        )
+    else:
+        logger.warning(
+            "GITHUB_TOKEN not found in environment - private repos will fail to clone!"
+        )
+
+
 def compute_bundle_digest(bundle_path: Path) -> str:
     """Compute stable digest for bundle based on pyproject.toml or requirements.txt."""
     pyproject = bundle_path / "pyproject.toml"
@@ -97,11 +122,38 @@ def create_or_get_venv(bundle_path: Path, reuse: bool) -> Path:
             timeout=120,
         )
 
+    # CRITICAL: Bootstrap pip if missing (uv venv doesn't include pip by default)
+    # This ensures pip fallback will work when uv fails
+    if platform.system() == "Windows":
+        python_exe = venv_path / "Scripts" / "python.exe"
+    else:
+        python_exe = venv_path / "bin" / "python"
+
+    if python_exe.exists():
+        logger.info("Bootstrapping pip in venv")
+        ensurepip_result = subprocess.run(
+            [str(python_exe), "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            timeout=60,
+        )
+        if ensurepip_result.returncode != 0:
+            logger.warning("ensurepip failed during venv creation, pip may not be available")
+            logger.debug(f"ensurepip stderr: {ensurepip_result.stderr.decode()}")
+    else:
+        logger.warning(f"Python executable not found at {python_exe}, skipping pip bootstrap")
+
     return venv_path
 
 
 def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
-    """Install bundle dependencies into venv."""
+    """Install bundle dependencies into venv.
+
+    Battle-tested version ported from subprocess_runner.py with:
+    - Git authentication for private repos
+    - ensurepip bootstrap before pip fallback
+    - Multiple retry strategies
+    - Homebrew Python detection
+    """
     # Determine python executable path (platform-specific)
     if platform.system() == "Windows":
         python_exe = venv_path / "Scripts" / "python.exe"
@@ -116,7 +168,7 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
 
     logger.info("Installing bundle dependencies...")
 
-    # Check for problematic dependency configurations (ported from subprocess_runner.py)
+    # Check for problematic dependency configurations
     suspects = []
     for fname in ("pyproject.toml", "uv.lock", "requirements.txt", ".constraints.txt"):
         p = bundle_path / fname
@@ -144,59 +196,90 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
                 logger.warning(f"Removing {fname} to avoid dependency resolution issues")
                 p.unlink()
 
-        # If pyproject.toml has issues but requirements.txt is good, prefer requirements
-        if any("pyproject.toml" in s for s in suspects) and requirements.exists():
-            logger.warning("Preferring requirements.txt due to pyproject.toml issues")
+    # Configure git auth before installing (for private repos)
+    _configure_git_auth()
 
-    # Prefer requirements.txt over pyproject.toml to avoid malformed/auto-generated project files
-    if requirements.exists():
-        # Install from requirements.txt
-        logger.info("Installing from requirements.txt")
-        if shutil.which("uv"):
-            subprocess.run(
-                [
-                    "uv", "pip", "install",
-                    "--python", str(python_exe),
-                    "-r", str(requirements),
-                ],
-                check=True,
-                capture_output=True,
-            )
-        else:
-            subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "-r", str(requirements)],
-                check=True,
-                capture_output=True,
-            )
-    elif pyproject.exists():
-        # Install bundle as package (editable to avoid copying)
-        logger.info("Installing from pyproject.toml")
-        if shutil.which("uv"):
+    # Prefer uv if present (fast), else pip
+    uv = shutil.which("uv")
+
+    if pyproject.exists():
+        logger.info("Found pyproject.toml, installing with %s", "uv" if uv else "pip")
+        if uv:
+            # Try uv first with explicit PyPI index to avoid config issues
             result = subprocess.run(
                 [
-                    "uv", "pip", "install",
-                    "--index-url", "https://pypi.org/simple",
-                    "--python", str(python_exe),
-                    "-e", str(bundle_path),
+                    uv,
+                    "pip",
+                    "install",
+                    "--index-url",
+                    "https://pypi.org/simple",
+                    "--python",
+                    str(python_exe),
+                    str(bundle_path),
                 ],
                 capture_output=True,
                 text=True,
+                cwd=str(bundle_path),
             )
+
             if result.returncode != 0:
-                logger.warning(f"uv pip install failed, falling back to pip: {result.stderr}")
-                # Fall back to pip (like warm executor does)
-                pip_result = subprocess.run(
-                    [
-                        str(python_exe), "-m", "pip", "install",
-                        "--isolated",
-                        "--disable-pip-version-check",
-                        "--no-cache-dir",
-                        "--no-input",
-                        "-e", str(bundle_path),
-                    ],
+                logger.warning("uv failed; falling back to pip (PyPI only)")
+                logger.debug(f"uv stderr: {result.stderr}")
+
+                # Check if we're in an externally managed environment
+                try:
+                    pip_check = subprocess.run(
+                        [str(python_exe), "-m", "pip", "--version"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if "externally-managed" in pip_check.stderr.lower():
+                        logger.error("Python environment is externally managed, cannot use pip")
+                        raise RuntimeError(
+                            "Cannot install packages: Python is externally managed. Ensure uv is available."
+                        )
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass
+
+                # Try to ensure pip is available first
+                ensurepip_result = subprocess.run(
+                    [str(python_exe), "-m", "ensurepip", "--upgrade"],
                     capture_output=True,
                     text=True,
                 )
+                if ensurepip_result.returncode != 0:
+                    logger.warning("ensurepip failed, pip may not be available")
+                    logger.debug(f"ensurepip stderr: {ensurepip_result.stderr}")
+
+                # Try pip install
+                pip_args = [
+                    str(python_exe),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--no-cache-dir",
+                    "--no-input",
+                ]
+
+                # Add break-system-packages flag if we detect it might be needed
+                if "homebrew" in str(python_exe).lower() or "/opt/homebrew" in str(python_exe):
+                    logger.warning(
+                        "Detected Homebrew Python, adding --break-system-packages flag"
+                    )
+                    pip_args.append("--break-system-packages")
+
+                pip_args.append(str(bundle_path))
+
+                pip_result = subprocess.run(
+                    pip_args,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(bundle_path),
+                )
+
                 if pip_result.returncode != 0:
                     logger.error(f"pip install also failed: {pip_result.stderr}")
                     raise RuntimeError(
@@ -205,22 +288,115 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
                         f"pip error: {pip_result.stderr}"
                     )
         else:
+            # No uv, use pip directly
             subprocess.run(
                 [
-                    str(python_exe), "-m", "pip", "install",
+                    str(python_exe),
+                    "-m",
+                    "pip",
+                    "install",
                     "--isolated",
                     "--disable-pip-version-check",
                     "--no-cache-dir",
                     "--no-input",
-                    "-e", str(bundle_path),
+                    str(bundle_path),
                 ],
                 check=True,
                 capture_output=True,
+                cwd=str(bundle_path),
+            )
+
+    elif requirements.exists():
+        logger.info("Found requirements.txt, installing with %s", "uv" if uv else "pip")
+        if uv:
+            # Try uv first with explicit PyPI index
+            result = subprocess.run(
+                [
+                    uv,
+                    "pip",
+                    "install",
+                    "--index-url",
+                    "https://pypi.org/simple",
+                    "--python",
+                    str(python_exe),
+                    "-r",
+                    str(requirements),
+                ],
+                capture_output=True,
+                text=True,
+                cwd=str(bundle_path),
+            )
+
+            if result.returncode != 0:
+                logger.warning("uv failed; falling back to pip (PyPI only)")
+                logger.debug(f"uv stderr: {result.stderr}")
+
+                # Similar handling as pyproject.toml case
+                ensurepip_result = subprocess.run(
+                    [str(python_exe), "-m", "ensurepip", "--upgrade"],
+                    capture_output=True,
+                    text=True,
+                )
+                if ensurepip_result.returncode != 0:
+                    logger.warning("ensurepip failed, pip may not be available")
+                    logger.debug(f"ensurepip stderr: {ensurepip_result.stderr}")
+
+                pip_args = [
+                    str(python_exe),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--no-cache-dir",
+                    "--no-input",
+                ]
+
+                if "homebrew" in str(python_exe).lower() or "/opt/homebrew" in str(python_exe):
+                    logger.warning(
+                        "Detected Homebrew Python, adding --break-system-packages flag"
+                    )
+                    pip_args.append("--break-system-packages")
+
+                pip_args.extend(["-r", str(requirements)])
+
+                pip_result = subprocess.run(
+                    pip_args,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(bundle_path),
+                )
+
+                if pip_result.returncode != 0:
+                    logger.error(f"pip install also failed: {pip_result.stderr}")
+                    raise RuntimeError(
+                        f"Failed to install from requirements.txt with both uv and pip:\n"
+                        f"uv error: {result.stderr}\n"
+                        f"pip error: {pip_result.stderr}"
+                    )
+        else:
+            # No uv, use pip directly
+            subprocess.run(
+                [
+                    str(python_exe),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--no-cache-dir",
+                    "--no-input",
+                    "-r",
+                    str(requirements),
+                ],
+                check=True,
+                capture_output=True,
+                cwd=str(bundle_path),
             )
     else:
-        logger.warning("No pyproject.toml or requirements.txt found")
+        logger.warning("No dependency file found (pyproject.toml or requirements.txt)")
 
-    logger.info("Dependencies installed")
+    logger.info("Dependencies installed successfully")
 
 
 def run_simulation(venv_path: Path, bundle_path: Path, task_data: dict) -> dict:
