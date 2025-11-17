@@ -185,7 +185,7 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
             if result.returncode != 0:
                 logger.warning(f"uv pip install failed, falling back to pip: {result.stderr}")
                 # Fall back to pip (like warm executor does)
-                subprocess.run(
+                pip_result = subprocess.run(
                     [
                         str(python_exe), "-m", "pip", "install",
                         "--isolated",
@@ -194,9 +194,16 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
                         "--no-input",
                         "-e", str(bundle_path),
                     ],
-                    check=True,
                     capture_output=True,
+                    text=True,
                 )
+                if pip_result.returncode != 0:
+                    logger.error(f"pip install also failed: {pip_result.stderr}")
+                    raise RuntimeError(
+                        f"Failed to install from pyproject.toml with both uv and pip:\n"
+                        f"uv error: {result.stderr}\n"
+                        f"pip error: {pip_result.stderr}"
+                    )
         else:
             subprocess.run(
                 [
