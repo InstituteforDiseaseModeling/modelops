@@ -175,6 +175,7 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
             result = subprocess.run(
                 [
                     "uv", "pip", "install",
+                    "--index-url", "https://pypi.org/simple",
                     "--python", str(python_exe),
                     "-e", str(bundle_path),
                 ],
@@ -182,11 +183,30 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
                 text=True,
             )
             if result.returncode != 0:
-                logger.error(f"uv pip install failed: {result.stderr}")
-                raise RuntimeError(f"Failed to install from pyproject.toml: {result.stderr}")
+                logger.warning(f"uv pip install failed, falling back to pip: {result.stderr}")
+                # Fall back to pip (like warm executor does)
+                subprocess.run(
+                    [
+                        str(python_exe), "-m", "pip", "install",
+                        "--isolated",
+                        "--disable-pip-version-check",
+                        "--no-cache-dir",
+                        "--no-input",
+                        "-e", str(bundle_path),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
         else:
             subprocess.run(
-                [str(python_exe), "-m", "pip", "install", "-e", str(bundle_path)],
+                [
+                    str(python_exe), "-m", "pip", "install",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "--no-cache-dir",
+                    "--no-input",
+                    "-e", str(bundle_path),
+                ],
                 check=True,
                 capture_output=True,
             )
