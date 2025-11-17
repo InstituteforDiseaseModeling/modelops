@@ -492,11 +492,14 @@ print(json.dumps({{"task_id": task_id, "outputs": outputs}}))
         return json.loads(result.stdout.strip())
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse result: {e}")
+        logger.error(f"stdout: {result.stdout[:500]}")
+        logger.error(f"stderr: {result.stderr[:1000]}")
         return {
             "_fatal_error": {
                 "code": 1,
                 "error": "Invalid JSON output",
                 "stdout": result.stdout[:500],
+                "stderr": result.stderr[:1000],
             }
         }
 
@@ -639,11 +642,14 @@ print(json.dumps(result))
         return json.loads(result.stdout.strip())
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse result: {e}")
+        logger.error(f"stdout: {result.stdout[:500]}")
+        logger.error(f"stderr: {result.stderr[:1000]}")
         return {
             "_fatal_error": {
                 "code": 1,
                 "error": "Invalid JSON output",
                 "stdout": result.stdout[:500],
+                "stderr": result.stderr[:1000],
             }
         }
 
