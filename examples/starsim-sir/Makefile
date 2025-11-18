@@ -49,8 +49,10 @@ help:
 	@echo "Workflow:"
 	@echo "  make study           - Generate Sobol samples -> $(STUDY_FILE)"
 	@echo "  make study-grid      - Generate 5x5 grid samples -> study-grid.json"
+	@echo "  make study-tiny      - Generate tiny study (4 params x 2 reps) for testing"
 	@echo "  make submit          - Submit Sobol study job with auto-push bundle"
 	@echo "  make submit-grid     - Submit grid study job with auto-push bundle"
+	@echo "  make submit-tiny     - Submit tiny study (fast test, 8 total tasks)"
 	@echo "  make workflow        - setup -> bundle -> study -> submit"
 	@echo ""
 	@echo "Calibration:"
@@ -190,6 +192,20 @@ study-grid.json: $(VENV)/.installed
 		--targets "targets.incidence:incidence_per_replicate_target"
 	@echo "✓ Wrote study-grid.json with grid points, 20 replicates each, 2 targets"
 
+.PHONY: study-tiny
+study-tiny: study-tiny.json
+
+study-tiny.json: $(VENV)/.installed
+	$(BIN)/cb sampling sobol $(MODEL_CLASS) \
+		--scenario baseline \
+		--n-samples 4 \
+		--n-replicates 2 \
+		--output study-tiny.json \
+		--seed 42 \
+		--scramble \
+		--targets "targets.incidence:incidence_replicate_mean_target"
+	@echo "✓ Wrote study-tiny.json with 4 params, 2 replicates each (for quick testing)"
+
 .PHONY: submit
 submit: bundle-init bundle-register $(STUDY_FILE) $(VENV)/.installed
 	# Submit with auto-push from current directory (default)
@@ -201,6 +217,12 @@ submit-grid: bundle-init bundle-register study-grid.json $(VENV)/.installed
 	# Submit grid study with auto-push from current directory (default)
 	$(BIN)/mops jobs submit $(abspath study-grid.json)
 	@echo "✓ Submitted grid study job with auto-pushed bundle"
+
+.PHONY: submit-tiny
+submit-tiny: bundle-init bundle-register study-tiny.json $(VENV)/.installed
+	# Submit tiny study for quick testing (4 params x 2 replicates = 8 tasks)
+	$(BIN)/mops jobs submit $(abspath study-tiny.json)
+	@echo "✓ Submitted tiny study job (4 params, 2 replicates) with auto-pushed bundle"
 
 .PHONY: workflow
 workflow: setup bundle-init bundle-register study submit
@@ -350,6 +372,6 @@ clean-bundle:
 
 .PHONY: clean
 clean: clean-bundle clean-data
-	rm -f $(STUDY_FILE) study-grid.json calibration_spec.json calibration_spec_per_replicate.json
+	rm -f $(STUDY_FILE) study-grid.json study-tiny.json calibration_spec.json calibration_spec_per_replicate.json
 	rm -rf $(VENV) .constraints.txt
 	@echo "✓ Clean complete"
