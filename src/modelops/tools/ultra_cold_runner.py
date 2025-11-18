@@ -465,11 +465,11 @@ print(json.dumps({{"task_id": task_id, "outputs": outputs}}))
 """
 
     # Run with isolated mode (-I) and unbuffered (-u)
+    # NO TIMEOUT - simulations can take hours (Dask handles task-level timeouts)
     result = subprocess.run(
         [str(python_exe), "-I", "-u", "-c", exec_script],
         capture_output=True,
         text=True,
-        timeout=600,
         cwd=str(bundle_path),
     )
 
@@ -620,11 +620,11 @@ print(json.dumps(result))
 """
 
     # Run with isolated mode (-I) and unbuffered (-u)
+    # NO TIMEOUT - simulations can take hours (Dask handles task-level timeouts)
     result = subprocess.run(
         [str(python_exe), "-I", "-u", "-c", exec_script],
         capture_output=True,
         text=True,
-        timeout=600,
         cwd=str(bundle_path),
     )
 
