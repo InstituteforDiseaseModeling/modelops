@@ -416,6 +416,7 @@ import importlib
 import base64
 import hashlib
 import json
+import contextlib
 
 # Add bundle to path
 sys.path.insert(0, {str(bundle_path)!r})
@@ -434,8 +435,10 @@ if len(eps) > 1:
 
 wire_fn = eps[0].load()
 
-# Execute simulation
-result_bytes = wire_fn({entrypoint!r}, {params!r}, {seed!r})
+# Redirect stdout to stderr during execution (prevents matplotlib/user prints from corrupting JSON)
+# This matches the warm worker's behavior (subprocess_runner.py:634)
+with contextlib.redirect_stdout(sys.stderr):
+    result_bytes = wire_fn({entrypoint!r}, {params!r}, {seed!r})
 
 # Serialize outputs
 outputs = {{}}
@@ -520,6 +523,7 @@ import importlib
 import base64
 import json
 import io
+import contextlib
 
 # Add bundle to path
 sys.path.insert(0, {str(bundle_path)!r})
@@ -563,29 +567,31 @@ if len(sig.parameters) == 0 or (len(sig.parameters) == 1 and "data_paths" in sig
     # Calabaria target - call with no args, returns Target object
     import polars as pl
 
-    target_obj = target_callable()  # Decorator handles data_paths
+    # Redirect stdout to stderr during target evaluation (prevents matplotlib/user prints)
+    with contextlib.redirect_stdout(sys.stderr):
+        target_obj = target_callable()  # Decorator handles data_paths
 
-    # Convert SimReturns to Calabaria SimOutputs (DataFrames)
-    sim_outputs = []
-    for sim_return in sim_returns:
-        sim_output = {{}}
-        for name, artifact in sim_return["outputs"].items():
-            # Skip non-Arrow outputs
-            if name in ("metadata", "error"):
-                continue
+        # Convert SimReturns to Calabaria SimOutputs (DataFrames)
+        sim_outputs = []
+        for sim_return in sim_returns:
+            sim_output = {{}}
+            for name, artifact in sim_return["outputs"].items():
+                # Skip non-Arrow outputs
+                if name in ("metadata", "error"):
+                    continue
 
-            # Decode Arrow bytes
-            if artifact["inline"]:
-                try:
-                    df = pl.read_ipc(io.BytesIO(artifact["inline"]))
-                    sim_output[name] = df
-                except Exception:
-                    pass
+                # Decode Arrow bytes
+                if artifact["inline"]:
+                    try:
+                        df = pl.read_ipc(io.BytesIO(artifact["inline"]))
+                        sim_output[name] = df
+                    except Exception:
+                        pass
 
-        sim_outputs.append(sim_output)
+            sim_outputs.append(sim_output)
 
-    # Evaluate the Target
-    target_eval = target_obj.evaluate(sim_outputs)
+        # Evaluate the Target
+        target_eval = target_obj.evaluate(sim_outputs)
 
     # Build result
     result = {{
@@ -600,7 +606,9 @@ if len(sig.parameters) == 0 or (len(sig.parameters) == 1 and "data_paths" in sig
     }}
 else:
     # Old-style target - takes sim_returns directly
-    result = target_callable(sim_returns)
+    # Redirect stdout to stderr during target evaluation
+    with contextlib.redirect_stdout(sys.stderr):
+        result = target_callable(sim_returns)
 
     if not isinstance(result, dict):
         raise TypeError(f"Target must return dict, got {{type(result).__name__}}")
