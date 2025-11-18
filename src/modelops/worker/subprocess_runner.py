@@ -365,14 +365,12 @@ class SubprocessRunner:
         if pyproject.exists():
             logger.info("Found pyproject.toml, installing with %s", "uv" if uv else "pip")
             if uv:
-                # Try uv first with explicit PyPI index to avoid config issues
+                # Try uv first (allow git dependencies by NOT restricting to PyPI-only)
                 rc = self._run(
                     [
                         uv,
                         "pip",
                         "install",
-                        "--index-url",
-                        "https://pypi.org/simple",
                         "--python",
                         sys.executable,
                         str(self.bundle_path),
@@ -445,14 +443,12 @@ class SubprocessRunner:
         elif requirements.exists():
             logger.info("Found requirements.txt, installing with %s", "uv" if uv else "pip")
             if uv:
-                # Try uv first with explicit PyPI index
+                # Try uv first (allow git dependencies by NOT restricting to PyPI-only)
                 rc = self._run(
                     [
                         uv,
                         "pip",
                         "install",
-                        "--index-url",
-                        "https://pypi.org/simple",
                         "--python",
                         sys.executable,
                         "-r",
