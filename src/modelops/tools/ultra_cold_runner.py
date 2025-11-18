@@ -205,14 +205,12 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
     if pyproject.exists():
         logger.info("Found pyproject.toml, installing with %s", "uv" if uv else "pip")
         if uv:
-            # Try uv first with explicit PyPI index to avoid config issues
+            # Try uv first (allow git dependencies by NOT restricting to PyPI-only)
             result = subprocess.run(
                 [
                     uv,
                     "pip",
                     "install",
-                    "--index-url",
-                    "https://pypi.org/simple",
                     "--python",
                     str(python_exe),
                     str(bundle_path),
@@ -309,14 +307,12 @@ def install_bundle_deps(venv_path: Path, bundle_path: Path) -> None:
     elif requirements.exists():
         logger.info("Found requirements.txt, installing with %s", "uv" if uv else "pip")
         if uv:
-            # Try uv first with explicit PyPI index
+            # Try uv first (allow git dependencies by NOT restricting to PyPI-only)
             result = subprocess.run(
                 [
                     uv,
                     "pip",
                     "install",
-                    "--index-url",
-                    "https://pypi.org/simple",
                     "--python",
                     str(python_exe),
                     "-r",
