@@ -286,8 +286,7 @@ class JSONRPCClient:
         self._lock = threading.Lock()
         self._pending: Dict[int, queue.Queue] = {}
         self._reader_exc: Exception | None = None
-        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
-        self._reader_thread.start()
+        self._reader_thread: threading.Thread | None = None
 
     def _reader_loop(self):
         """Background reader that dispatches responses to waiting callers."""
@@ -344,6 +343,7 @@ class JSONRPCClient:
             if self._reader_exc:
                 raise self._reader_exc
             self._pending[request_id] = response_queue
+            self._ensure_reader_locked()
 
         # Send request
         self.protocol.send_request(method, params)
@@ -365,3 +365,15 @@ class JSONRPCClient:
             raise JSONRPCError(error["code"], error["message"], error.get("data"))
 
         return message.get("result")
+
+    def _ensure_reader_locked(self) -> None:
+        """Start the reader thread if it isn't already running (call with lock held)."""
+        if self._reader_thread and self._reader_thread.is_alive():
+            return
+
+        if self._reader_exc:
+            # If the reader previously failed, propagate immediately on next call
+            raise self._reader_exc
+
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
