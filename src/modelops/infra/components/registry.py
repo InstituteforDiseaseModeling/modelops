@@ -11,6 +11,7 @@ import pulumi
 import pulumi_azure_native as azure
 
 from ...core import StackNaming
+from ..utils import kubelet_object_id
 
 
 class ContainerRegistry(pulumi.ComponentResource):
@@ -208,7 +209,7 @@ class ContainerRegistry(pulumi.ComponentResource):
         )
 
         # Get kubelet identity using apply() for Output transformation
-        principal_id = cluster.identity_profile.apply(lambda ip: ip["kubeletidentity"]["object_id"])
+        principal_id = cluster.identity_profile.apply(kubelet_object_id)
 
         # AcrPull role definition ID
         acr_pull_role = pulumi.Output.from_input(

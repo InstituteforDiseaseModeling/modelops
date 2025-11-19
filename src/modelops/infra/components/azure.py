@@ -13,6 +13,7 @@ import pulumi
 import pulumi_azure_native as azure
 
 from ...core import StackNaming
+from ..utils import kubelet_object_id
 
 
 class ModelOpsCluster(pulumi.ComponentResource):
@@ -431,11 +432,7 @@ class ModelOpsCluster(pulumi.ComponentResource):
         import uuid
 
         # Get kubelet identity from the cluster
-        kubelet_principal_id = aks.identity_profile.apply(
-            lambda ip: ip["kubeletidentity"]["object_id"]
-            if ip and "kubeletidentity" in ip
-            else None
-        )
+        kubelet_principal_id = aks.identity_profile.apply(kubelet_object_id)
 
         # Create role assignment using both registry_id and principal_id
         def create_role_assignment(args):
