@@ -105,6 +105,29 @@ Performance through intelligent reuse:
 
 ## Component Details
 
+### SimulationService Port
+
+The primary port published in `modelops-contracts` exposes the full API expected by calibration,
+job runners, and CLI tools:
+
+1. `submit(task)` – run a single `SimTask`
+2. `submit_batch(tasks)` – efficient fan-out for many `SimTask` objects
+3. `gather(futures)` – collect `SimReturn` objects in submission order
+4. `submit_replicate_set(replicate_set, target_entrypoint)` – launch a `ReplicateSet` and optionally run worker-side aggregation (returns `AggregationReturn` when a target is provided)
+5. `submit_batch_with_aggregation(replicate_sets, target_entrypoint)` – batch convenience for multiple replicate sets
+
+Any SimulationService implementation (Dask, Ray, single-process adapters) must provide these methods,
+which keeps higher-level code (Calabaria, job runner, CLI) independent of the underlying execution
+engine.
+
+### ExecutionEnvironment Port
+
+The secondary port implemented by each worker adapter now includes `run_aggregation(aggregation_task)`
+in addition to `run(sim_task)`, `health_check`, and `shutdown`. This allows isolated environments
+to evaluate targets on-worker without hopping back to the scheduler. Adapters that do not support
+aggregation can raise `NotImplementedError`, but the standard `IsolatedWarmExecEnv` and
+`ColdDebugExecEnv` fully implement the method so worker-side aggregation works uniformly.
+
 ### ModelOpsWorkerPlugin
 
 The composition root that creates and wires all components on worker initialization:
