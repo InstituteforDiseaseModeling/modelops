@@ -75,6 +75,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             venvs_dir=venvs_dir,
             max_processes=max_warm_processes,
             force_fresh_venv=force_fresh_venv,
+            rpc_timeout_seconds=getattr(config, "rpc_timeout_seconds", 30 * 60),
         )
 
     def run(self, task: SimTask) -> SimReturn:

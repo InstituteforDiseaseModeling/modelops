@@ -169,6 +169,17 @@ Communication between manager and subprocess:
 }
 ```
 
+### Timeout & Hung Process Handling
+
+Warm processes now enforce an upper bound on how long the manager waits for JSON-RPC responses:
+
+- `WarmProcessManager` accepts `rpc_timeout_seconds` (default 30 minutes, override with `MODELOPS_RPC_TIMEOUT_SECONDS`). Every `execute` and `aggregate` call passes this timeout to `WarmProcess.safe_call`.
+- `WarmProcess` stores a `default_timeout` so per-call overrides can be applied while maintaining a consistent limit for all other requests.
+- `JSONRPCClient` now runs a background reader thread that demultiplexes responses into per-request queues. This allows each call to block with its own timeout instead of a single global `read_message()` loop.
+- If a subprocess never replies (e.g., model deadlocks or blocks on input), the client raises `TimeoutError`. The manager terminates the warm process, removes it from the pool, and surfaces a clear error rather than hanging indefinitely.
+
+This design keeps fast simulations unaffected while giving operators a safety valve for hung or misbehaving bundles. Long-running models can increase the timeout via environment configuration when needed.
+
 ## Configuration
 
 Key configuration parameters:

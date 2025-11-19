@@ -44,6 +44,7 @@ class WarmProcess:
     bundle_digest: str
     use_count: int = 0
     stderr_file: io.FileIO | None = None  # File handle for stderr logging
+    default_timeout: float | None = None
     _lock: threading.RLock = field(
         default_factory=threading.RLock
     )  # Reentrant lock for same thread
@@ -73,7 +74,7 @@ class WarmProcess:
                 except Exception:
                     pass  # Best effort cleanup
 
-    def safe_call(self, method: str, params: dict, timeout: float = 10.0):
+    def safe_call(self, method: str, params: dict, timeout: float | None = None):
         """Make a thread-safe JSON-RPC call to the subprocess.
 
         Args:
@@ -91,7 +92,8 @@ class WarmProcess:
             if not self.is_alive():
                 raise RuntimeError("Process is not alive")
 
-            return self.client.call(method, params)
+            effective_timeout = timeout if timeout is not None else self.default_timeout
+            return self.client.call(method, params, timeout=effective_timeout)
 
 
 class WarmProcessManager:
@@ -107,6 +109,7 @@ class WarmProcessManager:
         max_processes: int = 128,
         venvs_dir: Path = Path("/tmp/modelops/venvs"),
         force_fresh_venv: bool = False,
+        rpc_timeout_seconds: int = 30 * 60,
     ):
         """Initialize the process manager.
 
@@ -119,6 +122,7 @@ class WarmProcessManager:
         self.venvs_dir = Path(venvs_dir)
         self.venvs_dir.mkdir(parents=True, exist_ok=True)
         self.force_fresh_venv = force_fresh_venv
+        self.rpc_timeout_seconds = rpc_timeout_seconds
 
         # Use OrderedDict for LRU behavior
         self._processes: OrderedDict[str, WarmProcess] = OrderedDict()
@@ -331,6 +335,7 @@ class WarmProcessManager:
                 bundle_digest=bundle_digest,
                 use_count=1,
                 stderr_file=stderr_file,
+                default_timeout=self.rpc_timeout_seconds,
             )
 
             result = warm_process.safe_call("ready", {}, timeout=10.0)
@@ -533,6 +538,7 @@ class WarmProcessManager:
             bundle_digest=bundle_digest,
             use_count=1,
             stderr_file=stderr_file,
+            default_timeout=self.rpc_timeout_seconds,
         )
 
     def _evict_lru(self):
@@ -588,7 +594,9 @@ class WarmProcessManager:
         try:
             # Execute task via JSON-RPC using safe_call
             result = process.safe_call(
-                "execute", {"entrypoint": entrypoint, "params": params, "seed": seed}
+                "execute",
+                {"entrypoint": entrypoint, "params": params, "seed": seed},
+                timeout=self.rpc_timeout_seconds,
             )
 
             # Result should already be base64-encoded strings
@@ -642,6 +650,7 @@ class WarmProcessManager:
                     "sim_returns": sim_returns,
                     "target_data": target_data,
                 },
+                timeout=self.rpc_timeout_seconds,
             )
 
             # Check for errors

@@ -5,8 +5,10 @@ message boundary detection over stdio pipes.
 """
 
 import logging
+import queue
 import sys
-from typing import Any, BinaryIO
+import threading
+from typing import Any, BinaryIO, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -281,8 +283,47 @@ class JSONRPCClient:
         """
         # Note: We write to subprocess stdin and read from its stdout
         self.protocol = JSONRPCProtocol(input_stream=stdout, output_stream=stdin)
+        self._lock = threading.Lock()
+        self._pending: Dict[int, queue.Queue] = {}
+        self._reader_exc: Exception | None = None
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
 
-    def call(self, method: str, params: dict[str, Any]) -> Any:
+    def _reader_loop(self):
+        """Background reader that dispatches responses to waiting callers."""
+        while True:
+            try:
+                message = self.protocol.read_message()
+            except Exception as exc:
+                logger.error(f"Reader thread terminating: {exc}")
+                self._reader_exc = exc
+                self._dispatch_exception_to_all(exc)
+                break
+
+            request_id = message.get("id")
+            if request_id is None:
+                logger.warning(f"Ignoring message without id: {message}")
+                continue
+
+            queue_for_id = None
+            with self._lock:
+                queue_for_id = self._pending.get(request_id)
+
+            if queue_for_id:
+                queue_for_id.put(message)
+            else:
+                logger.warning(f"No pending call for message id {request_id}: {message}")
+
+    def _dispatch_exception_to_all(self, exc: Exception) -> None:
+        """Push exception to all pending queues and clear them."""
+        with self._lock:
+            items = list(self._pending.items())
+            self._pending.clear()
+
+        for _, q in items:
+            q.put(exc)
+
+    def call(self, method: str, params: dict[str, Any], timeout: float | None = None) -> Any:
         """Call a remote method and wait for response.
 
         Args:
@@ -297,22 +338,30 @@ class JSONRPCClient:
         """
         # Track request ID
         request_id = self.protocol._next_id
+        response_queue: queue.Queue = queue.Queue(maxsize=1)
+
+        with self._lock:
+            if self._reader_exc:
+                raise self._reader_exc
+            self._pending[request_id] = response_queue
 
         # Send request
         self.protocol.send_request(method, params)
 
-        # Read response
-        while True:
-            message = self.protocol.read_message()
+        try:
+            try:
+                message = response_queue.get(timeout=timeout)
+            except queue.Empty:
+                raise TimeoutError(f"JSON-RPC call '{method}' timed out after {timeout} seconds")
+        finally:
+            with self._lock:
+                self._pending.pop(request_id, None)
 
-            # Check if it's our response
-            if message.get("id") == request_id:
-                if "error" in message:
-                    error = message["error"]
-                    raise JSONRPCError(error["code"], error["message"], error.get("data"))
+        if isinstance(message, Exception):
+            raise message
 
-                return message.get("result")
+        if "error" in message:
+            error = message["error"]
+            raise JSONRPCError(error["code"], error["message"], error.get("data"))
 
-            # Not our response, could be a notification or different response
-            # In a real implementation, we'd handle these properly
-            logger.warning(f"Ignoring unexpected message: {message}")
+        return message.get("result")

@@ -32,6 +32,7 @@ class RuntimeConfig:
     max_warm_processes: int = 128
     mem_limit_bytes: int | None = None
     inline_artifact_max_bytes: int = 64_000  # Artifacts smaller than this are inlined
+    rpc_timeout_seconds: int = 30 * 60  # Max time waiting for JSON-RPC responses
 
     # Process pool configuration
     force_fresh_venv: bool = False  # Never reuse venvs (for debugging)
@@ -87,6 +88,9 @@ class RuntimeConfig:
         )
         config.inline_artifact_max_bytes = int(
             os.environ.get("MODELOPS_INLINE_ARTIFACT_MAX_BYTES", config.inline_artifact_max_bytes)
+        )
+        config.rpc_timeout_seconds = int(
+            os.environ.get("MODELOPS_RPC_TIMEOUT_SECONDS", config.rpc_timeout_seconds)
         )
 
         mem_limit = os.environ.get("MODELOPS_MEM_LIMIT_BYTES")
