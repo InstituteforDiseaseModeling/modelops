@@ -41,6 +41,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         force_fresh_venv: bool = False,
         disable_provenance_cache: bool = False,
         azure_backend: dict[str, Any] | None = None,
+        rpc_timeout_seconds: int = 30 * 60,
     ):
         """Initialize the execution environment.
 
@@ -75,7 +76,7 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
             venvs_dir=venvs_dir,
             max_processes=max_warm_processes,
             force_fresh_venv=force_fresh_venv,
-            rpc_timeout_seconds=getattr(config, "rpc_timeout_seconds", 30 * 60),
+            rpc_timeout_seconds=rpc_timeout_seconds,
         )
 
     def run(self, task: SimTask) -> SimReturn:

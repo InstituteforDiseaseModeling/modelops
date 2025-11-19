@@ -179,6 +179,7 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
                 max_warm_processes=config.max_warm_processes,
                 force_fresh_venv=config.force_fresh_venv,
                 azure_backend=azure_backend,
+                rpc_timeout_seconds=getattr(config, "rpc_timeout_seconds", 30 * 60),
             )
         elif config.executor_type == "direct":
             # Simple in-process execution for testing
