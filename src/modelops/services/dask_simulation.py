@@ -259,7 +259,7 @@ class DaskSimulationService(SimulationService):
 
     def submit_replicate_set(
         self, replicate_set: ReplicateSet, target_entrypoint: str | None = None
-    ) -> Future[AggregationReturn]:
+    ) -> Future[AggregationReturn | list[SimReturn]]:
         """Submit a replicate set with optional worker-side aggregation.
 
         This is the KEY method for grouped execution:

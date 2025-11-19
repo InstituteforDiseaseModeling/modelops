@@ -9,7 +9,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from modelops_contracts import SimReturn, SimTask, TableArtifact
+from modelops_contracts import (
+    AggregationReturn,
+    AggregationTask,
+    SimReturn,
+    SimTask,
+    TableArtifact,
+)
 from modelops_contracts.ports import BundleRepository, ExecutionEnvironment
 
 logger = logging.getLogger(__name__)
@@ -204,3 +210,7 @@ class DirectExecEnv(ExecutionEnvironment):
         """Shutdown the execution environment."""
         logger.info("Shutting down DirectExecEnv")
         self._wire_fn_cache.clear()
+
+    def run_aggregation(self, task: AggregationTask) -> AggregationReturn:
+        """Direct execution environment does not support aggregation."""
+        raise NotImplementedError("DirectExecEnv does not support run_aggregation")
