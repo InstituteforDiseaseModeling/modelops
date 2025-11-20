@@ -176,7 +176,6 @@ $(STUDY_FILE): $(VENV)/.installed
 		--seed 42 \
 		--scramble
 	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
-[*** End Patch
 
 .PHONY: study-grid
 study-grid: study-grid.json
