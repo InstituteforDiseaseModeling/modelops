@@ -169,6 +169,12 @@ Communication between manager and subprocess:
 }
 ```
 
+### Lifecycle & Health Checks
+
+1. **Startup handshake** – after boot the parent issues a `ready` RPC. The response includes the bundle digest so we know the subprocess actually loaded what we expect before caching it.
+2. **Reuse validation** – every time we re-use a cached process the manager sends another `ready` call (5s timeout). If the subprocess is hung, dead, or reporting a different digest we immediately evict it instead of handing it more work.
+3. **Simulation RPCs** – `execute` / `aggregate` calls carry the actual work payload and respect `rpc_timeout_seconds`. Results come back as JSON-RPC responses with base64 payloads, and any timeout triggers process eviction.
+
 ### Timeout & Hung Process Handling
 
 Warm processes now enforce an upper bound on how long the manager waits for JSON-RPC responses:

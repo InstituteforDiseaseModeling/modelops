@@ -1,0 +1,10 @@
+[project]
+name = "hung-bundle"
+version = "0.1.0"
+description = "Bundle that intentionally hangs to test warm-process timeouts"
+requires-python = ">=3.11"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
