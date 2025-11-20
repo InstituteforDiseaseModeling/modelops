@@ -165,18 +165,7 @@ bundle-push: $(VENV)/.installed
 # --- Study + Submit ---
 
 .PHONY: study
-study: $(STUDY_FILE)
-
-$(STUDY_FILE): $(VENV)/.installed
-	$(BIN)/cb sampling sobol $(MODEL_CLASS) \
-		--scenario baseline \
-		--n-samples $(N_SAMPLES) \
-		--n-replicates $(N_REPLICATES) \
-		--output $(STUDY_FILE) \
-		--seed 42 \
-		--scramble \
-		--targets "targets.incidence:incidence_target"
-	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
+[*** End Patch
 
 .PHONY: study-grid
 study-grid: study-grid.json
