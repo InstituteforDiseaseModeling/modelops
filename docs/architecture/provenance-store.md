@@ -257,6 +257,20 @@ class IsolatedWarmExecEnv:
         return result
 ```
 
+## Remote Upload API (2025‑11)
+
+To stop callers from reaching into private attributes, `ProvenanceStore` now exposes a minimal upload interface:
+
+```python
+store.supports_remote_uploads()  # bool
+store.upload_directory(local_dir, "views/jobs/123")  # no-op when no remote backend
+store.get_remote_backend_info()  # {"container": "...", "connection_string": "..."} or None
+```
+
+- Job views, calibration wire uploads, and telemetry storage all call `upload_directory` directly and let the store decide whether a remote backend exists.
+- `supports_remote_uploads()` is the guard you see in the codebase now—no more `hasattr(prov_store, "_azure_backend")`.
+- `get_remote_backend_info()` is best-effort metadata (used to precompute blob URLs); always handle `None`.
+
 ## Troubleshooting
 
 ### Results Not Where Expected
