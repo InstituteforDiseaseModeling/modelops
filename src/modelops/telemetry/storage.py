@@ -140,12 +140,12 @@ class TelemetryStorage:
         if not self.prov_store:
             return
 
-        if not hasattr(self.prov_store, "_azure_backend") or not self.prov_store._azure_backend:
+        if not hasattr(self.prov_store, "supports_remote_uploads") or not self.prov_store.supports_remote_uploads():
             return
 
         try:
             remote_prefix = f"telemetry/jobs/{job_id}"
-            self.prov_store._upload_to_azure(local_dir, remote_prefix)
+            self.prov_store.upload_directory(local_dir, remote_prefix)
             logger.info(f"Uploaded telemetry to Azure: {remote_prefix}")
         except Exception as e:
             logger.warning(f"Failed to upload telemetry to Azure: {e}")

@@ -177,12 +177,11 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
         target_entrypoints = job.target_spec.data["target_entrypoints"]
         logger.info(f"Will evaluate {len(target_entrypoints)} targets: {target_entrypoints}")
 
-    # Submit replicate sets - for now still using first target if available
-    # TODO: This needs to be refactored to evaluate ALL targets
+    # Submit replicate sets for all requested targets
     from modelops_contracts import ReplicateSet
 
     futures = []
-    first_target = target_entrypoints[0] if target_entrypoints else None
+    targets_to_run = target_entrypoints or [None]
 
     for param_id, replicate_tasks in task_groups.items():
         # Always use ReplicateSet for consistent return types (AggregationReturn)
@@ -193,37 +192,40 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             n_replicates=len(replicate_tasks),
             seed_offset=0,  # Seeds already set in tasks
         )
-        # Submit with first target for now
-        future = sim_service.submit_replicate_set(replicate_set, first_target)
-        futures.append((param_id, future))
-        if first_target:
-            logger.info(
-                f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} with target aggregation"
-            )
-        else:
-            logger.info(
-                f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} as group"
-            )
+        for target in targets_to_run:
+            future = sim_service.submit_replicate_set(replicate_set, target)
+            futures.append((param_id, target, future))
+            if target:
+                logger.info(
+                    f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} with target {target}"
+                )
+            else:
+                logger.info(
+                    f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} without target aggregation"
+                )
 
-    # Gather results - these are AggregationReturn objects for first target
+    # Gather results
     param_futures_list = futures  # Save the (param_id, future) pairs
-    results = sim_service.gather([f for _, f in futures])
+    results = sim_service.gather([f for *_, f in futures])
     logger.info(f"Job complete: {len(results)} results")
 
     # Build results by target
     results_by_target = {}
+    default_results = []
+
+    for (param_id, target, _), result in zip(param_futures_list, results):
+        if target:
+            target_name = target.split("/")[-1] if "/" in target else target
+            results_by_target.setdefault(target_name, []).append(result)
+        else:
+            default_results.append(result)
 
     if target_entrypoints:
-        # For now, we only have results for the first target
-        # TODO: Need to evaluate other targets on the same sim results
-        if first_target:
-            logger.info(f"Results available for target: {first_target}")
-            # Extract just the target name from the entrypoint
-            target_name = first_target.split("/")[-1] if "/" in first_target else first_target
-            results_by_target[target_name] = results
-
-            # Log first few losses
-            for i, result in enumerate(results[:3]):
+        for target in target_entrypoints:
+            target_name = target.split("/")[-1] if "/" in target else target
+            target_results = results_by_target.get(target_name, [])
+            logger.info(f"Results available for target: {target_name} ({len(target_results)})")
+            for i, result in enumerate(target_results[:3]):
                 if hasattr(result, "loss"):
                     logger.info(f"  Param set {i} loss for {target_name}: {result.loss}")
 
@@ -257,8 +259,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             if results_by_target:
                 view_path = write_job_view(job, results_by_target, prov_store=prov_store)
             else:
-                # Fallback for jobs without targets
-                view_path = write_job_view(job, results, prov_store=prov_store)
+                view_path = write_job_view(job, default_results, prov_store=prov_store)
 
             logger.info(f"Job view written to: {view_path}")
 

@@ -62,6 +62,7 @@ def write_job_view(
     # Process each target separately
     target_summaries = {}
     blob_urls = {}
+    base_url: str | None = None
 
     for target_name, target_results in results_by_target.items():
         logger.info(f"Processing target '{target_name}' with {len(target_results)} results...")
@@ -160,10 +161,16 @@ def write_job_view(
     }
 
     # Prepare Azure blob URLs if ProvenanceStore is available
-    if prov_store and hasattr(prov_store, "_azure_backend") and prov_store._azure_backend:
+    if prov_store and hasattr(prov_store, "supports_remote_uploads") and prov_store.supports_remote_uploads():
         try:
             # Extract storage account name from connection string
-            account_name = _extract_account_name(prov_store._azure_backend.connection_string or "")
+            backend_info = (
+                prov_store.get_remote_backend_info()
+                if hasattr(prov_store, "get_remote_backend_info")
+                else None
+            )
+            connection_string = backend_info.get("connection_string") if backend_info else None
+            account_name = _extract_account_name(connection_string or "")
             if account_name:
                 # Build blob URLs that will be valid after upload
                 remote_prefix = f"views/jobs/{job.job_id}"
@@ -184,13 +191,13 @@ def write_job_view(
         json.dump(manifest, f, indent=2)
 
     # Upload to Azure if ProvenanceStore is available
-    if prov_store and hasattr(prov_store, "_azure_backend") and prov_store._azure_backend:
+    if prov_store and hasattr(prov_store, "supports_remote_uploads") and prov_store.supports_remote_uploads():
         try:
             logger.info("Uploading job views to Azure...")
 
             # Upload the entire job directory (including manifest)
             remote_prefix = f"views/jobs/{job.job_id}"
-            prov_store._upload_to_azure(job_dir, remote_prefix)
+            prov_store.upload_directory(job_dir, remote_prefix)
 
             if blob_urls:
                 logger.info(f"Job views uploaded to: {base_url}")

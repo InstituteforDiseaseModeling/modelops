@@ -75,6 +75,26 @@ class ProvenanceStore:
         backend_msg = " with Azure uploads" if self._azure_backend else " (local-only)"
         logger.info(f"Initialized ProvenanceStore at {storage_dir}{backend_msg}")
 
+    def supports_remote_uploads(self) -> bool:
+        """Return True when a remote backend (Azure) is configured."""
+        return self._azure_backend is not None
+
+    def upload_directory(self, local_dir: Path, remote_prefix: str) -> None:
+        """Upload a directory to the configured remote backend, if available."""
+        if not self._azure_backend:
+            logger.debug("No remote backend configured; skipping upload.")
+            return
+        self._upload_to_azure(local_dir, remote_prefix)
+
+    def get_remote_backend_info(self) -> dict[str, Any] | None:
+        """Expose minimal metadata about the configured remote backend."""
+        if not self._azure_backend:
+            return None
+        return {
+            "container": getattr(self._azure_backend, "container", None),
+            "connection_string": getattr(self._azure_backend, "connection_string", None),
+        }
+
     def _write_json_atomic(self, path: Path, data: dict) -> None:
         """Write JSON atomically to avoid corruption.
 

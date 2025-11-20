@@ -149,8 +149,8 @@ class TestTelemetryStorage:
     def test_upload_to_azure_called_when_configured(self, tmp_path):
         """Azure upload called when ProvenanceStore has Azure backend."""
         mock_prov_store = mock.Mock()
-        mock_prov_store._azure_backend = {"container": "results"}
-        mock_prov_store._upload_to_azure = mock.Mock()
+        mock_prov_store.supports_remote_uploads.return_value = True
+        mock_prov_store.upload_directory = mock.Mock()
 
         storage = TelemetryStorage(storage_dir=tmp_path, prov_store=mock_prov_store)
         collector = TelemetryCollector()
@@ -161,8 +161,8 @@ class TestTelemetryStorage:
         storage.save_job_telemetry("job-123", collector)
 
         # Verify upload was called
-        mock_prov_store._upload_to_azure.assert_called_once()
-        call_args = mock_prov_store._upload_to_azure.call_args
+        mock_prov_store.upload_directory.assert_called_once()
+        call_args = mock_prov_store.upload_directory.call_args
 
         # Check arguments
         local_dir = call_args[0][0]
@@ -174,7 +174,7 @@ class TestTelemetryStorage:
     def test_upload_not_called_without_azure_backend(self, tmp_path):
         """Azure upload not called when no Azure backend."""
         mock_prov_store = mock.Mock()
-        mock_prov_store._azure_backend = None
+        mock_prov_store.supports_remote_uploads.return_value = False
 
         storage = TelemetryStorage(storage_dir=tmp_path, prov_store=mock_prov_store)
         collector = TelemetryCollector()
@@ -185,16 +185,12 @@ class TestTelemetryStorage:
         storage.save_job_telemetry("job-123", collector)
 
         # Upload should not be called
-        assert (
-            not hasattr(mock_prov_store, "_upload_to_azure")
-            or not mock_prov_store._upload_to_azure.called
-        )
-
+        assert not hasattr(mock_prov_store, "upload_directory") or not mock_prov_store.upload_directory.called
     def test_upload_failure_does_not_fail_job(self, tmp_path, caplog):
         """Azure upload failure is logged but doesn't raise."""
         mock_prov_store = mock.Mock()
-        mock_prov_store._azure_backend = {"container": "results"}
-        mock_prov_store._upload_to_azure = mock.Mock(side_effect=Exception("Upload failed"))
+        mock_prov_store.supports_remote_uploads.return_value = True
+        mock_prov_store.upload_directory = mock.Mock(side_effect=Exception("Upload failed"))
 
         storage = TelemetryStorage(storage_dir=tmp_path, prov_store=mock_prov_store)
         collector = TelemetryCollector()
