@@ -151,10 +151,10 @@ bundle-status: $(VENV)/.installed
 
 .PHONY: bundle-register
 bundle-register: $(VENV)/.installed data
-	# Register the model for cloud job submission
-	$(BIN)/modelops-bundle register-model models/sir.py --no-confirm
+	# Register the model for cloud job submission (auto code deps, auto prune)
+	$(BIN)/modelops-bundle register-model models/sir.py --auto-code --regen-all
 	# Register targets - auto-discovers decorated functions and their dependencies
-	$(BIN)/modelops-bundle register-target targets/incidence.py --no-confirm
+	$(BIN)/modelops-bundle register-target targets/incidence.py --regen-all
 	@echo "✓ Registered SIR model and calibration targets"
 
 .PHONY: bundle-push
