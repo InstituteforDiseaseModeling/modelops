@@ -165,6 +165,17 @@ bundle-push: $(VENV)/.installed
 # --- Study + Submit ---
 
 .PHONY: study
+study: $(STUDY_FILE)
+
+$(STUDY_FILE): $(VENV)/.installed
+	$(BIN)/cb sampling sobol $(MODEL_CLASS) \
+		--scenario baseline \
+		--n-samples $(N_SAMPLES) \
+		--n-replicates $(N_REPLICATES) \
+		--output $(STUDY_FILE) \
+		--seed 42 \
+		--scramble
+	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 [*** End Patch
 
 .PHONY: study-grid
@@ -176,10 +187,8 @@ study-grid.json: $(VENV)/.installed
 		--grid-points 60 \
 		--n-replicates 20 \
 		--output study-grid.json \
-		--seed 42 \
-		--targets "targets.incidence:incidence_replicate_mean_target" \
-		--targets "targets.incidence:incidence_per_replicate_target"
-	@echo "✓ Wrote study-grid.json with grid points, 20 replicates each, 2 targets"
+		--seed 42
+	@echo "✓ Wrote study-grid.json with grid points, 20 replicates each"
 
 .PHONY: study-tiny
 study-tiny: study-tiny.json
@@ -191,8 +200,7 @@ study-tiny.json: $(VENV)/.installed
 		--n-replicates 2 \
 		--output study-tiny.json \
 		--seed 42 \
-		--scramble \
-		--targets "targets.incidence:incidence_replicate_mean_target"
+		--scramble
 	@echo "✓ Wrote study-tiny.json with 4 params, 2 replicates each (for quick testing)"
 
 .PHONY: submit
