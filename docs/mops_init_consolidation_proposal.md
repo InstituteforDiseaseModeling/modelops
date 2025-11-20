@@ -298,7 +298,7 @@ workspace:
 
 3. **Documentation updates**
    - Update README.md quickstart
-   - Update docs/setup/quick-start.md
+   - Update docs/setup/quick_start.md
    - Update CLI reference documentation
 
 ### Phase 3: Testing & Polish

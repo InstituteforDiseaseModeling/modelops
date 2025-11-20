@@ -493,7 +493,7 @@ workspace.yaml → Pulumi → K8s Deployment → Dask Workers
   threads: 1                         2 procs/pod  1 thread each
 ```
 
-See `docs/dask-configuration.md` for detailed guidance.
+See `docs/architecture/dask_configuration.md` for detailed guidance.
 
 ## Pulumi Passphrase Management
 

@@ -352,10 +352,11 @@ mops infra down
 
 ## Documentation
 
-- **[Quick Start Guide](docs/setup/quick-start.md)** - Detailed setup instructions
+- **[Quick Start Guide](docs/setup/quick_start.md)** - Detailed setup instructions
 - **[CLI Reference](docs/reference/cli.md)** - Complete command documentation
-- **[Developer Guide](docs/dev/README.md)** - Testing, debugging, troubleshooting
+- **[Developer Guide](docs/dev/readme.md)** - Testing, debugging, troubleshooting
 - **[Architecture](docs/architecture/)** - System design and internals
+- **[Documentation Index](docs/index.md)** - Overview of current + archived references
 
 ## Project Structure
 

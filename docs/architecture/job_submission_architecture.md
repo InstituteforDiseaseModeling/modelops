@@ -4,19 +4,21 @@
 
 Let me analyze why keeping sampling separate from bundle management is the correct design choice:
 
-### Current Clean Separation (Calabaria)
+### Current Clean Separation (Calabaria + ModelOps bundle)
 
 ```bash
 # Clear, focused commands
 cb sampling sobol --model seir --n 1000 > job.json
 cb sampling grid --model seir --grid-points 10 > job.json
 
-# Bundle management separate
-cb bundle build
-cb bundle push
+# Bundle management stays in modelops-bundle + mops
+modelops-bundle register-model src/models/seir.py
+mops jobs submit job.json --bundle sha256:abc...   # or rely on --auto (default)
 ```
 
-This is **good design** - each tool does one thing well.
+This is **good design** - Calabaria handles experimental design, while
+bundle registration/publishing happens through `modelops-bundle` and the
+`mops jobs submit --auto` flow.
 
 ### Why SimJob Needs bundle_ref (But Maybe Shouldn't)
 

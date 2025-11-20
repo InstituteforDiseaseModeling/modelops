@@ -1,0 +1,219 @@
+# Aggregation Patterns: Fanout-Aggregate
+# Memory-efficient distributed simulation and aggregation
+
+direction: right
+
+# Style definitions  
+classes: {
+  param: {
+    shape: diamond
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.stroke-width: 2
+  }
+  simulation: {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+  }
+  aggregator: {
+    shape: hexagon
+    style.fill: "#fff3e0"
+    style.stroke: "#ef6c00"
+    style.stroke-width: 3
+  }
+  memory: {
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+  }
+  result: {
+    shape: cylinder
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+}
+
+# Ask Phase
+ask_phase: "Ask Phase" {
+  style.font-size: 18
+  style.fill: "#fafafa"
+  
+  algorithm: "Adaptive Algorithm" {
+    shape: diamond
+    style.fill: "#c8e6c9"
+    optuna: "Optuna/GridSearch"
+  }
+  
+  params: "Parameter Sets" {
+    p1: "Params 1" {class: param}
+    p2: "Params 2" {class: param}
+    p3: "Params N" {class: param}
+  }
+}
+
+# Fanout Phase  
+fanout_phase: "Fanout Phase (Parallel)" {
+  style.font-size: 18
+  style.fill: "#e8eaf6"
+  style.stroke: "#5e35b1"
+  style.stroke-width: 2
+  
+  distribution: "Dask Scheduler" {
+    shape: diamond
+    style.fill: "#ffecb3"
+    distributes: "Distributes to workers"
+  }
+  
+  simulations: "Simulations (100 replicates each)" {
+    style.font-size: 14
+    
+    group1: "Param 1 Sims" {
+      s1_1: "Sim 1.1" {class: simulation; agents: "100K agents"}
+      s1_2: "Sim 1.2" {class: simulation; agents: "100K agents"}
+      dots1: "..." {shape: text}
+      s1_100: "Sim 1.100" {class: simulation; agents: "100K agents"}
+    }
+    
+    group2: "Param 2 Sims" {
+      s2_1: "Sim 2.1" {class: simulation; agents: "100K agents"}
+      s2_2: "Sim 2.2" {class: simulation; agents: "100K agents"}
+      dots2: "..." {shape: text}
+      s2_100: "Sim 2.100" {class: simulation; agents: "100K agents"}
+    }
+    
+    groupN: "Param N Sims" {
+      sN_1: "Sim N.1" {class: simulation; agents: "100K agents"}
+      sN_2: "Sim N.2" {class: simulation; agents: "100K agents"}
+      dotsN: "..." {shape: text}
+      sN_100: "Sim N.100" {class: simulation; agents: "100K agents"}
+    }
+  }
+  
+  memory_parallel: "Memory (Distributed)" {
+    class: memory
+    per_sim: "Per simulation: 2GB"
+    total: "Total parallel: 2GB × 100"
+    distributed: "Spread across workers"
+  }
+}
+
+# Aggregation Phase
+aggregation_phase: "Aggregation Phase (Single Worker)" {
+  style.font-size: 18
+  style.fill: "#fff3e0"
+  style.stroke: "#ef6c00"
+  style.stroke-width: 2
+  
+  aggregators: "Per-Parameter Aggregators" {
+    agg1: "Aggregate P1" {
+      class: aggregator
+      collects: "100 SimReturns"
+      computes: "• Mean trajectory\n• CI bands\n• Statistics"
+    }
+    
+    agg2: "Aggregate P2" {
+      class: aggregator
+      collects: "100 SimReturns"
+      computes: "• Mean trajectory\n• CI bands\n• Statistics"
+    }
+    
+    aggN: "Aggregate PN" {
+      class: aggregator
+      collects: "100 SimReturns"
+      computes: "• Mean trajectory\n• CI bands\n• Statistics"
+    }
+  }
+  
+  memory_concentrated: "Memory (Concentrated)" {
+    class: memory
+    per_agg: "Per aggregator: 200GB"
+    single_worker: "Single worker load!"
+    strategy: "Stream processing\nto avoid OOM"
+  }
+}
+
+# Tell Phase
+tell_phase: "Tell Phase" {
+  style.font-size: 18
+  style.fill: "#fafafa"
+  
+  results: "Trial Results" {
+    r1: "Result 1" {class: result; loss: "Loss: 0.23"}
+    r2: "Result 2" {class: result; loss: "Loss: 0.45"}
+    rN: "Result N" {class: result; loss: "Loss: 0.12"}
+  }
+  
+  algorithm: "Update Algorithm" {
+    shape: diamond
+    style.fill: "#c8e6c9"
+    updates: "Update search\nstrategy"
+  }
+}
+
+# Memory Requirements Table
+memory_table: "Memory Requirements (100K agents × 100 replicates)" {
+  near: bottom-center
+  style.font-size: 14
+  style.fill: "#e8f5e9"
+  style.stroke: "#2e7d32"
+  
+  table: |`
+    Phase      | Pattern       | Memory           | Location
+    -----------|---------------|------------------|---------------
+    Fanout     | Parallel      | 2GB × 100 = 200GB| Distributed
+    Aggregate  | Serial        | 200GB × 1        | Single Worker
+    Trade-off  | Speed vs Mem  | Parallelism      | vs Concentration
+  `|
+}
+
+# Optimization Strategies
+strategies: "Optimization Strategies" {
+  near: bottom-right
+  style.font-size: 12
+  style.fill: "#ffecb3"
+  
+  s1: "1. Streaming aggregation"
+  s2: "2. Chunked processing"
+  s3: "3. Intermediate checkpoints"
+  s4: "4. Memory-mapped files"
+  s5: "5. Result compression"
+}
+
+# Flow connections
+ask_phase.algorithm -> ask_phase.params: "ask(n)"
+ask_phase.params -> fanout_phase.distribution: "distribute"
+
+fanout_phase.distribution -> fanout_phase.simulations.group1: "worker 1-33"
+fanout_phase.distribution -> fanout_phase.simulations.group2: "worker 34-66"
+fanout_phase.distribution -> fanout_phase.simulations.groupN: "worker 67-100"
+
+fanout_phase.simulations.group1 -> aggregation_phase.aggregators.agg1: "collect results" {
+  style.stroke: "#1565c0"
+  style.stroke-width: 2
+}
+fanout_phase.simulations.group2 -> aggregation_phase.aggregators.agg2: "collect results" {
+  style.stroke: "#1565c0"
+  style.stroke-width: 2
+}
+fanout_phase.simulations.groupN -> aggregation_phase.aggregators.aggN: "collect results" {
+  style.stroke: "#1565c0"
+  style.stroke-width: 2
+}
+
+aggregation_phase.aggregators -> tell_phase.results: "compute loss"
+tell_phase.results -> tell_phase.algorithm: "tell(results)"
+tell_phase.algorithm -> ask_phase.algorithm: "next iteration" {
+  style.stroke-dash: 3
+  style.stroke: "#9c27b0"
+}
+
+# Task naming convention
+naming: "Dask Task Naming" {
+  near: top-right
+  style.font-size: 12
+  style.fill: "#e3f2fd"
+  
+  format: "sim-{param_id[:8]}-{replicate}"
+  example: "sim-abc123de-0"
+  grouping: "Hyphenated for dashboard"
+}

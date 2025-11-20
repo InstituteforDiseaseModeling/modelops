@@ -1,0 +1,220 @@
+# Warm Process Pool Architecture
+# Bundle-keyed subprocess caching with JSON-RPC communication
+
+direction: right
+
+# Style definitions
+classes: {
+  manager: {
+    style.fill: "#e1f5fe"
+    style.stroke: "#01579b"
+    style.stroke-width: 2
+  }
+  process: {
+    style.fill: "#f1f8e9"
+    style.stroke: "#33691e"
+    style.stroke-width: 2
+  }
+  venv: {
+    style.fill: "#fff3e0"
+    style.stroke: "#e65100"
+  }
+  cache: {
+    style.fill: "#fce4ec"
+    style.stroke: "#880e4f"
+    style.stroke-width: 2
+  }
+  jsonrpc: {
+    style.fill: "#f3e5f5"
+    style.stroke: "#4a148c"
+    shape: hexagon
+  }
+}
+
+# Main Components
+dask_worker: "Dask Worker" {
+  shape: rectangle
+  style.fill: "#e8eaf6"
+  style.stroke: "#4527a0"
+  style.stroke-width: 3
+  style.font-size: 20
+  
+  plugin: "ModelOpsWorkerPlugin" {
+    shape: diamond
+    style.fill: "#ffecb3"
+  }
+}
+
+manager: "WarmProcessManager (Singleton)" {
+  class: manager
+  style.font-size: 18
+  
+  pool: "Process Pool (OrderedDict)" {
+    class: cache
+    
+    key_format: "Cache Key Format" {
+      shape: document
+      style.fill: "#e8f5e9"
+      text: |md
+        {bundle_digest}-py{version}-{deps_hash}
+        
+        Example:
+        abc123def-py3.11-7f8e9a2b
+      |
+    }
+    
+    processes: "Cached Processes (LRU)" {
+      p1: "Process 1" {
+        class: process
+        bundle: "Bundle: abc123"
+        reuse: "Reuse: 47x"
+      }
+      p2: "Process 2" {
+        class: process
+        bundle: "Bundle: def456"
+        reuse: "Reuse: 23x"
+      }
+      p3: "Process 3" {
+        class: process
+        bundle: "Bundle: ghi789"
+        reuse: "Reuse: 5x"
+      }
+    }
+    
+    lru: "LRU Eviction" {
+      shape: circle
+      style.fill: "#ffcdd2"
+      max: "max_processes: 128"
+    }
+  }
+  
+  lock: "Filesystem Lock" {
+    shape: cylinder
+    style.fill: "#c5cae9"
+    purpose: "Prevent concurrent\nvenv creation"
+  }
+}
+
+# Virtual Environment Management
+venv_manager: "Virtual Environment" {
+  class: venv
+  style.font-size: 16
+  
+  path: "Path Structure" {
+    shape: document
+    text: |md
+      /tmp/modelops/venvs/
+      └── {bundle_digest}-py{version}-{deps_hash}/
+          ├── bin/python
+          ├── lib/
+          └── site-packages/
+    |
+  }
+  
+  creation: "Creation Process" {
+    shape: sequence_diagram
+    
+    check: "1. Check exists?"
+    create: "2. Create venv"
+    install: "3. Install deps"
+    verify: "4. Verify imports"
+  }
+}
+
+# JSON-RPC Communication
+jsonrpc: "JSON-RPC Protocol" {
+  class: jsonrpc
+  style.font-size: 16
+  
+  framing: "Content-Length Framing" {
+    shape: document
+    style.fill: "#e1bee7"
+    text: |md
+      Content-Length: 234\r\n
+      \r\n
+      {"jsonrpc": "2.0",
+       "method": "execute",
+       "params": {...},
+       "id": 1}
+    |
+  }
+  
+  channels: "IPC Channels" {
+    stdin: "stdin: requests"
+    stdout: "stdout: responses"
+    stderr: "stderr: DEVNULL ⚠️"
+  }
+  
+  deadlock_fix: "70KB Deadlock Fix" {
+    shape: rectangle
+    style.fill: "#ffccbc"
+    text: |md
+      Changed stderr from PIPE to DEVNULL
+      Prevents buffer saturation deadlock
+      when sending large (>65KB) messages
+    |
+  }
+}
+
+# Subprocess Details
+subprocess: "Subprocess Runner" {
+  class: process
+  style.font-size: 16
+  
+  isolation: "Complete Isolation" {
+    shape: hexagon
+    deps: "Frozen dependencies"
+    env: "Clean environment"
+    imports: "No side effects"
+  }
+  
+  lifecycle: "Lifecycle" {
+    start: "Start (200ms warm)"
+    execute: "Execute tasks"
+    idle: "Idle (keep-alive)"
+    evict: "Evict (LRU/death)"
+  }
+}
+
+# Performance Metrics
+performance: "Performance Metrics" {
+  near: bottom-center
+  style.font-size: 14
+  style.fill: "#c8e6c9"
+  style.stroke: "#1b5e20"
+  
+  cold: "❄️ Cold Start: 3.3 seconds"
+  warm: "🔥 Warm Start: 200ms"
+  speedup: "⚡ Speedup: 16.45x"
+  cache_hit: "📊 Cache Hit Rate: ~85%"
+}
+
+# Flow connections
+dask_worker.plugin -> manager: "get_or_create_process()"
+manager -> manager.pool: "lookup by key"
+manager.pool -> venv_manager: "cache miss" {
+  style.stroke-dash: 3
+  style.stroke: "#ff5722"
+}
+venv_manager -> subprocess: "spawn process"
+subprocess -> jsonrpc: "communicate"
+jsonrpc -> manager: "ready for tasks"
+
+manager.pool.processes -> jsonrpc: "cache hit" {
+  style.stroke: "#4caf50"
+  style.stroke-width: 3
+}
+
+# Annotations
+notes: {
+  label: "Key Design Decisions"
+  near: top-right
+  style.font-size: 12
+  style.fill: "#fff9c4"
+  
+  n1: "• Singleton per Dask worker"
+  n2: "• Bundle content determines cache key"
+  n3: "• Python version included for safety"
+  n4: "• Filesystem lock prevents races"
+  n5: "• DEVNULL stderr prevents deadlock"
+}

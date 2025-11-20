@@ -1,0 +1,240 @@
+# ProvenanceScheme: Content-Addressed Storage Architecture
+# Tracking simulation inputs, outputs, and multi-target losses
+
+direction: down
+
+# Style definitions
+classes: {
+  cas: {
+    shape: cylinder
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.stroke-width: 2
+  }
+  hash: {
+    shape: hexagon
+    style.fill: "#fff3e0"
+    style.stroke: "#ff9800"
+  }
+  shard: {
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+  }
+  provenance: {
+    style.fill: "#f3e5f5"
+    style.stroke: "#7b1fa2"
+    style.stroke-width: 3
+  }
+  target: {
+    shape: diamond
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+  }
+}
+
+# Main ProvenanceScheme
+provenance: "ProvenanceScheme" {
+  class: provenance
+  style.font-size: 20
+  
+  metadata: "Metadata Graph" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+    
+    model: "Model Hash\nsha256:abc..." {class: hash}
+    params: "Parameter Hash\nsha256:def..." {class: hash}
+    output: "Output Hash\nsha256:789..." {class: hash}
+    bundle: "Bundle Digest\noci:sha256:xyz..." {class: hash}
+  }
+  
+  tracking: "Multi-Target Tracking" {
+    targets: "Target Definitions" {
+      t1: "deaths" {class: target}
+      t2: "cases" {class: target}
+      t3: "hospitalizations" {class: target}
+    }
+    
+    losses: "Loss Components" {
+      shape: document
+      style.fill: "#fff9c4"
+      text: |md
+        {
+          "deaths": 0.23,
+          "cases": 0.45,
+          "hospitalizations": 0.12,
+          "combined": 0.27
+        }
+      |
+    }
+  }
+}
+
+# Content-Addressed Storage
+cas_layer: "Content-Addressed Storage (CAS)" {
+  style.font-size: 18
+  style.fill: "#fafafa"
+  style.stroke: "#424242"
+  style.stroke-width: 2
+  
+  sharding: "Sharded Storage" {
+    class: shard
+    style.font-size: 16
+    
+    scheme: "Sharding Scheme" {
+      shape: document
+      text: |md
+        Path: /{prefix}/{hash}
+        
+        Prefix: first 2 chars of hash
+        Example: 
+          Hash: abc123def456...
+          Path: /ab/abc123def456...
+      |
+    }
+    
+    buckets: "Storage Buckets" {
+      b1: "/00-3f/" {class: cas}
+      b2: "/40-7f/" {class: cas}
+      b3: "/80-bf/" {class: cas}
+      b4: "/c0-ff/" {class: cas}
+    }
+  }
+  
+  operations: "CAS Operations" {
+    style.font-size: 14
+    
+    put: "PUT" {
+      shape: rectangle
+      style.fill: "#c8e6c9"
+      process: "1. Hash content\n2. Shard by prefix\n3. Store at path\n4. Return hash"
+    }
+    
+    get: "GET" {
+      shape: rectangle
+      style.fill: "#bbdefb"
+      process: "1. Extract prefix\n2. Lookup shard\n3. Read content\n4. Verify hash"
+    }
+    
+    exists: "EXISTS" {
+      shape: rectangle
+      style.fill: "#fff9c4"
+      process: "1. Check path\n2. Return bool"
+    }
+  }
+}
+
+# Storage Types
+storage_types: "Storage Implementations" {
+  style.font-size: 16
+  style.fill: "#e8eaf6"
+  
+  local: "LocalCAS" {
+    class: cas
+    path: "/tmp/modelops/cas/"
+    features: "• Filesystem based\n• Dev/testing\n• Fast access"
+  }
+  
+  azure: "AzureCAS" {
+    class: cas
+    container: "results"
+    features: "• Blob storage\n• Production\n• Scalable"
+  }
+  
+  hybrid: "HybridCAS" {
+    class: cas
+    cache: "Local cache"
+    remote: "Azure backend"
+    features: "• Two-tier\n• Fast + durable\n• Smart caching"
+  }
+}
+
+# Data Flow
+data_flow: "Simulation Data Flow" {
+  style.font-size: 16
+  style.fill: "#fff3e0"
+  
+  inputs: "Inputs" {
+    params: "Parameters" {
+      shape: document
+      example: '{"beta": 0.5, "gamma": 0.1}'
+    }
+    seed: "Seed" {
+      shape: circle
+      value: "uint64: 42"
+    }
+  }
+  
+  execution: "Execution" {
+    shape: rectangle
+    style.fill: "#e3f2fd"
+    sim: "Run Simulation"
+  }
+  
+  outputs: "Outputs" {
+    simreturn: "SimReturn" {
+      shape: cylinder
+      format: "Arrow IPC bytes"
+      tables: "Dict[str, Table]"
+    }
+  }
+  
+  storage: "Storage" {
+    hash_calc: "Calculate Hash" {class: hash}
+    store: "Store in CAS" {class: cas}
+    record: "Record Provenance"
+  }
+}
+
+# Provenance Graph Example
+graph_example: "Provenance Graph Example" {
+  near: bottom-right
+  style.font-size: 12
+  style.fill: "#c8e6c9"
+  
+  example: |md
+  Run abc123:
+    Model: sha256:model...
+    Params: sha256:param...
+    Bundle: oci:sha256:bundle...
+    
+    Results:
+      Output: sha256:output...
+      Targets: [deaths, cases]
+      Losses: {
+        deaths: 0.23,
+        cases: 0.45,
+        combined: 0.34
+      }
+    
+    Dependencies:
+      ← Previous run xyz789
+      → Derived run def456
+  |
+}
+
+# Connections
+provenance.metadata -> cas_layer.sharding: "store metadata"
+provenance.tracking.losses -> cas_layer.sharding: "store losses"
+
+data_flow.inputs -> data_flow.execution: "simulate"
+data_flow.execution -> data_flow.outputs: "results"
+data_flow.outputs -> data_flow.storage.hash_calc: "hash"
+data_flow.storage.hash_calc -> data_flow.storage.store: "content"
+data_flow.storage.store -> cas_layer.sharding.buckets: "sharded"
+
+cas_layer.operations.put -> storage_types: "implementation"
+cas_layer.operations.get -> storage_types: "implementation"
+
+# Benefits box
+benefits: {
+  label: "Benefits"
+  near: bottom-left
+  style.font-size: 12
+  style.fill: "#ffecb3"
+  
+  b1: "✓ Complete reproducibility"
+  b2: "✓ Deduplication (same content = same hash)"
+  b3: "✓ Multi-target loss tracking"
+  b4: "✓ Provenance graph navigation"
+  b5: "✓ Immutable audit trail"
+}

@@ -1,0 +1,249 @@
+# Pulumi Infrastructure Stack Architecture
+# Four-stack pattern with typed bindings and outputs
+
+direction: down
+
+# Style definitions
+classes: {
+  stack: {
+    shape: rectangle
+    style.fill: "#e8eaf6"
+    style.stroke: "#5e35b1"
+    style.stroke-width: 2
+    style.border-radius: 8
+  }
+  azure: {
+    style.fill: "#e3f2fd"
+    style.stroke: "#0078d4"
+    style.stroke-width: 2
+  }
+  k8s: {
+    style.fill: "#fff9c4"
+    style.stroke: "#f57c00"
+    style.stroke-width: 2
+  }
+  output: {
+    shape: hexagon
+    style.fill: "#f3e5f5"
+    style.stroke: "#7b1fa2"
+  }
+}
+
+# Stack 1: Registry
+registry: {
+  label: "modelops-registry-{env}"
+  class: stack
+  style.font-size: 18
+  
+  component: "RegistryComponent" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+  }
+  
+  resources: {
+    class: azure
+    acr: "Azure Container Registry\n• modelops{env}acr{user}\n• Per-user in dev\n• Org-level in prod"
+  }
+  
+  outputs: {
+    class: output
+    login: "loginServer"
+    url: "registryUrl"
+    creds: "credentials (secret)"
+  }
+}
+
+# Stack 2: Infrastructure
+infrastructure: {
+  label: "modelops-infra-{env}"
+  class: stack
+  style.font-size: 18
+  
+  component: "AzureModelOpsInfra" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+  }
+  
+  resources: {
+    class: azure
+    rg: "Resource Group\nmodelops-{env}-rg-{user}"
+    aks: "AKS Cluster" {
+      system: "System Pool (1 node)"
+      cpu: "CPU Pool (2-5 nodes)"
+      gpu: "GPU Pool (0-2 nodes)"
+    }
+    network: "Virtual Network\n• Subnets\n• NSGs"
+  }
+  
+  outputs: {
+    class: output
+    kubeconfig: "kubeconfig (secret)"
+    cluster: "clusterName"
+    endpoint: "apiEndpoint"
+    rg: "resourceGroup"
+  }
+}
+
+# Stack 3: Storage
+storage: {
+  label: "modelops-storage-{env}"
+  class: stack
+  style.font-size: 18
+  
+  component: "StorageComponent" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+  }
+  
+  resources: {
+    class: azure
+    account: "Storage Account\nmops{env}{user}{hash}"
+    containers: "Blob Containers" {
+      bundles: "bundles"
+      blobs: "bundle-blobs"
+      workspace: "workspace (60d TTL)"
+      results: "results"
+      tasks: "tasks"
+    }
+  }
+  
+  outputs: {
+    class: output
+    connection: "connectionString (secret)"
+    account_name: "accountName"
+    endpoints: "containerEndpoints"
+  }
+}
+
+# Stack 4: Workspace
+workspace: {
+  label: "modelops-workspace-{env}"
+  class: stack
+  style.font-size: 18
+  
+  component: "DaskWorkspace" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+  }
+  
+  stack_refs: "StackReferences" {
+    shape: diamond
+    style.fill: "#ffecb3"
+    infra_ref: "infra outputs"
+    storage_ref: "storage outputs"
+    registry_ref: "registry outputs"
+  }
+  
+  resources: {
+    class: k8s
+    namespace: "Namespace: dask"
+    scheduler: "Dask Scheduler\n• Service\n• Deployment"
+    workers: "Dask Workers\n• Deployment\n• processes: 2\n• threads: 1"
+    configmap: "ConfigMap\n• ENV vars\n• endpoints"
+    secrets: "Secrets\n• storage keys\n• registry creds"
+  }
+  
+  outputs: {
+    class: output
+    scheduler: "schedulerAddress"
+    dashboard: "dashboardUrl"
+    status: "workspaceStatus"
+  }
+}
+
+# Stack 5: Adaptive Run
+adaptive: {
+  label: "modelops-adaptive-{run_id}"
+  class: stack
+  style.font-size: 18
+  
+  component: "AdaptiveComponent" {
+    shape: rectangle
+    style.fill: "#fce4ec"
+  }
+  
+  stack_refs: "StackReferences" {
+    shape: diamond
+    style.fill: "#ffecb3"
+    workspace_ref: "workspace outputs"
+    storage_ref: "storage outputs"
+  }
+  
+  resources: {
+    class: k8s
+    job: "K8s Job\n• Optuna runner"
+    configmap: "ConfigMap\n• algorithm config\n• bundle refs"
+    pvc: "PersistentVolume\n• results storage"
+  }
+  
+  outputs: {
+    class: output
+    run_id: "runId"
+    status: "runStatus"
+    results: "resultsPath"
+  }
+}
+
+# Stack Dependencies (flows)
+registry.outputs -> infrastructure.component: "ACR for images" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}
+
+infrastructure.outputs -> storage.component: "Resource Group" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}
+
+infrastructure.outputs -> workspace.stack_refs: "kubeconfig" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 3
+}
+
+storage.outputs -> workspace.stack_refs: "storage keys" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 3
+}
+
+registry.outputs -> workspace.stack_refs: "registry creds" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 3
+}
+
+workspace.outputs -> adaptive.stack_refs: "scheduler address" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 3
+}
+
+storage.outputs -> adaptive.stack_refs: "results storage" {
+  style.stroke: "#7b1fa2"
+  style.stroke-width: 3
+}
+
+# Annotations
+notes: {
+  label: "Key Design Principles"
+  near: bottom-left
+  style.font-size: 14
+  style.fill: "#fffde7"
+  
+  principle1: "• No custom state - all through Pulumi"
+  principle2: "• Typed bindings via DTOs"
+  principle3: "• Secrets marked with pulumi.Output.secret()"
+  principle4: "• Stack outputs are the only persistent state"
+  principle5: "• ComponentResources encapsulate complexity"
+}
+
+# Environment box
+env_note: {
+  label: "Environment Pattern"
+  near: top-right
+  style.font-size: 14
+  style.fill: "#e8f5e9"
+  
+  dev: "dev: Per-user resources"
+  staging: "staging: Shared team"
+  prod: "prod: Production isolation"
+}

@@ -1,0 +1,131 @@
+# ModelOps System Architecture Overview
+# Three-layer architecture with clean separation of concerns
+
+direction: right
+
+# Define styles
+classes: {
+  science: {
+    style.fill: "#e8f5e9"
+    style.stroke: "#4caf50"
+    style.stroke-width: 2
+  }
+  contracts: {
+    style.fill: "#fff3e0"
+    style.stroke: "#ff9800"
+    style.stroke-width: 2
+  }
+  infra: {
+    style.fill: "#e3f2fd"
+    style.stroke: "#2196f3"
+    style.stroke-width: 2
+  }
+  storage: {
+    style.fill: "#f3e5f5"
+    style.stroke: "#9c27b0"
+    style.stroke-width: 2
+  }
+}
+
+# Science Layer
+science: {
+  label: "Science Layer (Calabaria)"
+  class: science
+  style.font-size: 20
+  
+  models: "ABM Models\n• SIR/SEIR\n• Network models\n• Custom simulations"
+  calibration: "Calibration\n• Optuna\n• Grid Search\n• Bayesian Opt"
+  targets: "Targets\n• Time series\n• Distributions\n• Multi-objective"
+  
+  models -> calibration: simulate
+  targets -> calibration: evaluate
+}
+
+# Contracts Layer
+contracts: {
+  label: "Contract Layer"
+  class: contracts
+  style.font-size: 20
+  
+  ask_tell: "Ask/Tell Protocol" {
+    shape: hexagon
+  }
+  sim_service: "SimulationService" {
+    shape: hexagon
+  }
+  sim_return: "SimReturn\n(Arrow IPC)" {
+    shape: hexagon
+  }
+  types: "Types\n• TrialResult\n• UniqueParameterSet\n• Scalar"
+}
+
+# Infrastructure Layer
+infrastructure: {
+  label: "Infrastructure Layer (ModelOps)"
+  class: infra
+  style.font-size: 20
+  
+  k8s: "Kubernetes (AKS)" {
+    
+    dask: "Dask Cluster" {
+      scheduler: "Scheduler"
+      workers: "Workers (2-100)"
+    }
+  }
+  
+  execution: "Execution" {
+    pools: "Warm Process Pools\n16.45x speedup"
+    jsonrpc: "JSON-RPC IPC"
+    venvs: "Isolated Venvs"
+  }
+  
+  storage: "Storage" {
+    class: storage
+    cas: "Content-Addressed"
+    bundles: "Bundle Registry"
+    cache: "Results Cache"
+  }
+}
+
+# Main flow connections
+science.calibration -> contracts.ask_tell: "ask(n)"
+contracts.ask_tell -> infrastructure.k8s.dask: "distribute"
+infrastructure.k8s.dask -> contracts.sim_service: "submit"
+contracts.sim_service -> infrastructure.execution: "execute"
+infrastructure.execution -> contracts.sim_return: "results"
+contracts.sim_return -> contracts.ask_tell: "aggregate"
+contracts.ask_tell -> science.calibration: "tell(results)"
+
+# Storage connections
+infrastructure.execution -> infrastructure.storage: "cache/store"
+infrastructure.storage -> infrastructure.execution: "retrieve"
+
+# Annotations
+annotations: {
+  perf: "Performance: 200ms warm start vs 3.3s cold" {
+    style.font-size: 12
+    style.fill: "#ffecb3"
+  }
+  
+  scale: "Scale: 10K-1M simulations" {
+    style.font-size: 12
+    style.fill: "#ffecb3"
+  }
+  
+  isolation: "Complete dependency isolation" {
+    style.font-size: 12
+    style.fill: "#ffecb3"
+  }
+}
+
+# Legend
+legend: {
+  label: "Legend"
+  style.font-size: 14
+  near: bottom-right
+  
+  sci: "🟢 Science (Calabaria)" {class: science}
+  con: "🟠 Contracts (Interfaces)" {class: contracts}
+  inf: "🔵 Infrastructure (ModelOps)" {class: infra}
+  sto: "🟣 Storage (Provenance)" {class: storage}
+}

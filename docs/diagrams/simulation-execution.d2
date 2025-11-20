@@ -1,0 +1,191 @@
+# Simulation Execution Architecture
+# Hexagonal architecture with clean separation of domain and infrastructure
+
+direction: down
+
+# Style definitions
+classes: {
+  domain: {
+    style.fill: "#e8f5e9"
+    style.stroke: "#2e7d32"
+    style.stroke-width: 3
+  }
+  port: {
+    shape: hexagon
+    style.fill: "#fff3e0"
+    style.stroke: "#ef6c00"
+    style.stroke-width: 2
+  }
+  adapter: {
+    style.fill: "#e3f2fd"
+    style.stroke: "#1565c0"
+    style.stroke-width: 2
+  }
+  infra: {
+    style.fill: "#f3e5f5"
+    style.stroke: "#6a1b9a"
+  }
+  dask: {
+    style.fill: "#ffebee"
+    style.stroke: "#c62828"
+    style.stroke-width: 2
+  }
+}
+
+# Dask Cluster Level
+dask_cluster: "Dask Cluster" {
+  class: dask
+  style.font-size: 20
+  
+  scheduler: "Scheduler" {
+    shape: diamond
+    distributes: "Distributes plugin\nto all workers"
+  }
+  
+  workers: "Worker Nodes (N)" {
+  }
+}
+
+# Per Worker Architecture
+worker: "Per Dask Worker" {
+  style.font-size: 18
+  style.fill: "#fafafa"
+  style.stroke: "#424242"
+  style.stroke-width: 2
+  
+  # Composition Root
+  plugin: "ModelOpsWorkerPlugin" {
+    shape: diamond
+    class: adapter
+    
+    config: "RuntimeConfig" {
+      shape: document
+      env: "• Bundle path\n• Cache path\n• Storage config"
+    }
+    
+    wiring: "Dependency Wiring" {
+      shape: hexagon
+      creates: "Creates & injects\nall components"
+    }
+  }
+  
+  # Domain Layer (Hexagonal Core)
+  domain: "Domain Layer" {
+    class: domain
+    style.font-size: 16
+    
+    executor: "SimulationExecutor" {
+      shape: rectangle
+      pure: "Pure domain logic\nNo infrastructure knowledge"
+    }
+    
+    ports: "Ports (Interfaces)" {
+      exec_env: "ExecutionEnvironment" {
+        class: port
+      }
+      bundle_repo: "BundleRepository" {
+        class: port
+      }
+      cas: "ContentAddressedStorage" {
+        class: port
+      }
+    }
+  }
+  
+  # Infrastructure Layer (Adapters)
+  infrastructure: "Infrastructure Layer" {
+    class: infra
+    style.font-size: 16
+    
+    isolated_env: "IsolatedWarmExecEnv" {
+      class: adapter
+      
+      manager: "WarmProcessManager" {
+        shape: cylinder
+        pool: "Process Pool\n(128 max)"
+      }
+      
+      subprocess: "Subprocess Runner" {
+        venv: "Virtual Env"
+        jsonrpc: "JSON-RPC"
+      }
+    }
+    
+    bundle_adapter: "LocalBundleRepository" {
+      class: adapter
+      fetches: "Fetches bundles\nfrom registry"
+    }
+    
+    cas_adapter: "AzureCAS / LocalCAS" {
+      class: adapter
+      stores: "Stores outputs\ncontent-addressed"
+    }
+  }
+}
+
+# Execution Flow
+flow: "Execution Flow" {
+  near: bottom-center
+  style.font-size: 14
+  style.fill: "#e8eaf6"
+  
+  workflow: {
+    shape: sequence_diagram
+    
+    s1: "1. Task arrives with params"
+    s2: "2. Executor receives via port"
+    s3: "3. Get/create warm process"
+    s4: "4. Execute in isolation"
+    s5: "5. Store results in CAS"
+    s6: "6. Return SimReturn"
+  }
+}
+
+# Key Principles
+principles: "Hexagonal Principles" {
+  near: top-right
+  style.font-size: 12
+  style.fill: "#c8e6c9"
+  
+  p1: "✓ Domain knows nothing about Dask"
+  p2: "✓ Ports define all boundaries"
+  p3: "✓ Adapters handle complexity"
+  p4: "✓ Dependency inversion everywhere"
+  p5: "✓ Plugin is composition root"
+}
+
+# Performance Box
+performance: "Performance" {
+  near: bottom-right
+  style.font-size: 12
+  style.fill: "#ffecb3"
+  
+  cache_key: "Cache Key: {bundle}-py{ver}-{deps}"
+  warm: "Warm Start: 200ms"
+  cold: "Cold Start: 3.3s"
+  speedup: "16.45x speedup"
+}
+
+# Connections
+dask_cluster.scheduler -> dask_cluster.workers: "register_plugin()"
+dask_cluster.workers -> worker.plugin: "instantiate"
+
+worker.plugin -> worker.domain.executor: "creates with ports"
+worker.plugin.config -> worker.infrastructure: "configures"
+
+worker.domain.executor -> worker.domain.ports.exec_env: "uses"
+worker.domain.executor -> worker.domain.ports.bundle_repo: "uses"
+worker.domain.executor -> worker.domain.ports.cas: "uses"
+
+worker.domain.ports.exec_env -> worker.infrastructure.isolated_env: "implemented by" {
+  style.stroke-dash: 3
+  style.stroke: "#ef6c00"
+}
+worker.domain.ports.bundle_repo -> worker.infrastructure.bundle_adapter: "implemented by" {
+  style.stroke-dash: 3
+  style.stroke: "#ef6c00"
+}
+worker.domain.ports.cas -> worker.infrastructure.cas_adapter: "implemented by" {
+  style.stroke-dash: 3
+  style.stroke: "#ef6c00"
+}
