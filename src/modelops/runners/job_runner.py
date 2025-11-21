@@ -244,6 +244,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             else:
                 default_results.append(result)
 
+    # Log results summary
     if target_entrypoints:
         for target in target_entrypoints:
             target_name = target.split("/")[-1] if "/" in target else target
@@ -252,8 +253,14 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             for i, result in enumerate(target_results[:3]):
                 if hasattr(result, "loss"):
                     logger.info(f"  Param set {i} loss for {target_name}: {result.loss}")
+    else:
+        logger.info(f"=== Job completed without targets ===")
+        logger.info(f"Collected {len(default_results)} raw simulation results")
+        logger.info(f"No targets were specified - simulation data was generated but not evaluated against any targets")
+        logger.info(f"To evaluate results, resubmit with target_spec or use the results for further analysis")
 
-        # Write Parquet views for post-job analysis
+    # Write Parquet views for post-job analysis (only for jobs with targets)
+    if target_entrypoints and results_by_target:
         try:
             from pathlib import Path
 
@@ -279,28 +286,27 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                     logger.warning(f"Could not initialize ProvenanceStore with Azure: {e}")
                     prov_store = None
 
-            # If we have multiple targets, pass results_by_target; otherwise pass single results list
-            if results_by_target:
-                view_path = write_job_view(job, results_by_target, prov_store=prov_store)
-            else:
-                view_path = write_job_view(job, default_results, prov_store=prov_store)
-
+            view_path = write_job_view(job, results_by_target, prov_store=prov_store)
             logger.info(f"Job view written to: {view_path}")
 
             # Write per-replicate view if we have the data
-            if results_by_target:
-                try:
-                    replicates_path = write_replicates_view(job, results_by_target, prov_store=prov_store)
-                    if replicates_path:
-                        logger.info(f"Per-replicate view written to: {replicates_path}")
-                except Exception as e:
-                    logger.warning(f"Could not write per-replicate view: {e}")
+            try:
+                replicates_path = write_replicates_view(job, results_by_target, prov_store=prov_store)
+                if replicates_path:
+                    logger.info(f"Per-replicate view written to: {replicates_path}")
+            except Exception as e:
+                logger.warning(f"Could not write per-replicate view: {e}")
         except ImportError as e:
             logger.warning(f"Could not write job views (missing dependency): {e}")
         except Exception as e:
             logger.error(f"Failed to write job views: {e}")
             # Don't fail the job if view writing fails
-    elif job.target_spec:
+    elif not target_entrypoints:
+        logger.warning("Skipping view generation: write_job_view requires aggregated results with targets")
+        logger.info("Raw simulation data was collected but no views were written")
+        logger.info("TODO: Implement write_sim_results_view() for jobs without targets")
+
+    if not target_entrypoints and job.target_spec:
         # Fallback: evaluate targets on client side if not done on worker
         logger.info("Evaluating targets on client side...")
         try:
