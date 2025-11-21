@@ -844,6 +844,16 @@ class SubprocessRunner:
 
                     # Call actual target evaluation
                     logger.info(f"Evaluating target with {len(sim_outputs)} simulation outputs")
+
+                    # Quick debug: print what's actually in sim_outputs
+                    logger.info(f"DEBUG: Aggregating target, model_output='{target_obj.model_output}'")
+                    logger.info(f"DEBUG: Number of sim outputs: {len(sim_outputs)}")
+                    if sim_outputs:
+                        first_out = sim_outputs[0]
+                        logger.info(f"DEBUG: Keys in first output: {list(first_out.keys())}")
+                    else:
+                        logger.info(f"DEBUG: sim_outputs is EMPTY")
+
                     target_eval = target_obj.evaluate(sim_outputs)
 
                     # Extract results from TargetEvaluation
