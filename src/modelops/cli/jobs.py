@@ -5,6 +5,7 @@ for submitting simulation and calibration jobs to the cluster.
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,8 @@ from ..services.storage.azure_versioned import AzureVersionedStore
 from .common_options import env_option
 from .display import console, error, info, section, success, warning
 from .formatting import format_duration, format_timestamp, get_timezone_info
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Submit and manage simulation jobs")
 
