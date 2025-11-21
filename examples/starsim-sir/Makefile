@@ -134,14 +134,14 @@ data/observed_trajectories.parquet: data/observed_incidence.csv
 
 .PHONY: bundle-init
 bundle-init: $(VENV)/.installed
-	@if [ ! -f pyproject.toml ]; then \
+	@if [ ! -d .modelops-bundle ]; then \
 		echo "Initializing bundle project..."; \
 		$(BIN)/modelops-bundle init .; \
 		echo "dev" > .modelops-bundle/env; \
 		echo "Adding starsim dependency..."; \
 		$(UV) add starsim sciris; \
 	else \
-		echo "Project already initialized (pyproject.toml exists)"; \
+		echo "Bundle already initialized (.modelops-bundle exists)"; \
 		[ -f .modelops-bundle/env ] || echo "dev" > .modelops-bundle/env; \
 	fi
 
