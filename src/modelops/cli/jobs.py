@@ -569,7 +569,7 @@ def submit(
 
         except ImportError:
             error("\nAuto-push requires modelops-bundle. Install with:")
-            error("  uv pip install 'modelops[bundle]'")
+            error("  uv pip install 'modelops[full]'")
             raise typer.Exit(1)
         except FileNotFoundError:
             error("\nCurrent directory is not a bundle project.")
