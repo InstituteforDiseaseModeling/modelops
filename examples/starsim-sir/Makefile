@@ -155,6 +155,10 @@ bundle-register: $(VENV)/.installed data
 	$(BIN)/modelops-bundle register-model models/sir.py --auto-code --regen-all
 	# Register targets - auto-discovers decorated functions and their dependencies
 	$(BIN)/modelops-bundle register-target targets/incidence.py --regen-all
+	# Define calibration target set for convenience
+	$(BIN)/modelops-bundle target-set set incidence \
+		--target incidence_replicate_mean_target \
+		--target incidence_per_replicate_target
 	@echo "✓ Registered SIR model and calibration targets"
 
 .PHONY: bundle-push
@@ -232,38 +236,41 @@ workflow: setup bundle-init bundle-register study submit
 calib-gen: $(VENV)/.installed data
 	@echo "Generating calibration spec with incidence_replicate_mean_target..."
 	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
-	  targets.incidence:incidence_replicate_mean_target \
 	  data/observed_incidence.csv \
 	  beta:0.01:0.2,dur_inf:3:10 \
+	  --target-set incidence \
 	  --max-trials 100 \
 	  --batch-size 4 \
 	  --n-replicates 10 \
+	  --name incidence-mean \
 	  --output calibration_spec.json
 	@echo "✓ Generated calibration_spec.json"
 
 # Submit calibration job
 calib-submit: bundle-init bundle-register calib-gen $(VENV)/.installed
 	@echo "Submitting calibration job..."
-	$(BIN)/mops jobs submit-calibration $(abspath calibration_spec.json)
+	$(BIN)/mops jobs submit $(abspath calibration_spec.json) --target-set incidence
 	@echo "✓ Calibration job submitted"
 
 # Generate calibration spec with per_replicate target (for comparison)
 calib-gen-per-replicate: $(VENV)/.installed data
 	@echo "Generating calibration spec with incidence_per_replicate_target..."
 	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
-	  targets.incidence:incidence_per_replicate_target \
 	  data/observed_incidence.csv \
 	  beta:0.01:0.2,dur_inf:3:10 \
+	  --target incidence_per_replicate_target \
 	  --max-trials 100 \
 	  --batch-size 4 \
 	  --n-replicates 10 \
+	  --name incidence-per-replicate \
 	  --output calibration_spec_per_replicate.json
 	@echo "✓ Generated calibration_spec_per_replicate.json"
 
 # Submit per_replicate calibration job
 calib-submit-per-replicate: bundle-init bundle-register calib-gen-per-replicate $(VENV)/.installed
 	@echo "Submitting per_replicate calibration job..."
-	$(BIN)/mops jobs submit-calibration $(abspath calibration_spec_per_replicate.json)
+	$(BIN)/mops jobs submit $(abspath calibration_spec_per_replicate.json) \
+		--target incidence_per_replicate_target
 	@echo "✓ Per-replicate calibration job submitted"
 
 # --- Monitoring ---

@@ -262,6 +262,10 @@ class DaskSimulationService(SimulationService):
     ) -> Future[AggregationReturn | list[SimReturn]]:
         """Submit a replicate set with optional worker-side aggregation.
 
+        DEPRECATED: Use submit_replicates() + submit_aggregation() instead for
+        multi-target workflows. This method causes Dask inline artifact size errors
+        when the same replicate set is submitted multiple times for different targets.
+
         This is the KEY method for grouped execution:
         1. Submits all replicates as individual tasks
         2. If target_entrypoint provided, aggregates ON WORKER
@@ -338,6 +342,96 @@ class DaskSimulationService(SimulationService):
 
             results_future = self.client.submit(gather_results, replicate_futures, pure=False)
             return DaskFutureAdapter(results_future)
+
+    def submit_replicates(self, replicate_set: ReplicateSet) -> list[Future[SimReturn]]:
+        """Submit replicates without aggregation, returning individual simulation futures.
+
+        This method is designed for multi-target workflows where the same simulation
+        results need to be evaluated against multiple targets. By submitting replicates
+        once and reusing the futures, we avoid redundant computation and Dask's inline
+        artifact size limits when the same replicate set would otherwise be submitted
+        multiple times.
+
+        TODO: Add integration tests for multi-target workflows using this method
+        combined with submit_aggregation().
+
+        Args:
+            replicate_set: Set of replicates to run
+
+        Returns:
+            List of futures, one per replicate
+        """
+        tasks = replicate_set.tasks()
+        param_id = replicate_set.base_task.params.param_id
+        keys = [TaskKeys.sim_key(param_id, i) for i in range(replicate_set.n_replicates)]
+
+        # Submit all replicates as individual tasks
+        replicate_futures = self.client.map(
+            _worker_run_task,
+            tasks,
+            pure=False,
+            key=keys,
+        )
+
+        return [DaskFutureAdapter(f) for f in replicate_futures]
+
+    def submit_aggregation(
+        self,
+        sim_futures: list[Future[SimReturn]],
+        target_entrypoint: str,
+        bundle_ref: str,
+        param_id: str,
+    ) -> Future[AggregationReturn]:
+        """Submit aggregation task for given simulation results and target.
+
+        This method enables evaluating multiple targets on the same simulation results
+        without re-running simulations. It uses Dask's scatter with broadcast to share
+        simulation results across workers efficiently and avoid inline serialization limits.
+
+        Args:
+            sim_futures: List of simulation result futures to aggregate
+            target_entrypoint: Target entrypoint to evaluate
+            bundle_ref: Bundle reference for the aggregation task
+            param_id: Parameter set ID for task naming
+
+        Returns:
+            Future containing aggregated result with target loss
+        """
+        # Unwrap DaskFutureAdapter to get raw Dask futures
+        dask_futures = [f.wrapped for f in sim_futures]
+
+        # Use scatter with broadcast=True to:
+        # 1. Avoid inline serialization (keeps data in distributed memory)
+        # 2. Share results across workers (broadcast=True means all workers get a copy)
+        # 3. Enable reuse for multiple targets without re-submitting
+        scattered_futures = self.client.scatter(dask_futures, broadcast=True)
+
+        # Check for aggregation resources
+        submit_kwargs = {"pure": False}
+        try:
+            info = self.client.scheduler_info()
+            has_aggregation_resource = any(
+                "aggregation" in worker.get("resources", {})
+                for worker in info.get("workers", {}).values()
+            )
+            if has_aggregation_resource:
+                submit_kwargs["resources"] = {"aggregation": 1}
+                logger.debug("Using aggregation resource constraint")
+        except Exception:
+            logger.debug("Could not check for aggregation resources")
+
+        # Submit aggregation with scattered futures as dependencies
+        # Dask will materialize them before calling the function
+        agg_future = self.client.submit(
+            _worker_run_aggregation_direct,
+            *scattered_futures,
+            target_ep=target_entrypoint,
+            bundle_ref=bundle_ref,
+            key=f"{TaskKeys.agg_key(param_id)}-{target_entrypoint.split('/')[-1]}",
+            **submit_kwargs,
+        )
+
+        return DaskFutureAdapter(agg_future)
 
     def submit_batch_with_aggregation(
         self, replicate_sets: list[ReplicateSet], target_entrypoint: str

@@ -177,32 +177,51 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
         target_entrypoints = job.target_spec.data["target_entrypoints"]
         logger.info(f"Will evaluate {len(target_entrypoints)} targets: {target_entrypoints}")
 
-    # Submit replicate sets for all requested targets
+    # Submit replicate sets - run simulations once, then evaluate each target
+    # This avoids redundant computation and Dask serialization limits
     from modelops_contracts import ReplicateSet
 
     futures = []
-    targets_to_run = target_entrypoints or [None]
 
     for param_id, replicate_tasks in task_groups.items():
-        # Always use ReplicateSet for consistent return types (AggregationReturn)
-        # This works for n_replicates=1 and avoids SimReturn/AggregationReturn branching
         base_task = replicate_tasks[0]
         replicate_set = ReplicateSet(
             base_task=base_task,
             n_replicates=len(replicate_tasks),
             seed_offset=0,  # Seeds already set in tasks
         )
-        for target in targets_to_run:
-            future = sim_service.submit_replicate_set(replicate_set, target)
-            futures.append((param_id, target, future))
-            if target:
-                logger.info(
-                    f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} with target {target}"
+
+        # Submit simulations ONCE per parameter set
+        sim_futures = sim_service.submit_replicates(replicate_set)
+        logger.info(f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]}")
+
+        # Evaluate EACH target on the same simulation results
+        if target_entrypoints:
+            for target in target_entrypoints:
+                agg_future = sim_service.submit_aggregation(
+                    sim_futures,
+                    target,
+                    bundle_ref=base_task.bundle_ref,
+                    param_id=param_id,
                 )
-            else:
-                logger.info(
-                    f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]} without target aggregation"
-                )
+                futures.append((param_id, target, agg_future))
+                logger.info(f"    Evaluating target {target} on param {param_id[:8]}")
+        else:
+            # No targets - return raw simulation results
+            # Wrap in a future that gathers them
+            def gather_sims(*sims):
+                # Return list of SimReturns (already materialized by Dask)
+                return list(sims)
+
+            # Submit a task that depends on all sim futures
+            gathered_future = sim_service.client.submit(
+                gather_sims,
+                *[f.wrapped for f in sim_futures],
+                pure=False,
+            )
+            from modelops.services.dask_simulation import DaskFutureAdapter
+
+            futures.append((param_id, None, DaskFutureAdapter(gathered_future)))
 
     # Gather results
     param_futures_list = futures  # Save the (param_id, future) pairs
@@ -218,7 +237,12 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             target_name = target.split("/")[-1] if "/" in target else target
             results_by_target.setdefault(target_name, []).append(result)
         else:
-            default_results.append(result)
+            # When no target, result is a list[SimReturn] from gather_sims
+            # Extend default_results with all sim returns
+            if isinstance(result, list):
+                default_results.extend(result)
+            else:
+                default_results.append(result)
 
     if target_entrypoints:
         for target in target_entrypoints:

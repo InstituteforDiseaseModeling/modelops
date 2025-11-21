@@ -16,10 +16,19 @@ from .display import error, info, warning
 app = typer.Typer(
     name="mops",
     help="ModelOps infrastructure orchestration for simulation-based methods",
-    no_args_is_help=True,
+    invoke_without_command=True,
     add_completion=False,
     rich_markup_mode="rich",
 )
+
+
+@app.callback(invoke_without_command=True)
+def _root(ctx: typer.Context):
+    """Ensure top-level invocation shows help and exits with error."""
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        typer.echo("\nError: Missing command.", err=True)
+        raise typer.Exit(1)
 
 # Import sub-commands
 from . import (

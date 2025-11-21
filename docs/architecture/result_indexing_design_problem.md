@@ -15,7 +15,6 @@ When a user submits a simulation study with targets:
 cb sampling sobol "models/seir.py:StochasticSEIR" \
   --n-samples 256 \
   --n-replicates 500 \
-  --targets "targets.prevalence:prevalence_target" \
   --output study.json
 
 # Submit to cluster

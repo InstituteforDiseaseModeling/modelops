@@ -7,6 +7,7 @@ for submitting simulation and calibration jobs to the cluster.
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 import typer
 from modelops_contracts import CalibrationSpec, SimulationStudy
@@ -71,6 +72,49 @@ def _get_registry(env: str) -> JobRegistry | None:
     except Exception as e:
         warning(f"Job registry unavailable: {e}")
         return None
+
+
+def _load_local_registry(project_root: Path):
+    """Load the local bundle registry."""
+    from modelops_contracts import BundleRegistry
+
+    root = project_root.resolve()
+    registry_path = root / ".modelops-bundle" / "registry.yaml"
+    if not registry_path.exists():
+        raise FileNotFoundError(f"No registry at {registry_path}")
+    registry = BundleRegistry.load(registry_path)
+    return registry, registry_path
+
+
+def _resolve_registry_targets(
+    target_ids: Optional[List[str]],
+    target_set: Optional[str],
+    project_root: Path,
+) -> Tuple[List[Tuple[str, str]], Optional[str]] | None:
+    """Resolve targets from registry returning (id, entrypoint)."""
+    if not target_set and not target_ids:
+        return None
+
+    registry, registry_path = _load_local_registry(project_root)
+    if target_set:
+        target_set_obj = registry.target_sets.get(target_set)
+        if not target_set_obj:
+            available = ", ".join(sorted(registry.target_sets.keys()))
+            suffix = f" Available sets: {available}" if available else ""
+            raise ValueError(f"Target set '{target_set}' not found in {registry_path}.{suffix}")
+        selected = list(target_set_obj.targets)
+    else:
+        selected = list(dict.fromkeys(target_ids or []))
+
+    if not selected:
+        raise ValueError("No targets specified for override.")
+
+    missing = [tid for tid in selected if tid not in registry.targets]
+    if missing:
+        raise ValueError(f"Unknown target id(s): {', '.join(missing)}")
+
+    resolved = [(tid, registry.targets[tid].entrypoint) for tid in selected]
+    return resolved, target_set
 
 
 def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: bool = True):
@@ -227,6 +271,22 @@ def submit(
         "--auto/--no-auto",
         help="Auto-push bundle from current directory (default: True)",
     ),
+    target_set: Optional[str] = typer.Option(
+        None,
+        "--target-set",
+        help="Override calibration targets using a named set from .modelops-bundle/registry.yaml",
+    ),
+    target_ids: Optional[List[str]] = typer.Option(
+        None,
+        "--target",
+        "-t",
+        help="Override calibration targets by id (repeatable).",
+    ),
+    project_root: Path = typer.Option(
+        Path("."),
+        "--project-root",
+        help="Project root containing .modelops-bundle/registry.yaml (default: cwd)",
+    ),
     env: str | None = env_option(),
 ):
     """Submit a job specification (SimulationStudy or CalibrationSpec) as a K8s Job.
@@ -252,6 +312,7 @@ def submit(
     from .utils import resolve_env
 
     env = resolve_env(env)
+    project_root = project_root.resolve()
 
     # Load spec from JSON
     section("Loading job specification")
@@ -272,6 +333,8 @@ def submit(
         raise typer.Exit(1)
 
     # Route based on type
+    target_override = None
+
     if spec_type == "CalibrationSpec":
         # Parse CalibrationSpec
         try:
@@ -300,6 +363,27 @@ def submit(
         # For CalibrationSpec, we'll submit as a calibration job
         is_calibration = True
         job_obj = spec
+
+        if target_set or target_ids:
+            try:
+                resolved = _resolve_registry_targets(target_ids, target_set, project_root)
+            except FileNotFoundError as exc:
+                error(f"Failed to resolve targets: {exc}")
+                raise typer.Exit(1)
+            except ValueError as exc:
+                error(f"Failed to resolve targets: {exc}")
+                raise typer.Exit(1)
+            if resolved:
+                entries, resolved_set = resolved
+                ids = [tid for tid, _ in entries]
+                job_obj.target_data["target_entrypoints"] = [entry for _, entry in entries]
+                job_obj.target_data["target_ids"] = ids
+                job_obj.metadata.setdefault("target_ids", ids)
+                if resolved_set:
+                    job_obj.metadata["target_set"] = resolved_set
+                info(f"  Using targets: {', '.join(ids)}")
+                if resolved_set:
+                    info(f"  Target set: {resolved_set}")
 
     else:
         # Parse SimulationStudy

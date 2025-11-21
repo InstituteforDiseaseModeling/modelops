@@ -150,8 +150,7 @@ $(STUDY_FILE): $(VENV)/.installed
 		--n-replicates $(N_REPLICATES) \
 		--output $(STUDY_FILE) \
 		--seed 42 \
-		--scramble \
-		--targets "targets.prevalence:prevalence_target"
+		--scramble
 	@echo "✓ Wrote $(STUDY_FILE) with $(N_REPLICATES) replicates per parameter set"
 
 .PHONY: submit

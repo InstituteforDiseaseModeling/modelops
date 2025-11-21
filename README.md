@@ -125,6 +125,127 @@ uv pip install -e ".[full]"
 
 **Note**: Pulumi is installed automatically as a Python dependency - no separate CLI installation required.
 
+## Starsim SIR CLI Flow (real output)
+
+Once infrastructure is configured, day-to-day work is intentionally minimal.
+Everything below was captured from `examples/starsim-sir` with the latest CLI.
+
+1. **Register the model (no prompts, no --outputs).**
+
+```console
+~/projects/work/modelops-core/modelops/examples/starsim-sir main*
+.venv ❯ mops bundle register-model models/sir.py
++ sir_starsimsir       entry=models.sir:StarsimSIR
+✓ Models updated: +1 ~0 -0
+```
+
+2. **Inspect the registry.** You can see the model outputs were inferred
+   automatically and no targets exist yet.
+
+```console
+.venv ❯ mops bundle list
+                                      Registered Models (1)
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
+┃ Model          ┃ Entrypoint            ┃ Outputs                           ┃ Labels ┃ Aliases ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━┩
+│ sir_starsimsir │ models.sir:StarsimSIR │ incidence, prevalence, cumulative │ -      │ -       │
+└────────────────┴───────────────────────┴───────────────────────────────────┴────────┴─────────┘
+
+  (no targets)
+```
+
+3. **Register targets with regeneration.**
+
+```console
+.venv ❯ mops bundle register-target --regen-all targets/incidence.py
++ incidence_per_replicate_target entry=targets.incidence:incidence_per_replicate_target
++ incidence_replicate_mean_target entry=targets.incidence:incidence_replicate_mean_target
+✓ Targets updated: +2 ~0 -0
+```
+
+4. **See the registry again—now with targets.**
+
+```console
+.venv ❯ mops bundle list
+                                      Registered Models (1)
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
+┃ Model          ┃ Entrypoint            ┃ Outputs                           ┃ Labels ┃ Aliases ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━┩
+│ sir_starsimsir │ models.sir:StarsimSIR │ incidence, prevalence, cumulative │ -      │ -       │
+└────────────────┴───────────────────────┴───────────────────────────────────┴────────┴─────────┘
+
+                                                 Registered Targets (2)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
+┃ Target                          ┃ Entrypoint                                        ┃ Model Output ┃ Labels ┃ Weight ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
+│ incidence_per_replicate_target  │ targets.incidence:incidence_per_replicate_target  │ incidence    │ -      │ -      │
+│ incidence_replicate_mean_target │ targets.incidence:incidence_replicate_mean_target │ incidence    │ -      │ -      │
+└─────────────────────────────────┴───────────────────────────────────────────────────┴──────────────┴────────┴────────┘
+```
+
+5. **Generate a Sobol sampling study (handled by the `cb` CLI).**
+
+```console
+.venv ❯ cb sampling sobol sir_starsimsir --n-samples 1000 --name sobol --n-replicates 100
+Resolved model id 'sir_starsimsir' → models.sir:StarsimSIR
+/Users/vsb/projects/work/modelops-core/modelops-calabaria/src/modelops_calabaria/sampling/sobol.py:95: UserWarning: The balance properties of Sobol' points require n to be a power of 2.
+  sobol_samples = sampler.random(n_samples)
+Generated 1000 Sobol samples for 2 parameters
+[info]Using default output path sobol.json (set --output to override)
+✓ Generated SimulationStudy with 1000 parameter sets
+
+Study Summary
+  Name       : sobol
+  Model      : sir_starsimsir → models.sir:StarsimSIR (scenario=baseline)
+  Sampling   : Sobol (scramble=on, seed=42)
+  Parameters : 1000 sets × 100 replicates = 100,000 simulations
+  Tags       : -
+  Output     : sobol.json
+  Parameter Space:
+    • beta ∈ [0.01, 0.2]
+    • dur_inf ∈ [3.0, 10.0]
+```
+
+6. **Submit to the cloud.** The CLI auto-pushes the bundle, prints the digest,
+   and gives next steps.
+
+```console
+.venv ❯ mops jobs submit sobol.json
+
+Loading job specification
+  Type: SimulationStudy
+  Model: models.sir/baseline
+  Sampling: sobol
+  Parameters: 1000 unique sets
+  Replicates: 100 per parameter set
+  Total simulations: 100000
+
+Auto-pushing bundle
+  Building and pushing bundle from current directory...
+Successfully pushed modelopsdevacrvsb.azurecr.io/starsim-sir:latest
+  ✓ Pushed bundle: starsim-sir@sha256:b94198d364c820303701615e702066f...
+
+Submitting simulation job
+
+✓ Job submitted successfully!
+  Job ID: job-47179d43
+  Environment: dev
+  Status: Running
+
+ To monitor job execution:
+  # Port-forward to access Dask dashboard (run in separate terminals or use &)
+  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8787:8787 &
+  kubectl port-forward -n modelops-dask-dev svc/dask-scheduler 8786:8786 &
+  # Then open http://localhost:8787 in your browser
+
+ To check job status:
+  kubectl -n modelops-dask-dev get job job-47179d43
+
+ To see logs:
+  kubectl -n modelops-dask-dev logs job/job-47179d43
+  kubectl -n modelops-dask-dev logs deployment/dask-workers
+```
+
 ## Quick Start
 
 ### 1. Initialize Configuration
