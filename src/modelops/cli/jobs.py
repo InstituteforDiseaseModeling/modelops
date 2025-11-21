@@ -571,9 +571,18 @@ def submit(
             error("\nAuto-push requires modelops-bundle. Install with:")
             error("  uv pip install 'modelops[full]'")
             raise typer.Exit(1)
-        except FileNotFoundError:
-            error("\nCurrent directory is not a bundle project.")
-            error("Initialize with: modelops-bundle init .")
+        except FileNotFoundError as e:
+            # Check if .modelops-bundle exists to distinguish the error
+            if Path(".modelops-bundle").exists():
+                error("\nBundle is initialized but has no registered models/targets.")
+                error("Register your models with: mops bundle register-model <path>")
+                error("Register your targets with: mops bundle register-target <path>")
+                error("\nExample:")
+                error("  mops bundle register-model src/models/seir.py")
+                error("  mops bundle register-target src/targets/prevalence.py")
+            else:
+                error("\nCurrent directory is not a bundle project.")
+                error("Initialize with: mops bundle init .")
             raise typer.Exit(1)
         except Exception as e:
             error(f"\nBundle push failed: {e}")
