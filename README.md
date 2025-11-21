@@ -250,7 +250,6 @@ cb sampling sobol "models/sir.py:StochasticSIR" \
   --n-replicates 500 \
   --seed 42 \
   --scramble \
-  --targets "targets.incidence:incidence_target" \
   --output study.json
 
 # Submit job to cluster (auto-pushes bundle to registry)
@@ -270,16 +269,16 @@ Alternatively, use calibration to **find optimal parameters** that match observe
 ```bash
 # Generate calibration specification (uses Optuna TPE sampler)
 cb calibration optuna models.sir:StarsimSIR \
-  targets.incidence:incidence_replicate_mean_target \
   data/observed_incidence.csv \
   beta:0.01:0.2,dur_inf:3:10 \
+  --target-set incidence \
   --max-trials 100 \
   --batch-size 4 \
   --n-replicates 10 \
   --output calibration_spec.json
 
 # Submit calibration job
-mops jobs submit-calibration calibration_spec.json --auto
+mops jobs submit calibration_spec.json --target-set incidence --auto
 
 # Monitor progress
 mops jobs status <job-id>
@@ -311,6 +310,32 @@ Example output:
   }
 }
 ```
+
+## Quick Demo (Starsim SIR)
+
+```shell
+$ mops bundle register-model models/sir.py
++ sir_starsimsir       entry=models.sir:StarsimSIR
+✓ Models updated: +1 ~0 -0
+
+$ mops bundle register-target --regen-all targets/incidence.py
++ incidence_per_replicate_target entry=targets.incidence:incidence_per_replicate_target
++ incidence_replicate_mean_target entry=targets.incidence:incidence_replicate_mean_target
+✓ Targets updated: +2 ~0 -0
+
+$ cb sampling sobol sir_starsimsir --n-samples 1000 --name sobol --n-replicates 100
+Generated 1000 Sobol samples for 2 parameters
+✓ Generated SimulationStudy with 1000 parameter sets
+
+$ mops jobs submit sobol.json
+Auto-pushing bundle
+✓ Job submitted successfully!
+  Job ID: job-47179d43
+  Environment: dev
+  Status: Running
+```
+
+That is the entire workflow: register once, auto-discover outputs/targets, generate a study, and submit it.
 
 **Key Differences:**
 - **Simulation jobs**: Explore parameter space systematically (Sobol grid)
