@@ -5,6 +5,7 @@ for submitting simulation and calibration jobs to the cluster.
 """
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -115,6 +116,93 @@ def _resolve_registry_targets(
 
     resolved = [(tid, registry.targets[tid].entrypoint) for tid in selected]
     return resolved, target_set
+
+
+def _get_default_targets(project_root: Path) -> List[str] | None:
+    """Get all registered targets as default when none specified.
+
+    Returns:
+        List of target entrypoints, or None if no registry/targets found
+    """
+    try:
+        registry, _ = _load_local_registry(project_root)
+        if registry and registry.targets:
+            targets = [t.entrypoint for t in registry.targets.values()]
+            logger.info(f"Using all {len(targets)} registered targets as default")
+            return targets
+        else:
+            logger.debug("No targets found in registry")
+            return None
+    except Exception as e:
+        logger.debug(f"Could not load registry defaults: {e}")
+        return None
+
+
+@dataclass
+class ResolvedTargets:
+    """Result of target resolution."""
+    target_entrypoints: List[str]
+    target_ids: List[str] | None = None
+    target_set: str | None = None
+    source: str = "unknown"  # "cli", "registry_default", "spec_file"
+
+
+def _resolve_targets_for_job(
+    target_ids_arg: List[str] | None,
+    target_set_arg: str | None,
+    spec_file_targets: List[str] | None,
+    project_root: Path,
+    use_registry_default: bool = True,
+) -> ResolvedTargets | None:
+    """Resolve targets from CLI args, spec file, or registry defaults.
+
+    Priority order:
+    1. CLI arguments (--target-set or --target)
+    2. Spec file targets (if provided)
+    3. Registry defaults (if use_registry_default=True)
+    4. None
+
+    Args:
+        target_ids_arg: --target CLI arguments
+        target_set_arg: --target-set CLI argument
+        spec_file_targets: Targets from spec JSON file
+        project_root: Project root for registry lookup
+        use_registry_default: Whether to default to all registry targets
+
+    Returns:
+        ResolvedTargets or None if no targets found anywhere
+    """
+    # Priority 1: CLI arguments
+    if target_set_arg or target_ids_arg:
+        resolved = _resolve_registry_targets(target_ids_arg, target_set_arg, project_root)
+        if resolved:
+            entries, resolved_set = resolved
+            return ResolvedTargets(
+                target_entrypoints=[entry for _, entry in entries],
+                target_ids=[tid for tid, _ in entries],
+                target_set=resolved_set,
+                source="cli"
+            )
+
+    # Priority 2: Spec file targets
+    if spec_file_targets:
+        logger.debug(f"Using {len(spec_file_targets)} targets from spec file")
+        return ResolvedTargets(
+            target_entrypoints=spec_file_targets,
+            source="spec_file"
+        )
+
+    # Priority 3: Registry defaults
+    if use_registry_default:
+        default_targets = _get_default_targets(project_root)
+        if default_targets:
+            return ResolvedTargets(
+                target_entrypoints=default_targets,
+                source="registry_default"
+            )
+
+    # No targets found
+    return None
 
 
 def _trigger_result_indexing(job_id: str, batch_v1, namespace: str, verbose: bool = True):
@@ -274,13 +362,13 @@ def submit(
     target_set: Optional[str] = typer.Option(
         None,
         "--target-set",
-        help="Override calibration targets using a named set from .modelops-bundle/registry.yaml",
+        help="Override targets using a named set from .modelops-bundle/registry.yaml (applies to both simulation studies and calibration specs)",
     ),
     target_ids: Optional[List[str]] = typer.Option(
         None,
         "--target",
         "-t",
-        help="Override calibration targets by id (repeatable).",
+        help="Override targets by id (repeatable). Applies to both simulation studies and calibration specs.",
     ),
     project_root: Path = typer.Option(
         Path("."),
@@ -364,26 +452,30 @@ def submit(
         is_calibration = True
         job_obj = spec
 
+        # Resolve targets using unified function (CalibrationSpec requires explicit targets)
         if target_set or target_ids:
             try:
-                resolved = _resolve_registry_targets(target_ids, target_set, project_root)
-            except FileNotFoundError as exc:
+                resolved = _resolve_targets_for_job(
+                    target_ids_arg=target_ids,
+                    target_set_arg=target_set,
+                    spec_file_targets=None,  # CalibrationSpec doesn't have spec file targets
+                    project_root=project_root,
+                    use_registry_default=False,  # CalibrationSpec requires explicit targets
+                )
+            except (FileNotFoundError, ValueError) as exc:
                 error(f"Failed to resolve targets: {exc}")
                 raise typer.Exit(1)
-            except ValueError as exc:
-                error(f"Failed to resolve targets: {exc}")
-                raise typer.Exit(1)
-            if resolved:
-                entries, resolved_set = resolved
-                ids = [tid for tid, _ in entries]
-                job_obj.target_data["target_entrypoints"] = [entry for _, entry in entries]
-                job_obj.target_data["target_ids"] = ids
-                job_obj.metadata.setdefault("target_ids", ids)
-                if resolved_set:
-                    job_obj.metadata["target_set"] = resolved_set
-                info(f"  Using targets: {', '.join(ids)}")
-                if resolved_set:
-                    info(f"  Target set: {resolved_set}")
+
+            if resolved and resolved.source == "cli":
+                # Apply to CalibrationSpec
+                job_obj.target_data["target_entrypoints"] = resolved.target_entrypoints
+                job_obj.target_data["target_ids"] = resolved.target_ids
+                job_obj.metadata.setdefault("target_ids", resolved.target_ids)
+                if resolved.target_set:
+                    job_obj.metadata["target_set"] = resolved.target_set
+                info(f"  Using targets: {', '.join(resolved.target_ids)}")
+                if resolved.target_set:
+                    info(f"  Target set: {resolved.target_set}")
 
     else:
         # Parse SimulationStudy
@@ -400,9 +492,31 @@ def submit(
             sampling_method=spec_data["sampling_method"],
             n_replicates=spec_data.get("n_replicates", 1),
             outputs=spec_data.get("outputs"),
-            targets=spec_data.get("targets"),  # Support targets in study
+            targets=spec_data.get("targets"),  # From JSON spec
             metadata=spec_data.get("metadata", {}),
         )
+
+        # Resolve targets using unified function
+        resolved = _resolve_targets_for_job(
+            target_ids_arg=target_ids,
+            target_set_arg=target_set,
+            spec_file_targets=study.targets,  # From JSON spec
+            project_root=project_root,
+            use_registry_default=True,  # SimulationStudy defaults to all targets
+        )
+
+        # Apply resolved targets to study
+        if resolved:
+            info(f"  Targets resolved from {resolved.source}: {len(resolved.target_entrypoints)} target(s)")
+
+            # Create updated study with resolved targets
+            study = study.with_targets(
+                targets=resolved.target_entrypoints,
+                target_ids=resolved.target_ids,
+                target_set=resolved.target_set,
+            )
+        else:
+            info("  No targets specified - job will run without target evaluation")
 
         info(f"  Model: {study.model}/{study.scenario}")
         info(f"  Sampling: {study.sampling_method}")

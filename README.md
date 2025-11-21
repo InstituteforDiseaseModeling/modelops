@@ -133,8 +133,7 @@ Everything below was captured from `examples/starsim-sir` with the latest CLI.
 1. **Register the model (no prompts, no --outputs).**
 
 ```console
-~/projects/work/modelops-core/modelops/examples/starsim-sir main*
-.venv ❯ mops bundle register-model models/sir.py
+$ mops bundle register-model models/sir.py
 + sir_starsimsir       entry=models.sir:StarsimSIR
 ✓ Models updated: +1 ~0 -0
 ```
@@ -143,7 +142,7 @@ Everything below was captured from `examples/starsim-sir` with the latest CLI.
    automatically and no targets exist yet.
 
 ```console
-.venv ❯ mops bundle list
+$ mops bundle list
                                       Registered Models (1)
 ┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
 ┃ Model          ┃ Entrypoint            ┃ Outputs                           ┃ Labels ┃ Aliases ┃
@@ -157,7 +156,7 @@ Everything below was captured from `examples/starsim-sir` with the latest CLI.
 3. **Register targets with regeneration.**
 
 ```console
-.venv ❯ mops bundle register-target --regen-all targets/incidence.py
+$ mops bundle register-target --regen-all targets/incidence.py
 + incidence_per_replicate_target entry=targets.incidence:incidence_per_replicate_target
 + incidence_replicate_mean_target entry=targets.incidence:incidence_replicate_mean_target
 ✓ Targets updated: +2 ~0 -0
@@ -166,7 +165,7 @@ Everything below was captured from `examples/starsim-sir` with the latest CLI.
 4. **See the registry again—now with targets.**
 
 ```console
-.venv ❯ mops bundle list
+$ mops bundle list
                                       Registered Models (1)
 ┏━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
 ┃ Model          ┃ Entrypoint            ┃ Outputs                           ┃ Labels ┃ Aliases ┃
@@ -186,19 +185,17 @@ Everything below was captured from `examples/starsim-sir` with the latest CLI.
 5. **Generate a Sobol sampling study (handled by the `cb` CLI).**
 
 ```console
-.venv ❯ cb sampling sobol sir_starsimsir --n-samples 1000 --name sobol --n-replicates 100
+$ cb sampling sobol sir_starsimsir --n-samples 1024 --name sobol --n-replicates 100
 Resolved model id 'sir_starsimsir' → models.sir:StarsimSIR
-/Users/vsb/projects/work/modelops-core/modelops-calabaria/src/modelops_calabaria/sampling/sobol.py:95: UserWarning: The balance properties of Sobol' points require n to be a power of 2.
-  sobol_samples = sampler.random(n_samples)
-Generated 1000 Sobol samples for 2 parameters
-[info]Using default output path sobol.json (set --output to override)
-✓ Generated SimulationStudy with 1000 parameter sets
+Generated 1024 Sobol samples for 2 parameters
+Using default output path sobol.json (set --output to override)
+✓ Generated SimulationStudy with 1024 parameter sets
 
 Study Summary
   Name       : sobol
   Model      : sir_starsimsir → models.sir:StarsimSIR (scenario=baseline)
   Sampling   : Sobol (scramble=on, seed=42)
-  Parameters : 1000 sets × 100 replicates = 100,000 simulations
+  Parameters : 1024 sets × 100 replicates = 102,400 simulations
   Tags       : -
   Output     : sobol.json
   Parameter Space:
@@ -210,20 +207,20 @@ Study Summary
    and gives next steps.
 
 ```console
-.venv ❯ mops jobs submit sobol.json
+$ mops jobs submit sobol.json
 
 Loading job specification
   Type: SimulationStudy
   Model: models.sir/baseline
   Sampling: sobol
-  Parameters: 1000 unique sets
+  Parameters: 1024 unique sets
   Replicates: 100 per parameter set
-  Total simulations: 100000
+  Total simulations: 102400
 
 Auto-pushing bundle
   Building and pushing bundle from current directory...
 Successfully pushed modelopsdevacrvsb.azurecr.io/starsim-sir:latest
-  ✓ Pushed bundle: starsim-sir@sha256:b94198d364c820303701615e702066f...
+  ✓ Pushed bundle: starsim-sir@sha256:b94198d364b820303701615e702066f...
 
 Submitting simulation job
 
