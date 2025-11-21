@@ -400,11 +400,9 @@ class DaskSimulationService(SimulationService):
         # Unwrap DaskFutureAdapter to get raw Dask futures
         dask_futures = [f.wrapped for f in sim_futures]
 
-        # Use scatter with broadcast=True to:
-        # 1. Avoid inline serialization (keeps data in distributed memory)
-        # 2. Share results across workers (broadcast=True means all workers get a copy)
-        # 3. Enable reuse for multiple targets without re-submitting
-        scattered_futures = self.client.scatter(dask_futures, broadcast=True)
+        # Pass futures directly as dependencies - Dask will materialize them
+        # before calling _worker_run_aggregation_direct. No need to scatter
+        # since futures are already references to distributed data.
 
         # Check for aggregation resources
         submit_kwargs = {"pure": False}
@@ -420,11 +418,11 @@ class DaskSimulationService(SimulationService):
         except Exception:
             logger.debug("Could not check for aggregation resources")
 
-        # Submit aggregation with scattered futures as dependencies
+        # Submit aggregation with futures as dependencies
         # Dask will materialize them before calling the function
         agg_future = self.client.submit(
             _worker_run_aggregation_direct,
-            *scattered_futures,
+            *dask_futures,
             target_ep=target_entrypoint,
             bundle_ref=bundle_ref,
             key=f"{TaskKeys.agg_key(param_id)}-{target_entrypoint.split('/')[-1]}",
