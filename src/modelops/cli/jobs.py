@@ -106,9 +106,9 @@ def _resolve_registry_targets(
             available = ", ".join(sorted(registry.target_sets.keys()))
             suffix = f" Available sets: {available}" if available else ""
             raise ValueError(f"Target set '{target_set}' not found in {registry_path}.{suffix}")
-        selected = list(target_set_obj.targets)
+        selected = [*target_set_obj.targets]  # Use unpacking instead of list() to avoid name collision
     else:
-        selected = list(dict.fromkeys(target_ids or []))
+        selected = [*dict.fromkeys(target_ids or [])]  # Use unpacking instead of list() to avoid name collision
 
     if not selected:
         raise ValueError("No targets specified for override.")
