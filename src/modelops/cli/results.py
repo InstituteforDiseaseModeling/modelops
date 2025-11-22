@@ -393,13 +393,13 @@ def download(
             prefix = "views/jobs/"
             blobs = container_client.list_blobs(name_starts_with=prefix)
 
-            # Track latest job by manifest.json modification time
+            # Track latest job by manifest.json or calibration/summary.json modification time
             latest_job = None
             latest_time = None
 
             for blob in blobs:
-                # Only look at manifest.json files as proxy for completed jobs
-                if blob.name.endswith("/manifest.json"):
+                # Look at manifest.json (simulation jobs) or calibration/summary.json (calibration jobs)
+                if blob.name.endswith("/manifest.json") or blob.name.endswith("/calibration/summary.json"):
                     parts = blob.name.split("/")
                     if len(parts) >= 3 and (
                         parts[2].startswith("job-") or parts[2].startswith("calib-")
@@ -407,13 +407,13 @@ def download(
                         job_id_candidate = parts[2]
                         blob_time = blob.last_modified
 
-                        # Track the latest by manifest modification time
+                        # Track the latest by modification time
                         if latest_time is None or blob_time > latest_time:
                             latest_time = blob_time
                             latest_job = job_id_candidate
 
             if not latest_job:
-                error("No completed jobs (with manifest.json) found in Azure storage")
+                error("No completed jobs found in Azure storage (looked for manifest.json or calibration/summary.json)")
                 raise typer.Exit(code=1)
 
             job_id = latest_job
