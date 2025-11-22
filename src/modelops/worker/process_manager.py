@@ -44,6 +44,7 @@ class WarmProcess:
     bundle_digest: str
     use_count: int = 0
     stderr_file: io.FileIO | None = None  # File handle for stderr logging
+    stderr_path: Path | None = None  # Path to on-disk stderr log
     default_timeout: float | None = None
     _lock: threading.RLock = field(
         default_factory=threading.RLock
@@ -73,6 +74,20 @@ class WarmProcess:
                     self.stderr_file = None
                 except Exception:
                     pass  # Best effort cleanup
+
+    def tail_stderr(self, max_bytes: int = 200_000) -> str:
+        """Return the last max_bytes of the subprocess stderr log."""
+        try:
+            if not self.stderr_path:
+                return ""
+            p = Path(self.stderr_path)
+            size = p.stat().st_size
+            with open(p, "rb") as f:
+                if size > max_bytes:
+                    f.seek(size - max_bytes)
+                return f.read().decode("utf-8", "replace")
+        except Exception:
+            return ""
 
     def safe_call(self, method: str, params: dict, timeout: float | None = None):
         """Make a thread-safe JSON-RPC call to the subprocess.
@@ -258,6 +273,7 @@ class WarmProcessManager:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"runner-{bundle_digest[:12]}-{os.getpid()}.stderr"
         stderr_file = open(log_path, "ab", buffering=0)
+        logger.info("Subprocess stderr log: %s", log_path)
 
         # Get path to standalone runner script
         runner_script = Path(__file__).parent / "subprocess_runner.py"
@@ -335,6 +351,7 @@ class WarmProcessManager:
                 bundle_digest=bundle_digest,
                 use_count=1,
                 stderr_file=stderr_file,
+                stderr_path=log_path,
                 default_timeout=self.rpc_timeout_seconds,
             )
 
@@ -449,6 +466,7 @@ class WarmProcessManager:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"runner-{bundle_digest[:12]}-{os.getpid()}.stderr"
         stderr_file = open(log_path, "ab", buffering=0)
+        logger.info("Subprocess stderr log: %s", log_path)
 
         # Get path to standalone runner script
         runner_script = Path(__file__).parent / "subprocess_runner.py"
@@ -538,6 +556,7 @@ class WarmProcessManager:
             bundle_digest=bundle_digest,
             use_count=1,
             stderr_file=stderr_file,
+            stderr_path=log_path,
             default_timeout=self.rpc_timeout_seconds,
         )
 
