@@ -634,6 +634,24 @@ class SubprocessRunner:
             with contextlib.redirect_stdout(sys.stderr):
                 result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
 
+            # Back-compat hardening: some wire funcs (old) returned {"error": base64(json)}
+            if isinstance(result_bytes, dict) and "error" in result_bytes:
+                # Try to decode and surface the *original* error clearly
+                raw = result_bytes["error"]
+                try:
+                    if isinstance(raw, (bytes, bytearray)):
+                        raw = raw.decode("utf-8", "replace")
+                    import base64
+                    import json as json_module
+
+                    decoded = base64.b64decode(raw)
+                    info = json_module.loads(decoded)
+                    msg = f"{info.get('type','Error')}: {info.get('error')}"
+                except Exception:
+                    # If decoding fails, still raise with the raw payload
+                    msg = f"Wire returned error: {raw!r}"
+                raise RuntimeError(msg)
+
             artifacts: dict[str, str] = {}
             for name, data in result_bytes.items():
                 if not isinstance(data, (bytes, bytearray)):
@@ -790,13 +808,26 @@ class SubprocessRunner:
 
                     sim_outputs = []
 
-                    for sim_return in sim_returns:
+                    for idx, sim_return in enumerate(sim_returns):
+                        # Fast-path: if a replicate is an error envelope, surface it now
+                        if isinstance(sim_return, dict) and "error" in sim_return:
+                            try:
+                                import base64
+                                import json as json_module
+
+                                info = json_module.loads(base64.b64decode(sim_return["error"]))
+                                raise RuntimeError(
+                                    f"Replicate {idx} failed: {info.get('type','Error')}: {info.get('error')}"
+                                )
+                            except Exception:
+                                raise RuntimeError(f"Replicate {idx} failed with encoded error")
+
                         sim_output = {}
                         outputs = sim_return.get("outputs", {})
 
                         for name, table_artifact in outputs.items():
-                            # Skip non-Arrow outputs (like 'metadata' which is JSON)
-                            if name == "metadata":
+                            # Skip non-Arrow outputs & reserved keys
+                            if name in ("metadata", "error"):
                                 logger.debug(f"Skipping non-Arrow output: {name}")
                                 continue
 
@@ -841,6 +872,18 @@ class SubprocessRunner:
 
                             sim_output[name] = df
                         sim_outputs.append(sim_output)
+
+                    # Validate required model output is present for every replicate
+                    required = target_obj.model_output
+                    missing = [i for i, so in enumerate(sim_outputs) if required not in so]
+                    if missing:
+                        # Build helpful context: available keys of the first missing replicate
+                        avail = sorted(sim_outputs[missing[0]].keys())
+                        raise KeyError(
+                            f"Required output '{required}' missing in replicates {missing}. "
+                            f"Available keys in first missing replicate: {avail}. "
+                            f"This usually means the model failed to execute or import correctly upstream."
+                        )
 
                     # Call actual target evaluation
                     logger.info(f"Evaluating target with {len(sim_outputs)} simulation outputs")
