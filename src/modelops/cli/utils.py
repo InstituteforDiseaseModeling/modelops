@@ -44,6 +44,12 @@ def resolve_env(env: str | None) -> str:
     Raises:
         typer.Exit: If config not found
     """
+    # Handle case where env might be a typer.Option object (shouldn't happen but be defensive)
+    if env is not None and not isinstance(env, str):
+        error(f"Invalid environment parameter type: {type(env)}")
+        error("This is likely a bug in the CLI. Please report it.")
+        raise typer.Exit(1)
+
     if env is None:
         config = get_config_or_exit()
         return config.defaults.environment
@@ -62,6 +68,12 @@ def resolve_provider(provider: str | None) -> str:
     Raises:
         typer.Exit: If config not found
     """
+    # Handle case where provider might be a typer.Option object (shouldn't happen but be defensive)
+    if provider is not None and not isinstance(provider, str):
+        error(f"Invalid provider parameter type: {type(provider)}")
+        error("This is likely a bug in the CLI. Please report it.")
+        raise typer.Exit(1)
+
     if provider is None:
         config = get_config_or_exit()
         return config.defaults.provider
