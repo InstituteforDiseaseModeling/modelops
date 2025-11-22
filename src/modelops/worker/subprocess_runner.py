@@ -634,10 +634,6 @@ class SubprocessRunner:
             with contextlib.redirect_stdout(sys.stderr):
                 result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
 
-            # Debug: Log what wire function returned
-            logger.info(f"DEBUG execute: wire_fn returned keys: {list(result_bytes.keys())}")
-            logger.info(f"DEBUG execute: wire_fn result types: {[(k, type(v).__name__) for k, v in result_bytes.items()]}")
-
             artifacts: dict[str, str] = {}
             for name, data in result_bytes.items():
                 if not isinstance(data, (bytes, bytearray)):
@@ -848,15 +844,6 @@ class SubprocessRunner:
 
                     # Call actual target evaluation
                     logger.info(f"Evaluating target with {len(sim_outputs)} simulation outputs")
-
-                    # Quick debug: print what's actually in sim_outputs
-                    logger.info(f"DEBUG: Aggregating target, model_output='{target_obj.model_output}'")
-                    logger.info(f"DEBUG: Number of sim outputs: {len(sim_outputs)}")
-                    if sim_outputs:
-                        first_out = sim_outputs[0]
-                        logger.info(f"DEBUG: Keys in first output: {list(first_out.keys())}")
-                    else:
-                        logger.info(f"DEBUG: sim_outputs is EMPTY")
 
                     target_eval = target_obj.evaluate(sim_outputs)
 
