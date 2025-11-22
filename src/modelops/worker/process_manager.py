@@ -623,7 +623,11 @@ class WarmProcessManager:
 
         except Exception as e:
             # Process might be broken, remove it
-            logger.error(f"Task execution failed: {e}")
+            tail = process.tail_stderr()
+            if tail:
+                logger.error("Task execution failed: %s\n--- subprocess stderr tail ---\n%s", e, tail)
+            else:
+                logger.error("Task execution failed: %s", e)
             process.terminate()
             # Can't reliably remove by digest when force_fresh_venv is True
             # Just remove the matching process object if we find it
@@ -672,16 +676,14 @@ class WarmProcessManager:
                 timeout=self.rpc_timeout_seconds,
             )
 
-            # Check for errors
-            if "error" in result:
-                from modelops.utils.error_utils import format_aggregation_error
-
-                raise RuntimeError(format_aggregation_error(result))
-
             return result
 
         except Exception as e:
-            logger.error(f"Aggregation execution failed: {e}")
+            tail = process.tail_stderr()
+            if tail:
+                logger.error("Aggregation execution failed: %s\n--- subprocess stderr tail ---\n%s", e, tail)
+            else:
+                logger.error("Aggregation execution failed: %s", e)
             # Process might be dead, remove it
             process.terminate()
             # Can't reliably remove by digest when force_fresh_venv is True

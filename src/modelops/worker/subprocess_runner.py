@@ -629,30 +629,13 @@ class SubprocessRunner:
 
         logger.info("Executing %s (seed=%s)", entrypoint, seed)
         try:
-            # Import base64 at function scope to avoid UnboundLocalError
+            # Import base64 at function scope
             import base64
 
             # Redirect stdout to stderr during wire function execution
             # This prevents user prints from corrupting JSON-RPC frames
             with contextlib.redirect_stdout(sys.stderr):
                 result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
-
-            # Back-compat hardening: some wire funcs (old) returned {"error": base64(json)}
-            if isinstance(result_bytes, dict) and "error" in result_bytes:
-                # Try to decode and surface the *original* error clearly
-                raw = result_bytes["error"]
-                try:
-                    if isinstance(raw, (bytes, bytearray)):
-                        raw = raw.decode("utf-8", "replace")
-                    import json as json_module
-
-                    decoded = base64.b64decode(raw)
-                    info = json_module.loads(decoded)
-                    msg = f"{info.get('type','Error')}: {info.get('error')}"
-                except Exception:
-                    # If decoding fails, still raise with the raw payload
-                    msg = f"Wire returned error: {raw!r}"
-                raise RuntimeError(msg)
 
             artifacts: dict[str, str] = {}
             for name, data in result_bytes.items():
@@ -669,13 +652,17 @@ class SubprocessRunner:
             return artifacts
         except Exception as e:
             logger.exception("Execution failed")
-            # Import json locally to avoid Python 3.13 scope issue
-            import json as json_module
-
-            err = json_module.dumps(
-                {"error": str(e), "type": type(e).__name__, "entrypoint": entrypoint}
-            ).encode("utf-8")
-            return {"error": base64.b64encode(err).decode("ascii")}
+            import traceback as _tb
+            raise JSONRPCError(
+                -32000,
+                "Execution failed",
+                {
+                    "exc_type": type(e).__name__,
+                    "exc": str(e),
+                    "traceback": _tb.format_exc(),
+                    "entrypoint": entrypoint,
+                },
+            )
 
     def aggregate(
         self,
@@ -940,18 +927,16 @@ class SubprocessRunner:
 
         except Exception as e:
             logger.exception("Aggregation failed")
-            # Match the error format from execute() method - must be base64 encoded
-            error_info = {
-                "error": str(e),
-                "type": type(e).__name__,
-                "target_entrypoint": target_entrypoint,
-                "traceback": traceback.format_exc(),  # Add full traceback for debugging
-            }
-            # Import json locally to avoid Python 3.13 scope issue
-            import json as json_module
-
-            err_json = json_module.dumps(error_info).encode("utf-8")
-            return {"error": base64.b64encode(err_json).decode("ascii")}
+            raise JSONRPCError(
+                -32001,
+                "Aggregation failed",
+                {
+                    "exc_type": type(e).__name__,
+                    "exc": str(e),
+                    "traceback": traceback.format_exc(),
+                    "target_entrypoint": target_entrypoint,
+                },
+            )
 
 
 # -----------------------------------------------------------------------------
