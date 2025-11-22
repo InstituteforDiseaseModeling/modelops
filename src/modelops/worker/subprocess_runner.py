@@ -629,6 +629,9 @@ class SubprocessRunner:
 
         logger.info("Executing %s (seed=%s)", entrypoint, seed)
         try:
+            # Import base64 at function scope to avoid UnboundLocalError
+            import base64
+
             # Redirect stdout to stderr during wire function execution
             # This prevents user prints from corrupting JSON-RPC frames
             with contextlib.redirect_stdout(sys.stderr):
@@ -641,7 +644,6 @@ class SubprocessRunner:
                 try:
                     if isinstance(raw, (bytes, bytearray)):
                         raw = raw.decode("utf-8", "replace")
-                    import base64
                     import json as json_module
 
                     decoded = base64.b64decode(raw)
