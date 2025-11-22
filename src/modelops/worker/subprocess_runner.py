@@ -634,6 +634,10 @@ class SubprocessRunner:
             with contextlib.redirect_stdout(sys.stderr):
                 result_bytes = self.wire_fn(entrypoint, params, seed)  # type: ignore[misc]
 
+            # Debug: Log what wire function returned
+            logger.info(f"DEBUG execute: wire_fn returned keys: {list(result_bytes.keys())}")
+            logger.info(f"DEBUG execute: wire_fn result types: {[(k, type(v).__name__) for k, v in result_bytes.items()]}")
+
             artifacts: dict[str, str] = {}
             for name, data in result_bytes.items():
                 if not isinstance(data, (bytes, bytearray)):

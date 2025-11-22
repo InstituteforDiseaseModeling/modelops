@@ -268,7 +268,7 @@ mops init --interactive
 
 Now we'll provision provision all the cloud infrastructure needed to work with
 ModelOps/Calabaria (e.g. Kubernetes cluster, container registry, and storage).
-This typically takes 10-15 minutes.
+This typically takes 10-15 minutes. 
 
 ```bash
 # Deploy (uses ~/.modelops/modelops.yaml by default)

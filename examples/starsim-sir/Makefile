@@ -37,6 +37,7 @@ help:
 	@echo "Setup:"
 	@echo "  make venv            - Create venv"
 	@echo "  make setup           - Install cb + modelops-bundle (+ mops) from local repos"
+	@echo "  make setup-force     - Force reinstall local packages (after changes to contracts/calabaria)"
 	@echo "  make mops-init       - Initialize ModelOps configuration (one-time setup)"
 	@echo ""
 	@echo "Bundle:"
@@ -44,7 +45,6 @@ help:
 	@echo "  make data            - Generate observed data for calibration"
 	@echo "  make bundle-register - Register models for cloud job submission"
 	@echo "  make bundle-status   - Show bundle status"
-	@echo "  make bundle-push     - Push bundle to registry (optional)"
 	@echo ""
 	@echo "Workflow:"
 	@echo "  make study           - Generate Sobol samples -> $(STUDY_FILE)"
@@ -64,10 +64,10 @@ help:
 	@echo "Monitoring:"
 	@echo "  make status          - k8s job + pods"
 	@echo "  make logs            - tail first job pod logs"
-	@echo "  make download-losses - Download job Parquet files from Azure"
+	@echo "  make download        - Download job Parquet files from Azure"
 	@echo ""
 	@echo "Cleanup:"
-	@echo "  make clean           - remove remove everything, including venv and study outputs"
+	@echo "  make clean           - remove everything, including venv and study outputs"
 	@echo "  make clean-bundle    - remove local bundle state"
 
 # --- Environment setup ---
@@ -98,6 +98,13 @@ setup: $(VENV)/.installed
 	@echo "  - $$( $(BIN)/cb --help >/dev/null 2>&1 && echo 'cb installed' || echo 'cb missing' )"
 	@echo "  - $$( $(BIN)/modelops-bundle --help >/dev/null 2>&1 && echo 'modelops-bundle installed' || echo 'modelops-bundle missing' )"
 	@echo "  - $$( $(BIN)/mops --help >/dev/null 2>&1 && echo 'mops installed' || echo 'mops missing')"
+
+# Force reinstall of local packages (useful after making changes to contracts/calabaria/etc)
+.PHONY: setup-force
+setup-force: $(VENV)
+	@echo "Force reinstalling local packages..."
+	@rm -f $(VENV)/.installed
+	@$(MAKE) setup
 
 # Initialize ModelOps configuration (one-time setup)
 .PHONY: mops-init
@@ -138,8 +145,6 @@ bundle-init: $(VENV)/.installed
 		echo "Initializing bundle project..."; \
 		$(BIN)/modelops-bundle init .; \
 		echo "dev" > .modelops-bundle/env; \
-		echo "Adding starsim dependency..."; \
-		$(UV) add starsim sciris; \
 	else \
 		echo "Bundle already initialized (.modelops-bundle exists)"; \
 		[ -f .modelops-bundle/env ] || echo "dev" > .modelops-bundle/env; \
@@ -160,11 +165,6 @@ bundle-register: $(VENV)/.installed data
 		--target incidence_replicate_mean_target \
 		--target incidence_per_replicate_target
 	@echo "✓ Registered SIR model and calibration targets"
-
-.PHONY: bundle-push
-bundle-push: $(VENV)/.installed
-	$(BIN)/modelops-bundle push
-	@echo "✓ Bundle pushed to registry"
 
 # --- Study + Submit ---
 
@@ -285,61 +285,13 @@ logs:
 	@pod="$$(kubectl get pods -n $(NAMESPACE) -o name | grep job | head -1)"; \
 	[ -n "$$pod" ] && kubectl logs -n $(NAMESPACE) "$$pod" --tail=50 || echo "No job pod found"
 
-.PHONY: check-pod-results
-check-pod-results:
-	@echo "Checking results stored on worker pods..."
-	@kubectl exec deployment/dask-workers -n $(NAMESPACE) -- bash -c \
-		"echo 'Results in /tmp/modelops/provenance:' && \
-		 find /tmp/modelops/provenance -name '*.json' -type f 2>/dev/null | wc -l | xargs echo 'JSON files:' && \
-		 find /tmp/modelops/provenance -name '*.arrow' -type f 2>/dev/null | wc -l | xargs echo 'Arrow files:' && \
-		 echo && echo 'Sample result path:' && \
-		 find /tmp/modelops/provenance -name 'result.json' -type f 2>/dev/null | head -1" \
-		 2>/dev/null || echo "No worker pods running or no results found"
-
-.PHONY: sync-results
-sync-results:
-	@echo "Syncing results from worker pods to local results/ directory..."
-	@mkdir -p results
-	@# Get all worker pods and sync from each
-	@kubectl get pods -n $(NAMESPACE) -l app=dask-worker -o name | while read pod; do \
-		POD_NAME=$$(echo $$pod | cut -d/ -f2); \
-		echo "Syncing from $$POD_NAME..."; \
-		kubectl cp $(NAMESPACE)/$$POD_NAME:/tmp/modelops/provenance results/$$POD_NAME 2>/dev/null || \
-		echo "  Warning: Could not sync from $$POD_NAME (pod may have no results or be terminating)"; \
-	done
-	@echo ""
-	@echo "Local results summary:"
-	@find results -name '*.json' -type f 2>/dev/null | wc -l | xargs echo "  JSON files:"
-	@find results -name '*.arrow' -type f 2>/dev/null | wc -l | xargs echo "  Arrow files:"
-	@find results -name 'result.json' -type f 2>/dev/null | wc -l | xargs echo "  Result files:"
-	@echo ""
-	@echo "Results synced to: results/"
-
-.PHONY: list-results
-list-results:
-	@echo "Checking job results in Azure Blob Storage..."
-	@# Try to get storage account dynamically, fallback to modelopsdev
-	@STORAGE_ACCOUNT=$$(az storage account list --query "[?tags.component=='modelops'].name" -o tsv 2>/dev/null | head -1); \
-	if [ -z "$$STORAGE_ACCOUNT" ]; then STORAGE_ACCOUNT="modelopsdev"; fi; \
-	echo "Storage account: $$STORAGE_ACCOUNT"; \
-	echo ""; \
-	echo "Jobs container:"; \
-	az storage blob list --container-name jobs --account-name "$$STORAGE_ACCOUNT" \
-		--query "[?starts_with(name, 'jobs/')].{name:name, size:properties.contentLength}" -o table 2>/dev/null || \
-		echo "No jobs found or az CLI not configured"; \
-	echo ""; \
-	echo "Results container (if exists):"; \
-	az storage blob list --container-name results --account-name "$$STORAGE_ACCOUNT" \
-		--query "[].{name:name, size:properties.contentLength}" -o table 2>/dev/null || \
-		echo "No results found or container doesn't exist"
-
-.PHONY: download-losses
-download-losses:
+.PHONY: download
+download:
 	@echo "Downloading job loss data from Azure..."
 	@# Get the latest job ID from Kubernetes
 	@JOB_ID=$$(kubectl get pods -n $(NAMESPACE) -l app=job-runner --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.labels.job-id}' 2>/dev/null); \
 	if [ -z "$$JOB_ID" ]; then \
-		echo "No job ID found. Specify with JOB_ID=job-xxx make download-losses"; \
+		echo "No job ID found. Specify with JOB_ID=job-xxx make download"; \
 		exit 1; \
 	fi; \
 	echo "Job ID: $$JOB_ID"; \
@@ -375,6 +327,6 @@ clean-bundle:
 
 .PHONY: clean
 clean: clean-bundle clean-data
-	rm -f $(STUDY_FILE) study-grid.json study-tiny.json calibration_spec.json calibration_spec_per_replicate.json
-	rm -rf $(VENV) .constraints.txt
+	rm -f $(STUDY_FILE) study-grid.json study-tiny.json sobol.json calibration_spec*.json test*.json
+	rm -rf $(VENV)
 	@echo "✓ Clean complete"
