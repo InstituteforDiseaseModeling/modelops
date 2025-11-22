@@ -10,6 +10,8 @@ import polars as pl
 from polars.testing import assert_frame_equal
 import pytest
 
+from modelops.worker.subprocess_runner import JSONRPCError
+
 
 class MockTargetEvaluation:
     """Mock Calabaria TargetEvaluation."""
@@ -190,17 +192,24 @@ def test_aggregate_error_handling():
     sys.modules[modname] = mock_module
 
     try:
-        result = runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
+        # Should raise JSONRPCError with traceback
+        with pytest.raises(JSONRPCError) as exc_info:
+            runner.aggregate(target_entrypoint=f"{modname}:target", sim_returns=sim_returns)
 
-        # Should return error
-        assert "error" in result
-        assert isinstance(result["error"], str)
+        # Verify it's an aggregation error
+        assert exc_info.value.code == -32001
+        assert "Aggregation failed" in exc_info.value.message
 
-        # Decode and check for stable error indicator
-        error_data = json.loads(base64.b64decode(result["error"]))
-        error_msg = error_data.get("error", "").lower()
-        # More robust assertion - check for key terms
-        assert "missing data" in error_msg or "tableartifact" in error_msg
+        # Check error data contains traceback and exception info
+        error_data = exc_info.value.data
+        assert "exc_type" in error_data
+        assert "exc" in error_data
+        assert "traceback" in error_data
+        assert "target_entrypoint" in error_data
+
+        # Check that error message indicates the problem
+        error_msg = error_data.get("exc", "").lower()
+        assert "missing data" in error_msg or "tableartifact" in error_msg or "key" in error_msg
     finally:
         sys.modules.pop(modname, None)
 
