@@ -184,6 +184,9 @@ class ClusterService(BaseService):
                 kubeconfig = get_output_value(outputs, "kubeconfig")
                 connectivity = self._check_k8s_connectivity(kubeconfig) if kubeconfig else False
 
+                # Get last update timestamp from Pulumi stack
+                last_update = self._get_stack_last_update("infra")
+
                 return ComponentStatus(
                     deployed=True,
                     phase=ComponentState.READY if connectivity else ComponentState.UNKNOWN,
@@ -194,6 +197,7 @@ class ClusterService(BaseService):
                         "provider": get_output_value(outputs, "provider", "azure"),
                         "connectivity": connectivity,
                     },
+                    last_update=last_update,
                 )
             else:
                 return ComponentStatus(

@@ -41,9 +41,10 @@ def format_timestamp(iso_timestamp: str, use_local_tz: bool = True) -> str:
         minutes = int(delta.total_seconds() / 60)
         return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
 
-    # Less than 24 hours - show time
+    # Less than 24 hours - show relative hours
     if delta < timedelta(days=1) and dt.date() == now.date():
-        return dt.strftime("%H:%M:%S")
+        hours = int(delta.total_seconds() / 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
 
     # Less than 7 days
     if delta < timedelta(days=7):

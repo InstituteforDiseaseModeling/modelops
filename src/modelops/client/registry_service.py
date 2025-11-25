@@ -144,6 +144,9 @@ class RegistryService(BaseService):
             outputs = automation.outputs("registry", self.env, refresh=False)
 
             if outputs:
+                # Get last update timestamp from Pulumi stack
+                last_update = self._get_stack_last_update("registry")
+
                 return ComponentStatus(
                     deployed=True,
                     phase=ComponentState.READY,
@@ -156,6 +159,7 @@ class RegistryService(BaseService):
                             outputs, "cluster_pull_configured", False
                         ),
                     },
+                    last_update=last_update,
                 )
             else:
                 return ComponentStatus(

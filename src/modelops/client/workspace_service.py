@@ -181,6 +181,9 @@ class WorkspaceService(BaseService):
                     max_workers = get_output_value(outputs, "autoscaling_max", 20)
                     worker_info = f"{min_workers}-{max_workers} (autoscaling)"
 
+                # Get last update timestamp from Pulumi stack
+                last_update = self._get_stack_last_update("workspace")
+
                 return ComponentStatus(
                     deployed=True,
                     phase=ComponentState.READY if health else ComponentState.UNKNOWN,
@@ -192,6 +195,7 @@ class WorkspaceService(BaseService):
                         "autoscaling": autoscaling_enabled,
                         "health": health,
                     },
+                    last_update=last_update,
                 )
             else:
                 return ComponentStatus(

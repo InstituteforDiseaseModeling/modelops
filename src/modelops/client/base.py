@@ -6,6 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -27,6 +28,7 @@ class ComponentStatus:
     deployed: bool
     phase: ComponentState
     details: dict[str, Any]
+    last_update: datetime | None = None
 
     def to_json(self) -> dict:
         """JSON-serializable representation."""
@@ -34,6 +36,7 @@ class ComponentStatus:
             "deployed": self.deployed,
             "phase": self.phase.value,
             "details": self.details,
+            "last_update": self.last_update.isoformat() if self.last_update else None,
         }
 
     def to_dict(self) -> dict:
@@ -84,6 +87,41 @@ class BaseService(ABC):
     def status(self) -> ComponentStatus:
         """Get component status with unified contract."""
         pass
+
+    def _get_stack_last_update(self, component: str) -> datetime | None:
+        """
+        Get last update timestamp for a Pulumi stack.
+
+        Args:
+            component: Component name (e.g., "infra", "storage", "registry", "workspace")
+
+        Returns:
+            Last update datetime or None if not available
+        """
+        try:
+            import pulumi.automation as auto
+
+            from ..core.automation import workspace_options
+            from ..core.naming import StackNaming
+            from ..core.paths import ensure_work_dir
+
+            work_dir = ensure_work_dir(component)
+            project_name = StackNaming.get_project_name(component)
+            ws = auto.LocalWorkspace(**workspace_options(project_name, work_dir).__dict__)
+
+            # Get stack name for this environment
+            stack_name = StackNaming.get_stack_name(component, self.env)
+
+            # List stacks and find the one we care about
+            stacks = ws.list_stacks()
+            for stack_summary in stacks:
+                if stack_summary.name == stack_name:
+                    return stack_summary.last_update
+
+            return None
+        except Exception:
+            # Silently fail - timestamp is optional
+            return None
 
     def with_retry(self, func: Callable, max_retries: int = 3, base_delay: float = 1.0) -> Any:
         """

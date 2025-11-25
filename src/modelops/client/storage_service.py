@@ -129,6 +129,9 @@ class StorageService(BaseService):
                 else:
                     container_names = containers
 
+                # Get last update timestamp from Pulumi stack
+                last_update = self._get_stack_last_update("storage")
+
                 return ComponentStatus(
                     deployed=True,
                     phase=ComponentState.READY,
@@ -140,6 +143,7 @@ class StorageService(BaseService):
                         "containers": container_names,
                         "container_count": len(containers),
                     },
+                    last_update=last_update,
                 )
             else:
                 return ComponentStatus(

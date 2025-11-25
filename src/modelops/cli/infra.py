@@ -15,6 +15,7 @@ from ..components.specs.infra import UnifiedInfraSpec
 from ..core.paths import INFRASTRUCTURE_FILE
 from .common_options import env_option, yes_option
 from .display import console, error, info, section, success, warning
+from .formatting import format_timestamp
 from .templates import get_infra_template
 
 app = typer.Typer(help="Unified infrastructure management")
@@ -530,6 +531,11 @@ def status(
                 else:
                     # Gray for not deployed
                     console.print(f"  [dim]✗[/dim] {component}: [dim]{state}[/dim]")
+
+            # Show last update timestamp if available
+            if component_status.last_update:
+                timestamp_str = format_timestamp(component_status.last_update.isoformat())
+                console.print(f"      [dim]last deployed:[/dim] {timestamp_str}")
 
             if component_status.deployed and component_status.details:
                 # Show key details
