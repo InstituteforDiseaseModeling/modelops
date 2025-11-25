@@ -99,6 +99,76 @@ def create_test_results(job):
     return results_by_target
 
 
+def create_test_sim_returns(job):
+    """Create test SimReturn objects with realistic DataFrame outputs."""
+    import polars as pl
+    import hashlib
+    from io import BytesIO
+
+    raw_sim_returns_by_param = {}
+
+    # Group tasks by parameter ID
+    task_groups = job.get_task_groups()
+
+    for param_id, replicate_tasks in task_groups.items():
+        sim_returns = []
+
+        for replicate_idx, task in enumerate(replicate_tasks):
+            # Create realistic time series data
+            days = list(range(60))
+            # Simulate SIR-like dynamics
+            infected = [10 + replicate_idx * 2 + i * 0.5 for i in days]
+            susceptible = [1000 - x for x in infected]
+
+            # Create DataFrames for each output
+            outputs = {}
+
+            # Incidence output
+            incidence_df = pl.DataFrame({
+                "day": days,
+                "infected": infected,
+                "seed": [task.seed] * len(days)
+            })
+
+            # Prevalence output
+            prevalence_df = pl.DataFrame({
+                "day": days,
+                "susceptible": susceptible,
+                "infected": infected,
+                "seed": [task.seed] * len(days)
+            })
+
+            # Serialize to Arrow IPC
+            for output_name, df in [("incidence", incidence_df), ("prevalence", prevalence_df)]:
+                buffer = BytesIO()
+                df.write_ipc(buffer)
+                arrow_bytes = buffer.getvalue()
+
+                # Create TableArtifact with valid checksum
+                checksum = hashlib.blake2b(arrow_bytes, digest_size=32).hexdigest()
+                outputs[output_name] = TableArtifact(
+                    size=len(arrow_bytes),
+                    inline=arrow_bytes,
+                    checksum=checksum
+                )
+
+            # Create SimReturn
+            from modelops_contracts import SimReturn
+            sim_return = SimReturn(
+                task_id=f"task-{param_id[:8]}-{replicate_idx}",
+                outputs=outputs
+            )
+            sim_returns.append(sim_return)
+
+        raw_sim_returns_by_param[param_id] = sim_returns
+        logger.info(
+            f"Created {len(sim_returns)} SimReturns for param {param_id[:8]} "
+            f"with outputs: {list(sim_returns[0].outputs.keys())}"
+        )
+
+    return raw_sim_returns_by_param
+
+
 def test_direct_writing():
     """Test writing Parquet directly without going through job_runner."""
     logger.info("=" * 60)
@@ -114,6 +184,10 @@ def test_direct_writing():
     results_by_target = create_test_results(job)
     logger.info(f"Created results for {len(results_by_target)} targets")
 
+    # Create test SimReturns with model outputs
+    raw_sim_returns = create_test_sim_returns(job)
+    logger.info(f"Created SimReturns for {len(raw_sim_returns)} parameter sets")
+
     # Use a temporary directory for output
     with tempfile.TemporaryDirectory() as tmpdir:
         output_dir = Path(tmpdir) / "views" / "jobs"
@@ -122,8 +196,8 @@ def test_direct_writing():
         logger.info(f"\nWriting to: {output_dir}")
 
         try:
-            # Call the write function with multiple targets
-            view_path = write_job_view(job, results_by_target, output_dir)
+            # Call the write function with multiple targets AND model outputs
+            view_path = write_job_view(job, results_by_target, output_dir, raw_sim_returns=raw_sim_returns)
             logger.info(f"✓ Successfully wrote job view to: {view_path}")
 
             # Check what was created
@@ -173,6 +247,36 @@ def test_direct_writing():
                             logger.error(f"✗ No Parquet file for target '{target_dir.name}'")
             else:
                 logger.error("✗ No targets directory found")
+
+            # Check model_outputs directory
+            logger.info("\nChecking model outputs:")
+            model_outputs_dir = job_dir / "model_outputs"
+            if model_outputs_dir.exists():
+                output_files = list(model_outputs_dir.glob("*.parquet"))
+                logger.info(f"✓ Found {len(output_files)} model output Parquet files")
+
+                for output_file in output_files:
+                    logger.info(f"  - {output_file.name}")
+                    try:
+                        import polars as pl
+                        df = pl.read_parquet(output_file)
+                        logger.info(f"    Rows: {len(df):,}, Columns: {len(df.columns)}")
+                        logger.info(f"    Schema: {', '.join(df.columns)}")
+
+                        # Check for metadata columns
+                        if "param_id" in df.columns:
+                            logger.info(f"    ✓ Has param_id column")
+                        if "replicate_idx" in df.columns:
+                            logger.info(f"    ✓ Has replicate_idx column")
+                        if "seed" in df.columns:
+                            logger.info(f"    ✓ Has seed column")
+
+                    except ImportError:
+                        logger.warning("    polars not installed - cannot read Parquet")
+                    except Exception as e:
+                        logger.error(f"    Failed to read: {e}")
+            else:
+                logger.warning("✗ No model_outputs directory found")
 
         except Exception as e:
             logger.error(f"✗ Failed to write job view: {e}")

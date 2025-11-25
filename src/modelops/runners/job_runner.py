@@ -182,6 +182,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     from modelops_contracts import ReplicateSet
 
     futures = []
+    sim_futures_by_param = {}  # Store sim futures for model outputs collection
 
     for param_id, replicate_tasks in task_groups.items():
         base_task = replicate_tasks[0]
@@ -193,6 +194,7 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
 
         # Submit simulations ONCE per parameter set
         sim_futures = sim_service.submit_replicates(replicate_set)
+        sim_futures_by_param[param_id] = sim_futures  # Store for later gathering
         logger.info(f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]}")
 
         # Evaluate EACH target on the same simulation results
@@ -227,6 +229,14 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     param_futures_list = futures  # Save the (param_id, future) pairs
     results = sim_service.gather([f for *_, f in futures])
     logger.info(f"Job complete: {len(results)} results")
+
+    # Gather raw simulation outputs for model_outputs collection
+    logger.info("Gathering raw simulation outputs for model outputs...")
+    raw_sim_returns_by_param = {}
+    for param_id, sim_futures in sim_futures_by_param.items():
+        sim_returns = sim_service.gather(sim_futures)
+        raw_sim_returns_by_param[param_id] = sim_returns
+    logger.info(f"Gathered {len(raw_sim_returns_by_param)} parameter sets with simulation outputs")
 
     # Build results by target
     results_by_target = {}
@@ -286,7 +296,9 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                     logger.warning(f"Could not initialize ProvenanceStore with Azure: {e}")
                     prov_store = None
 
-            view_path = write_job_view(job, results_by_target, prov_store=prov_store)
+            view_path = write_job_view(
+                job, results_by_target, prov_store=prov_store, raw_sim_returns=raw_sim_returns_by_param
+            )
             logger.info(f"Job view written to: {view_path}")
 
             # Write per-replicate view if we have the data

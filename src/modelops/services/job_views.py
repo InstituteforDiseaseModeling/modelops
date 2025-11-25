@@ -24,6 +24,7 @@ def write_job_view(
     results: list[AggregationReturn] | dict[str, list[AggregationReturn]],
     output_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
     prov_store: Any | None = None,
+    raw_sim_returns: dict[str, list[Any]] | None = None,
 ) -> Path:
     """Write job results to Parquet for post-job analysis.
 
@@ -190,6 +191,17 @@ def write_job_view(
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
+    # Write model outputs if available
+    if raw_sim_returns:
+        try:
+            model_outputs_dir = job_dir / "model_outputs"
+            model_outputs_dir.mkdir(parents=True, exist_ok=True)
+            _write_model_outputs(model_outputs_dir, raw_sim_returns, job)
+            logger.info("Wrote model outputs to Parquet")
+        except Exception as e:
+            logger.error(f"Failed to write model outputs: {e}")
+            # Continue without model outputs
+
     # Upload to Azure if ProvenanceStore is available
     if prov_store and hasattr(prov_store, "supports_remote_uploads") and prov_store.supports_remote_uploads():
         try:
@@ -315,6 +327,106 @@ def write_replicates_view(
             logger.error(f"Failed to upload replicates view to Azure: {e}")
 
     return replicates_path
+
+
+def _write_model_outputs(
+    output_dir: Path,
+    raw_sim_returns_by_param: dict[str, list[Any]],
+    job: SimJob
+) -> None:
+    """Write raw model outputs to Parquet files.
+
+    Creates one Parquet file per output name (incidence, prevalence, etc.)
+    with all replicates concatenated. Adds param_id, seed, replicate_idx columns.
+
+    Args:
+        output_dir: Directory to write model_outputs/*.parquet files
+        raw_sim_returns_by_param: Dict mapping param_id to list of SimReturns
+        job: The SimJob being executed
+    """
+    try:
+        import polars as pl
+    except ImportError:
+        logger.error("polars not installed. Cannot write model outputs.")
+        raise
+
+    # Determine what outputs exist by looking at first SimReturn
+    if not raw_sim_returns_by_param:
+        logger.warning("No raw simulation returns to write")
+        return
+
+    first_param_id = next(iter(raw_sim_returns_by_param.keys()))
+    first_sim_returns = raw_sim_returns_by_param[first_param_id]
+
+    if not first_sim_returns:
+        logger.warning(f"No SimReturns for param_id {first_param_id}")
+        return
+
+    first_sim_return = first_sim_returns[0]
+    output_names = list(first_sim_return.outputs.keys())
+
+    logger.info(f"Collecting {len(output_names)} model outputs: {output_names}")
+
+    # For each output name, concatenate across all param_ids and replicates
+    for output_name in output_names:
+        all_dfs = []
+
+        for param_id, sim_returns in raw_sim_returns_by_param.items():
+            for replicate_idx, sim_return in enumerate(sim_returns):
+                if output_name not in sim_return.outputs:
+                    logger.warning(
+                        f"Missing output {output_name} for param {param_id}, replicate {replicate_idx}"
+                    )
+                    continue
+
+                # Read DataFrame from Arrow IPC (stored in TableArtifact.inline)
+                artifact = sim_return.outputs[output_name]
+                if not artifact.inline:
+                    logger.warning(
+                        f"No inline data for {output_name}, param {param_id}, replicate {replicate_idx}"
+                    )
+                    continue
+
+                try:
+                    df = pl.read_ipc(artifact.inline)
+
+                    # Add metadata columns for filtering/grouping
+                    df = df.with_columns([
+                        pl.lit(param_id).alias("param_id"),
+                        pl.lit(replicate_idx).alias("replicate_idx"),
+                    ])
+
+                    # Note: seed column should already exist from extract_outputs()
+                    all_dfs.append(df)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to read {output_name} for param {param_id}, "
+                        f"replicate {replicate_idx}: {e}"
+                    )
+                    continue
+
+        if all_dfs:
+            try:
+                # Concatenate all replicates vertically
+                concatenated = pl.concat(all_dfs, how="vertical")
+
+                # Write to Parquet with compression
+                output_path = output_dir / f"{output_name}.parquet"
+                concatenated.write_parquet(
+                    output_path,
+                    compression="zstd",
+                    compression_level=3
+                )
+
+                file_size = output_path.stat().st_size
+                logger.info(
+                    f"Wrote {output_name}.parquet: {len(concatenated):,} rows, "
+                    f"{file_size:,} bytes"
+                )
+            except Exception as e:
+                logger.error(f"Failed to write {output_name}.parquet: {e}")
+        else:
+            logger.warning(f"No data collected for output {output_name}")
 
 
 def _serialize_target_spec(spec: TargetSpec | None) -> dict[str, Any] | None:

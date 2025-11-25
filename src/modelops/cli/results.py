@@ -487,6 +487,35 @@ def download(
             else:
                 warning("No Parquet files found for this job")
 
+        # Download model outputs
+        if fmt in ["parquet", "all"]:
+            prefix = f"views/jobs/{job_id}/model_outputs/"
+            blobs = container_client.list_blobs(name_starts_with=prefix)
+
+            outputs_downloaded = 0
+            for blob in blobs:
+                if blob.name.endswith(".parquet"):
+                    # Extract output name from path
+                    output_name = Path(blob.name).stem
+
+                    # Create model_outputs directory
+                    outputs_dir = job_output_dir / "model_outputs"
+                    outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Download the Parquet file
+                    output_path = outputs_dir / f"{output_name}.parquet"
+                    blob_client = container_client.get_blob_client(blob.name)
+
+                    with open(output_path, "wb") as f:
+                        download_stream = blob_client.download_blob()
+                        f.write(download_stream.readall())
+
+                    info(f"Downloaded model output: {output_name} ({blob.size:,} bytes)")
+                    outputs_downloaded += 1
+
+            if outputs_downloaded > 0:
+                success(f"Downloaded {outputs_downloaded} model output(s)")
+
         # Download calibration results if they exist (for calibration jobs)
         calibration_blob = f"views/jobs/{job_id}/calibration/summary.json"
         try:

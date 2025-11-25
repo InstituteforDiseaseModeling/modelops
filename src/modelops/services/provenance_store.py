@@ -152,18 +152,38 @@ class ProvenanceStore:
             # Reconstruct SimReturn with TableArtifacts
             outputs = {}
             for name, artifact_data in result_data.get("outputs", {}).items():
-                # For MVP, always store as blob and load inline
-                artifact_file = result_dir / f"artifact_{name}.arrow"
-                if artifact_file.exists():
-                    with open(artifact_file, "rb") as f:
+                # Try to load from Arrow first (fast path)
+                arrow_file = result_dir / f"artifact_{name}.arrow"
+                parquet_file = result_dir / f"artifact_{name}.parquet"
+
+                inline_data = None
+
+                if arrow_file.exists():
+                    # Fast path: read Arrow IPC directly
+                    with open(arrow_file, "rb") as f:
                         inline_data = f.read()
+                elif parquet_file.exists():
+                    # Fallback: read from Parquet and convert to Arrow IPC
+                    try:
+                        import polars as pl
+                        from io import BytesIO
+
+                        logger.debug(f"Loading {name} from Parquet (Arrow missing)")
+                        df = pl.read_parquet(parquet_file)
+                        buffer = BytesIO()
+                        df.write_ipc(buffer)
+                        inline_data = buffer.getvalue()
+                    except Exception as e:
+                        logger.error(f"Failed to read Parquet for {name}: {e}")
+
+                if inline_data:
                     outputs[name] = TableArtifact(
                         size=len(inline_data),
                         inline=inline_data,
                         checksum=artifact_data["checksum"],
                     )
                 else:
-                    logger.warning(f"Missing artifact file: {artifact_file}")
+                    logger.warning(f"Missing artifact files for {name}: {arrow_file}, {parquet_file}")
 
             # Reconstruct error info if present
             error = None
@@ -250,18 +270,49 @@ class ProvenanceStore:
                         "checksum": result.error_details.checksum,
                     }
 
-            # Store artifacts as separate blob files
+            # Store artifacts in both Arrow (fast cache) and Parquet (efficient storage)
             for name, artifact in result.outputs.items():
-                # For MVP, always store as blob
-                if artifact.inline:
-                    artifact_file = result_dir / f"artifact_{name}.arrow"
-                    atomic_write(artifact_file, artifact.inline)
+                if not artifact.inline:
+                    continue
 
-                # Store artifact metadata
-                result_data["outputs"][name] = {
-                    "size": artifact.size,
-                    "checksum": artifact.checksum,
-                }
+                # Fast cache: Arrow IPC (for quick reads)
+                arrow_file = result_dir / f"artifact_{name}.arrow"
+                atomic_write(arrow_file, artifact.inline)
+
+                # Long-term storage: Parquet (better compression)
+                try:
+                    import polars as pl
+
+                    parquet_file = result_dir / f"artifact_{name}.parquet"
+                    df = pl.read_ipc(artifact.inline)
+                    df.write_parquet(
+                        parquet_file,
+                        compression="zstd",  # Best compression/speed tradeoff
+                        compression_level=3,  # Fast enough, good compression
+                    )
+
+                    # Store artifact metadata with both file sizes
+                    arrow_size = arrow_file.stat().st_size if arrow_file.exists() else 0
+                    parquet_size = parquet_file.stat().st_size if parquet_file.exists() else 0
+
+                    result_data["outputs"][name] = {
+                        "size": artifact.size,
+                        "checksum": artifact.checksum,
+                        "arrow_size": arrow_size,
+                        "parquet_size": parquet_size,
+                    }
+
+                    logger.debug(
+                        f"Stored {name}: Arrow={arrow_size} bytes, Parquet={parquet_size} bytes "
+                        f"(compression ratio: {arrow_size/parquet_size:.2f}x)"
+                    )
+                except Exception as e:
+                    # If Parquet storage fails, log warning but continue with Arrow only
+                    logger.warning(f"Failed to store Parquet for {name}: {e}")
+                    result_data["outputs"][name] = {
+                        "size": artifact.size,
+                        "checksum": artifact.checksum,
+                    }
 
             self._write_json_atomic(result_dir / "result.json", result_data)
 
