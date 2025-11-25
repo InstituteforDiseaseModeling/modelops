@@ -151,14 +151,14 @@ class StarsimSIR(BaseModel):
             seed: Random seed used for the simulation
 
         Returns:
-            DataFrame with columns: day, infected (new infections), seed
+            DataFrame with columns: day, incidence (new infections), seed
         """
         incidence = raw_output['incidence']
         days = np.arange(len(incidence))
 
         return pl.DataFrame({
             'day': days.tolist(),
-            'infected': incidence.tolist(),
+            'incidence': incidence.tolist(),
         })
 
     @model_output("prevalence")
@@ -171,14 +171,14 @@ class StarsimSIR(BaseModel):
             seed: Random seed used for the simulation
 
         Returns:
-            DataFrame with columns: day, infected (total infected), seed
+            DataFrame with columns: day, prevalence (total infected), seed
         """
         prevalence = raw_output['prevalence']
         days = np.arange(len(prevalence))
 
         return pl.DataFrame({
             'day': days.tolist(),
-            'infected': prevalence.tolist(),
+            'prevalence': prevalence.tolist(),
         })
 
     @model_output("cumulative")
@@ -191,12 +191,12 @@ class StarsimSIR(BaseModel):
             seed: Random seed used for the simulation
 
         Returns:
-            DataFrame with columns: day, infected (cumulative), seed
+            DataFrame with columns: day, cumulative (cumulative), seed
         """
         cumulative = raw_output['cumulative']
         days = np.arange(len(cumulative))
 
         return pl.DataFrame({
             'day': days.tolist(),
-            'infected': cumulative.tolist(),
+            'cumulative': cumulative.tolist(),
         })

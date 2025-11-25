@@ -321,6 +321,9 @@ def download(
     fmt: str = typer.Option(
         "parquet", "--format", "-f", help="Download format: parquet, manifest, or all"
     ),
+    csv: bool = typer.Option(
+        False, "--csv", help="Convert Parquet files to CSV after download"
+    ),
     env: str | None = typer.Option(
         None, "--env", "-e", help="Environment name (dev, staging, prod)"
     ),
@@ -336,6 +339,7 @@ def download(
         mops results download job-abc123          # Download specific job
         mops results download -o ./my-results     # Custom output directory
         mops results download --targets prevalence,incidence  # Specific targets
+        mops results download --csv               # Download and convert to CSV
     """
     import os
 
@@ -551,6 +555,27 @@ def download(
             if verbose:
                 warning(f"Could not download calibration results: {e}")
             # Not all jobs have calibration results, so this is not an error
+
+        # Convert Parquet to CSV if requested
+        if csv:
+            import polars as pl
+
+            section("Converting Parquet to CSV")
+            parquet_files = list(job_output_dir.rglob("*.parquet"))
+
+            for parquet_path in parquet_files:
+                try:
+                    csv_path = parquet_path.with_suffix(".csv")
+                    info(f"Converting {parquet_path.name}...")
+
+                    df = pl.read_parquet(parquet_path)
+                    df.write_csv(csv_path)
+
+                    info(f"  → {csv_path.name} ({csv_path.stat().st_size:,} bytes)")
+                except Exception as e:
+                    warning(f"Failed to convert {parquet_path.name}: {e}")
+
+            success(f"Converted {len(parquet_files)} Parquet file(s) to CSV")
 
         # Show summary
         section("Download complete")
