@@ -9,7 +9,9 @@ dependencies = [
     "modelops-calabaria @ git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git",
     "numpy>=1.24.0",
     "scipy>=1.10.0",
-    "polars>=0.20.0"
+    "polars>=0.20.0",
+    "starsim>=3.0.4",
+    "sciris>=3.2.4",
 ]
 
 [tool.hatch.metadata]
