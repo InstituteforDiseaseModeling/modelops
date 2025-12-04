@@ -152,13 +152,18 @@ class ProvenanceStore:
             # Reconstruct SimReturn with TableArtifacts
             outputs = {}
             for name, artifact_data in result_data.get("outputs", {}).items():
-                # Try to load from Arrow first (fast path)
+                # Check for .json file first (metadata)
+                json_file = result_dir / f"artifact_{name}.json"
                 arrow_file = result_dir / f"artifact_{name}.arrow"
                 parquet_file = result_dir / f"artifact_{name}.parquet"
 
                 inline_data = None
 
-                if arrow_file.exists():
+                if json_file.exists():
+                    # JSON artifacts (like metadata) - read as-is
+                    with open(json_file, "rb") as f:
+                        inline_data = f.read()
+                elif arrow_file.exists():
                     # Fast path: read Arrow IPC directly
                     with open(arrow_file, "rb") as f:
                         inline_data = f.read()
@@ -183,7 +188,7 @@ class ProvenanceStore:
                         checksum=artifact_data["checksum"],
                     )
                 else:
-                    logger.warning(f"Missing artifact files for {name}: {arrow_file}, {parquet_file}")
+                    logger.warning(f"Missing artifact files for {name}: {json_file}, {arrow_file}, {parquet_file}")
 
             # Reconstruct error info if present
             error = None
@@ -275,6 +280,21 @@ class ProvenanceStore:
                 if not artifact.inline:
                     continue
 
+                # Handle metadata separately - it's JSON, not tabular data
+                if name == "metadata":
+                    json_file = result_dir / f"artifact_{name}.json"
+                    atomic_write(json_file, artifact.inline)
+
+                    result_data["outputs"][name] = {
+                        "size": artifact.size,
+                        "checksum": artifact.checksum,
+                        "json_size": json_file.stat().st_size if json_file.exists() else 0,
+                    }
+
+                    logger.debug(f"Stored {name}: JSON={artifact.size} bytes")
+                    continue
+
+                # Store tabular artifacts in both Arrow (fast cache) and Parquet (efficient storage)
                 # Fast cache: Arrow IPC (for quick reads)
                 arrow_file = result_dir / f"artifact_{name}.arrow"
                 atomic_write(arrow_file, artifact.inline)
