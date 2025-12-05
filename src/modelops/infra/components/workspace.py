@@ -119,7 +119,7 @@ class DaskWorkspace(pulumi.ComponentResource):
 
         # Convert K8s memory format to Dask format
         # Dask expects GiB/MiB/GB/MB notation
-        memory_limit = workers_config.get("resources", {}).get("limits", {}).get("memory", "16Gi")
+        memory_limit = workers_config.get("resources", {}).get("limits", {}).get("memory", "12Gi")
 
         # Handle various memory format suffixes
         memory_conversions = {
