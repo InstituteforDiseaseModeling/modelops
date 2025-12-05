@@ -47,10 +47,10 @@ spec:
     image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
     resources:
       requests:
-        memory: "4Gi"
+        memory: "16Gi"
         cpu: "2"
       limits:
-        memory: "4Gi"
+        memory: "16Gi"
         cpu: "2"
     # No node selector - schedule on any available worker nodes
     # Process and thread configuration
