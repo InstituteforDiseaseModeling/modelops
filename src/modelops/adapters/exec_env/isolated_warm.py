@@ -337,6 +337,23 @@ class IsolatedWarmExecEnv(ExecutionEnvironment):
         for sr in sim_returns:
             sr_dict = {"task_id": sr.task_id, "outputs": {}}
 
+            # Preserve error information (critical for aggregator error handling)
+            if sr.error is not None:
+                sr_dict["error"] = {
+                    "error_type": sr.error.error_type,
+                    "message": sr.error.message,
+                    "retryable": sr.error.retryable,
+                }
+
+            if sr.error_details is not None:
+                sr_dict["error_details"] = {
+                    "size": sr.error_details.size,
+                    "checksum": sr.error_details.checksum,
+                    "inline": base64.b64encode(sr.error_details.inline).decode("ascii")
+                    if sr.error_details.inline is not None
+                    else None,
+                }
+
             for name, artifact in sr.outputs.items():
                 # For MVP, always use inline data
                 if not artifact.inline:
