@@ -133,7 +133,19 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
     Returns:
         AggregationReturn with computed loss
     """
+    import logging
     from modelops_contracts.simulation import AggregationTask
+
+    logger = logging.getLogger(__name__)
+
+    # Diagnostic logging to understand serialization issues
+    logger.info(f"Aggregation received {len(sim_returns)} sim_returns")
+    for idx, sr in enumerate(sim_returns):
+        if hasattr(sr, 'outputs'):
+            output_keys = list(sr.outputs.keys()) if sr.outputs else []
+            logger.info(f"  sim_return[{idx}]: outputs={output_keys}")
+        else:
+            logger.warning(f"  sim_return[{idx}]: NO OUTPUTS ATTRIBUTE - type={type(sr)}")
 
     # sim_returns are already materialized by Dask
     agg_task = AggregationTask(
