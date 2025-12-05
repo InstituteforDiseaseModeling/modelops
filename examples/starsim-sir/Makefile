@@ -37,7 +37,7 @@ help:
 	@echo "Setup:"
 	@echo "  make venv            - Create venv"
 	@echo "  make setup           - Install cb + modelops-bundle (+ mops) from local repos"
-	@echo "  make setup-force     - Force reinstall local packages (after changes to contracts/calabaria)"
+	@echo "  make setup-force     - Force reinstall local editable packages (use after git pull)"
 	@echo "  make mops-init       - Initialize ModelOps configuration (one-time setup)"
 	@echo ""
 	@echo "Bundle:"
@@ -56,10 +56,10 @@ help:
 	@echo "  make workflow        - setup -> bundle -> study -> submit"
 	@echo ""
 	@echo "Calibration:"
-	@echo "  make calib-gen                    - Generate calibration spec (replicate_mean)"
+	@echo "  make calib-gen                    - Generate calibration spec (mean_signal)"
 	@echo "  make calib-submit                 - Generate and submit calibration job"
-	@echo "  make calib-gen-per-replicate      - Generate spec with per_replicate target"
-	@echo "  make calib-submit-per-replicate   - Submit per_replicate calibration"
+	@echo "  make calib-gen-annealed           - Generate spec with annealed target"
+	@echo "  make calib-submit-annealed        - Submit annealed calibration"
 	@echo ""
 	@echo "Monitoring:"
 	@echo "  make status          - k8s job + pods"
@@ -145,9 +145,25 @@ bundle-init: $(VENV)/.installed
 		echo "Initializing bundle project..."; \
 		$(BIN)/modelops-bundle init .; \
 		echo "dev" > .modelops-bundle/env; \
+		echo "Adding starsim dependency..."; \
+		$(UV) add --project . starsim; \
+		echo "Reinstalling local editable packages (overriding git versions)..."; \
+		$(UV) pip install -e $(abspath $(CONTRACTS)); \
+		$(UV) pip install -e $(abspath $(BUNDLE)); \
+		$(UV) pip install -e $(abspath $(CALABARIA)); \
+		$(UV) pip install -e $(abspath $(MODELOPS)); \
 	else \
 		echo "Bundle already initialized (.modelops-bundle exists)"; \
 		[ -f .modelops-bundle/env ] || echo "dev" > .modelops-bundle/env; \
+		if ! grep -q "starsim" pyproject.toml 2>/dev/null; then \
+			echo "Adding missing starsim dependency..."; \
+			$(UV) add --project . starsim; \
+			echo "Reinstalling local editable packages (overriding git versions)..."; \
+			$(UV) pip install -e $(abspath $(CONTRACTS)); \
+			$(UV) pip install -e $(abspath $(BUNDLE)); \
+			$(UV) pip install -e $(abspath $(CALABARIA)); \
+			$(UV) pip install -e $(abspath $(MODELOPS)); \
+		fi; \
 	fi
 
 .PHONY: bundle-status
@@ -162,8 +178,8 @@ bundle-register: $(VENV)/.installed data
 	$(BIN)/modelops-bundle register-target targets/incidence.py --regen-all
 	# Define calibration target set for convenience
 	$(BIN)/modelops-bundle target-set set incidence \
-		--target incidence_replicate_mean_target \
-		--target incidence_per_replicate_target
+		--target incidence_mean_signal_target \
+		--target incidence_annealed_target
 	@echo "✓ Registered SIR model and calibration targets"
 
 # --- Study + Submit ---
@@ -230,11 +246,11 @@ workflow: setup bundle-init bundle-register study submit
 
 # --- Calibration ---
 
-.PHONY: calib-gen calib-submit calib-gen-per-replicate calib-submit-per-replicate
+.PHONY: calib-gen calib-submit calib-gen-annealed calib-submit-annealed
 
-# Generate calibration spec with replicate_mean target
+# Generate calibration spec with mean_signal target
 calib-gen: $(VENV)/.installed data
-	@echo "Generating calibration spec with incidence_replicate_mean_target..."
+	@echo "Generating calibration spec with incidence_mean_signal_target..."
 	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
 	  data/observed_incidence.csv \
 	  beta:0.01:0.2,dur_inf:3:10 \
@@ -242,7 +258,7 @@ calib-gen: $(VENV)/.installed data
 	  --max-trials 100 \
 	  --batch-size 4 \
 	  --n-replicates 10 \
-	  --name incidence-mean \
+	  --name incidence-mean-signal \
 	  --output calibration_spec.json
 	@echo "✓ Generated calibration_spec.json"
 
@@ -252,26 +268,26 @@ calib-submit: bundle-init bundle-register calib-gen $(VENV)/.installed
 	$(BIN)/mops jobs submit $(abspath calibration_spec.json) --target-set incidence
 	@echo "✓ Calibration job submitted"
 
-# Generate calibration spec with per_replicate target (for comparison)
-calib-gen-per-replicate: $(VENV)/.installed data
-	@echo "Generating calibration spec with incidence_per_replicate_target..."
+# Generate calibration spec with annealed target (for comparison)
+calib-gen-annealed: $(VENV)/.installed data
+	@echo "Generating calibration spec with incidence_annealed_target..."
 	$(BIN)/cb calibration optuna $(MODEL_CLASS) \
 	  data/observed_incidence.csv \
 	  beta:0.01:0.2,dur_inf:3:10 \
-	  --target incidence_per_replicate_target \
+	  --target incidence_annealed_target \
 	  --max-trials 100 \
 	  --batch-size 4 \
 	  --n-replicates 10 \
-	  --name incidence-per-replicate \
-	  --output calibration_spec_per_replicate.json
-	@echo "✓ Generated calibration_spec_per_replicate.json"
+	  --name incidence-annealed \
+	  --output calibration_spec_annealed.json
+	@echo "✓ Generated calibration_spec_annealed.json"
 
-# Submit per_replicate calibration job
-calib-submit-per-replicate: bundle-init bundle-register calib-gen-per-replicate $(VENV)/.installed
-	@echo "Submitting per_replicate calibration job..."
-	$(BIN)/mops jobs submit $(abspath calibration_spec_per_replicate.json) \
-		--target incidence_per_replicate_target
-	@echo "✓ Per-replicate calibration job submitted"
+# Submit annealed calibration job
+calib-submit-annealed: bundle-init bundle-register calib-gen-annealed $(VENV)/.installed
+	@echo "Submitting annealed calibration job..."
+	$(BIN)/mops jobs submit $(abspath calibration_spec_annealed.json) \
+		--target incidence_annealed_target
+	@echo "✓ Annealed calibration job submitted"
 
 # --- Monitoring ---
 
@@ -328,5 +344,5 @@ clean-bundle:
 .PHONY: clean
 clean: clean-bundle clean-data
 	rm -f $(STUDY_FILE) study-grid.json study-tiny.json sobol.json calibration_spec*.json test*.json
-	rm -rf $(VENV)
+	rm -rf $(VENV) results/
 	@echo "✓ Clean complete"

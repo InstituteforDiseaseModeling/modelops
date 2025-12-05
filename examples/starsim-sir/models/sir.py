@@ -151,14 +151,14 @@ class StarsimSIR(BaseModel):
             seed: Random seed used for the simulation
 
         Returns:
-            DataFrame with columns: day, incidence (new infections), seed
+            DataFrame with columns: day, infected (new infections), seed
         """
         incidence = raw_output['incidence']
         days = np.arange(len(incidence))
 
         return pl.DataFrame({
             'day': days.tolist(),
-            'incidence': incidence.tolist(),
+            'infected': incidence.tolist(),
         })
 
     @model_output("prevalence")
