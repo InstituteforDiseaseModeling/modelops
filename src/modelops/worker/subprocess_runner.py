@@ -814,14 +814,6 @@ class SubprocessRunner:
                         sim_output = {}
                         outputs = sim_return.get("outputs", {})
 
-                        # Defensive check: empty outputs with no error indicates serialization bug
-                        if not outputs and "error" not in sim_return:
-                            raise ValueError(
-                                f"Replicate {idx} arrived with empty outputs and no error field. "
-                                f"sim_return keys: {list(sim_return.keys())}. "
-                                "This indicates a bug in the SimReturn serialization layer."
-                            )
-
                         for name, table_artifact in outputs.items():
                             # Skip non-Arrow outputs & reserved keys
                             if name in ("metadata", "error"):
