@@ -134,9 +134,23 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
         AggregationReturn with computed loss
     """
     import logging
+    import os
     from modelops_contracts.simulation import AggregationTask
 
     logger = logging.getLogger(__name__)
+
+    # Memory diagnostics: log worker RSS before aggregation
+    try:
+        import psutil
+        proc = psutil.Process(os.getpid())
+        mem_info = proc.memory_info()
+        rss_mb = mem_info.rss / (1024 * 1024)
+        logger.info(
+            f"Aggregation starting: {len(sim_returns)} sim_returns, "
+            f"worker PID={os.getpid()}, RSS={rss_mb:.1f} MB"
+        )
+    except Exception as e:
+        logger.debug(f"Could not get memory info: {e}")
 
     # Diagnostic logging to understand serialization issues
     logger.info(f"Aggregation received {len(sim_returns)} sim_returns")
