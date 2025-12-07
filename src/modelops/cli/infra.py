@@ -243,12 +243,34 @@ def up(
                     "scheduler": {
                         "image": unified.workspace.scheduler_image,
                         "replicas": unified.workspace.scheduler_replicas,
+                        "resources": {
+                            "requests": {
+                                "memory": unified.workspace.scheduler_memory,
+                                "cpu": unified.workspace.scheduler_cpu,
+                            },
+                            "limits": {
+                                "memory": unified.workspace.scheduler_memory,
+                                "cpu": unified.workspace.scheduler_cpu,
+                            },
+                        },
+                        "env": unified.workspace.scheduler_env,
                     },
                     "workers": {
                         "image": unified.workspace.worker_image,
                         "replicas": unified.workspace.worker_replicas,
                         "processes": unified.workspace.worker_processes,
                         "threads": unified.workspace.worker_threads,
+                        "resources": {
+                            "requests": {
+                                "memory": unified.workspace.worker_memory,
+                                "cpu": unified.workspace.worker_cpu,
+                            },
+                            "limits": {
+                                "memory": unified.workspace.worker_memory,
+                                "cpu": unified.workspace.worker_cpu,
+                            },
+                        },
+                        "env": unified.workspace.worker_env,
                     },
                 },
             )
