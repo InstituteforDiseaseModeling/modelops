@@ -649,6 +649,10 @@ def submit(
         info("\n To see logs:")
         info(f"  kubectl -n modelops-dask-dev logs job/{job_id}")
         info("  kubectl -n modelops-dask-dev logs deployment/dask-workers")
+        info("\n To inspect worker pods (for per-pod describe/logs):")
+        info("  kubectl -n modelops-dask-dev get pods -l app=dask-worker")
+        info("  kubectl -n modelops-dask-dev describe pod <worker-pod-name>")
+        info("  kubectl -n modelops-dask-dev logs pod/<worker-pod-name>")
 
     except Exception as e:
         error(f"Job submission failed: {e}")

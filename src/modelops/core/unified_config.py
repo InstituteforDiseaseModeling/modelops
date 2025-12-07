@@ -78,10 +78,10 @@ class WorkspaceSpec(BaseModel):
     scheduler_cpu: str = "1"
     worker_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest"
     worker_replicas: int = 2
-    worker_processes: int = 3  # Multiple processes for pure Python simulations
+    worker_processes: int = 2  # Multiple processes for pure Python simulations
     worker_threads: int = 1  # Single thread per process to avoid GIL contention
-    worker_memory: str = "8Gi"  # More memory to prevent OOM
-    worker_cpu: str = "3.5"  # Slightly less than 4 vCPUs to allow for system overhead
+    worker_memory: str = "12Gi"  # More memory to prevent aggregation OOM
+    worker_cpu: str = "4"  # Match requests with per-process concurrency
     # Autoscaling configuration
     autoscaling_enabled: bool = True
     autoscaling_min_workers: int = 2

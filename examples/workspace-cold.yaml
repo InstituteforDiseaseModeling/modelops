@@ -44,16 +44,16 @@ spec:
     image: ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest
     resources:
       requests:
-        memory: "4Gi"
-        cpu: "2"
+        memory: "12Gi"
+        cpu: "4"
       limits:
-        memory: "4Gi"
-        cpu: "2"
+        memory: "12Gi"
+        cpu: "4"
 
     # Process and thread configuration
     # Cold executor spawns fresh subprocess per task, so worker process count
     # mainly affects parallelism (how many tasks can run concurrently per pod)
-    processes: 4  # Number of worker processes per pod (--nprocs)
+    processes: 2  # Number of worker processes per pod (--nworkers)
     threads: 1    # Number of threads per worker process (--nthreads)
 
     # Environment variables for workers

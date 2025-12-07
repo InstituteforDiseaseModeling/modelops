@@ -48,17 +48,15 @@ spec:
     resources:
       requests:
         memory: "12Gi"
-        cpu: "2"
+        cpu: "4"
       limits:
         memory: "12Gi"
-        cpu: "2"
+        cpu: "4"
     # No node selector - schedule on any available worker nodes
     # Process and thread configuration
     # For simulation workloads (pure Python), use more processes and fewer threads
     # to bypass GIL limitations. For NumPy/Pandas workloads, use more threads.
-    # NOTE: Increased from 2 to 4 processes to prevent aggregation deadlock
-    # With 200 replicates per aggregation, we need extra threads to avoid starvation
-    processes: 4  # Number of worker processes per pod (--nprocs)
+    processes: 2  # Number of worker processes per pod (--nworkers)
     threads: 1    # Number of threads per worker process (--nthreads)
     # Environment variables for workers
     env:
