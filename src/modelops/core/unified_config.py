@@ -79,10 +79,10 @@ class WorkspaceSpec(BaseModel):
     scheduler_env: list[dict[str, str]] = Field(default_factory=list)
     worker_image: str = "ghcr.io/institutefordiseasemodeling/modelops-dask-worker:latest"
     worker_replicas: int = 2
-    worker_processes: int = 2  # Multiple processes for pure Python simulations
+    worker_processes: int = 4  # More processes for heavy simulation workloads
     worker_threads: int = 1  # Single thread per process to avoid GIL contention
-    worker_memory: str = "12Gi"  # More memory to prevent aggregation OOM
-    worker_cpu: str = "4"  # Match requests with per-process concurrency
+    worker_memory: str = "24Gi"  # More memory to handle larger aggregations
+    worker_cpu: str = "6"  # Better utilization of D8s_v3 nodes (8 vCPU)
     worker_env: list[dict[str, str]] = Field(
         default_factory=lambda: [
             {"name": "DASK_DISTRIBUTED__WORKER__MEMORY__TARGET", "value": "0.6"},
