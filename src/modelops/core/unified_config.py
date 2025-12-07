@@ -83,7 +83,14 @@ class WorkspaceSpec(BaseModel):
     worker_threads: int = 1  # Single thread per process to avoid GIL contention
     worker_memory: str = "12Gi"  # More memory to prevent aggregation OOM
     worker_cpu: str = "4"  # Match requests with per-process concurrency
-    worker_env: list[dict[str, str]] = Field(default_factory=list)
+    worker_env: list[dict[str, str]] = Field(
+        default_factory=lambda: [
+            {"name": "DASK_DISTRIBUTED__WORKER__MEMORY__TARGET", "value": "0.6"},
+            {"name": "DASK_DISTRIBUTED__WORKER__MEMORY__SPILL", "value": "0.7"},
+            {"name": "DASK_DISTRIBUTED__WORKER__MEMORY__PAUSE", "value": "0.8"},
+            {"name": "DASK_DISTRIBUTED__WORKER__MEMORY__TERMINATE", "value": "0.95"},
+        ]
+    )
     # Autoscaling configuration
     autoscaling_enabled: bool = True
     autoscaling_min_workers: int = 2
