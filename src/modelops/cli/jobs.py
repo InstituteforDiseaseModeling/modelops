@@ -653,6 +653,9 @@ def submit(
         info("  kubectl -n modelops-dask-dev get pods -l app=dask-worker")
         info("  kubectl -n modelops-dask-dev describe pod <worker-pod-name>")
         info("  kubectl -n modelops-dask-dev logs pod/<worker-pod-name>")
+        info("\n To scale workers (if needed for large jobs):")
+        info(f"  kubectl scale deployment dask-workers --replicas=20 -n modelops-dask-{env}")
+        info("  # Adjust replica count (20) based on your needs and cluster capacity")
 
     except Exception as e:
         error(f"Job submission failed: {e}")
