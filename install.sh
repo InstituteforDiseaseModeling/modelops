@@ -315,6 +315,28 @@ install_modelops() {
             exit 1
         fi
     fi
+
+    echo ""
+    # Explicitly install modelops-calabaria to ensure cb command is available
+    # (uv tool install may not properly handle [full] extras with git dependencies)
+    info "Installing Calabaria (cb command)..."
+    if uv tool install --force --python ">=3.12" "git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git" 2>/dev/null; then
+        success "Calabaria (cb) installed"
+    else
+        # Try with full path if uv is not in PATH yet
+        if [ -x "$HOME/.local/bin/uv" ]; then
+            "$HOME/.local/bin/uv" tool install --force --python ">=3.12" "git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git"
+            if [ $? -eq 0 ]; then
+                success "Calabaria (cb) installed"
+            else
+                error "Failed to install Calabaria"
+                exit 1
+            fi
+        else
+            error "Failed to install Calabaria"
+            exit 1
+        fi
+    fi
 }
 
 # Configure PATH
@@ -424,6 +446,14 @@ verify_installation() {
             echo -e "  ${GREEN}✓${NC} mops bundle available"
         else
             echo -e "  ${YELLOW}⚠${NC} mops bundle not available (modelops-bundle may not be installed)"
+            tools_found=false
+        fi
+        # Check if cb command is available
+        if [ -x "$HOME/.local/bin/cb" ]; then
+            echo -e "  ${GREEN}✓${NC} cb installed"
+        else
+            echo -e "  ${RED}✗${NC} cb not found (modelops-calabaria failed to install)"
+            echo -e "      ${CYAN}Tip:${NC} Try manually: uv tool install git+https://github.com/institutefordiseasemodeling/modelops-calabaria.git"
             tools_found=false
         fi
     else
