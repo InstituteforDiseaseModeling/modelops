@@ -267,8 +267,6 @@ class DaskWorkspace(pulumi.ComponentResource):
                     # For git operations via HTTPS
                     "GIT_USERNAME": "x-access-token",
                     "GIT_PASSWORD": github_token,
-                    # For UV to use when installing from private GitHub repos
-                    "UV_EXTRA_INDEX_URL": f"git+https://x-access-token:{github_token}@github.com/",
                 },
                 opts=pulumi.ResourceOptions(provider=k8s_provider, parent=self, depends_on=[ns]),
             )
