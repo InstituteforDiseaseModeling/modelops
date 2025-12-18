@@ -5,23 +5,17 @@ This model uses the Starsim agent-based modeling framework to simulate
 SIR (Susceptible-Infected-Recovered) dynamics with proper contact networks.
 """
 
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import numpy as np
 import polars as pl
 import starsim as ss
 import modelops_calabaria as cb
-from modelops_calabaria import BaseModel, ParameterSpace, ParameterSet, ParameterSpec, Scalar, model_output
+from modelops_calabaria import (
+    BaseModel, ParameterSpace, ParameterSet, ParameterSpec,
+    ConfigurationSpace, ConfigSpec,
+    Scalar, model_output
+)
 from typing import Mapping
-
-
-@dataclass(frozen=True)
-class SIRConfig:
-    """Fixed configuration for SIR simulations."""
-    population: int = 1000
-    initial_infected: int = 2
-    simulation_days: int = 60
-    network_contacts: int = 4  # Average degree in contact network
 
 
 class StarsimSIR(BaseModel):
@@ -33,32 +27,26 @@ class StarsimSIR(BaseModel):
     dynamics vary between runs based on the random seed.
     """
 
-    def __init__(self, space: Optional[ParameterSpace] = None):
-        """Initialize the SIR model with parameter space."""
-        if space is None:
-            space = self.parameter_space()
-        self.config = SIRConfig()
-        # Pass empty base_config to BaseModel
-        super().__init__(space, base_config={})
+    PARAMS = ParameterSpace((
+        ParameterSpec("beta", 0.01, 0.2, "float", doc="Transmission probability per contact"),
+        ParameterSpec("dur_inf", 3.0, 10.0, "float", doc="Duration of infection (days)"),
+    ))
+
+    CONFIG = ConfigurationSpace((
+        ConfigSpec("population", default=1000, doc="Total population size"),
+        ConfigSpec("initial_infected", default=2, doc="Initial number of infected individuals"),
+        ConfigSpec("simulation_days", default=60, doc="Number of days to simulate"),
+        ConfigSpec("network_contacts", default=4, doc="Average degree in contact network"),
+    ))
+
+    def __init__(self):
+        """Initialize the SIR model."""
+        super().__init__()
 
         # Network will be created in build_sim to avoid memory issues
         self.network = None
         # Store initial infected agent IDs (deterministic)
-        self.initial_infected_ids = list(range(self.config.initial_infected))
-
-    @staticmethod
-    def parameter_space() -> ParameterSpace:
-        """
-        Define the parameter space for SIR model calibration.
-
-        Only disease dynamics parameters are included:
-        - beta: Transmission probability per contact
-        - dur_inf: Duration of infection (days)
-        """
-        return ParameterSpace([
-            ParameterSpec("beta", 0.01, 0.2, "float", doc="Transmission probability per contact"),
-            ParameterSpec("dur_inf", 3.0, 10.0, "float", doc="Duration of infection (days)"),
-        ])
+        self.initial_infected_ids = list(range(self.base_config["initial_infected"]))
 
     def build_sim(self, params: ParameterSet, config: Mapping[str, Any]) -> Dict[str, Any]:
         """
@@ -66,19 +54,19 @@ class StarsimSIR(BaseModel):
 
         Args:
             params: Parameter set with beta and dur_inf
-            config: Additional configuration (unused for compatibility)
+            config: Configuration set from base_config (may be patched by scenarios)
 
         Returns:
             Dictionary containing simulation state
         """
         # Create network here to avoid memory issues with thousands of instances
         if self.network is None:
-            self.network = ss.RandomNet(n_contacts=self.config.network_contacts)
+            self.network = ss.RandomNet(n_contacts=int(config["network_contacts"]))
 
         return {
             'beta': params['beta'],
             'dur_inf': params['dur_inf'],
-            'config': self.config,
+            'config': dict(config),  # Convert Mapping to dict for state
             'network': self.network,
             'initial_infected_ids': self.initial_infected_ids,
         }
@@ -111,9 +99,9 @@ class StarsimSIR(BaseModel):
         sim = ss.Sim(
             diseases=sir,
             networks=state['network'],  # Use the fixed network
-            n_agents=config.population,
+            n_agents=int(config['population']),
             start=0,
-            stop=config.simulation_days,
+            stop=int(config['simulation_days']),
             rand_seed=seed,
             verbose=0
         )
