@@ -1369,7 +1369,7 @@ wheels = [
 [[package]]
 name = "modelops-calabaria"
 version = "0.1.0"
-source = { git = "https://github.com/institutefordiseasemodeling/modelops-calabaria.git#9ff75d8372632927821713130061e81e349a89a8" }
+source = { git = "https://github.com/institutefordiseasemodeling/modelops-calabaria.git#3f980a3de92f06aa83a418f143ec6b975032b0c0" }
 dependencies = [
     { name = "matplotlib" },
     { name = "modelops-contracts" },
