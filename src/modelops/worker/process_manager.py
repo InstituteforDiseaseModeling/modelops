@@ -35,6 +35,45 @@ from .jsonrpc import JSONRPCClient
 logger = logging.getLogger(__name__)
 
 
+class OutOfMemoryError(Exception):
+    """Raised when a subprocess is killed due to OOM.
+
+    This error is NOT retryable - the task exceeded memory limits.
+    Increase worker memory or reduce task size.
+    """
+    pass
+
+
+def _check_exit_code_for_oom(exit_code: int | None, context: str = "") -> str | None:
+    """Check if an exit code indicates OOM kill.
+
+    Args:
+        exit_code: Process exit code (None if still running)
+        context: Additional context for error message
+
+    Returns:
+        Error message if OOM detected, None otherwise
+    """
+    if exit_code is None:
+        return None
+
+    # Exit code 137 = 128 + 9 (SIGKILL) - typically OOM killer
+    # Exit code 139 = 128 + 11 (SIGSEGV) - can also indicate memory issues
+    if exit_code == 137:
+        return (
+            f"Process killed by OOM (exit code 137). {context}"
+            f"Memory limit exceeded - this task requires more memory than available. "
+            f"This error is NOT retryable. Increase worker memory or reduce task size."
+        )
+    elif exit_code == 139:
+        return (
+            f"Process killed by SIGSEGV (exit code 139). {context}"
+            f"Segmentation fault - likely memory corruption from excessive allocation. "
+            f"This error is NOT retryable."
+        )
+    return None
+
+
 @dataclass
 class WarmProcess:
     """A warm subprocess ready to execute tasks."""
@@ -624,10 +663,19 @@ class WarmProcessManager:
         except Exception as e:
             # Process might be broken, remove it
             tail = process.tail_stderr()
+
+            # Check if process died from OOM before logging/re-raising
+            exit_code = process.process.poll()
+            oom_msg = _check_exit_code_for_oom(
+                exit_code,
+                context=f"Task: {entrypoint}, bundle: {bundle_digest[:12]}. "
+            )
+
             if tail:
                 logger.error("Task execution failed: %s\n--- subprocess stderr tail ---\n%s", e, tail)
             else:
                 logger.error("Task execution failed: %s", e)
+
             process.terminate()
             # Can't reliably remove by digest when force_fresh_venv is True
             # Just remove the matching process object if we find it
@@ -635,6 +683,12 @@ class WarmProcessManager:
                 if proc is process:
                     del self._processes[key]
                     break
+
+            # Raise OOM-specific error if detected - this should NOT be retried
+            if oom_msg:
+                logger.error(f"OOM detected: {oom_msg}")
+                raise OutOfMemoryError(oom_msg) from e
+
             raise
 
     def execute_aggregation(
@@ -680,10 +734,19 @@ class WarmProcessManager:
 
         except Exception as e:
             tail = process.tail_stderr()
+
+            # Check if process died from OOM before logging/re-raising
+            exit_code = process.process.poll()
+            oom_msg = _check_exit_code_for_oom(
+                exit_code,
+                context=f"Aggregation: {target_entrypoint}, {len(sim_returns)} results. "
+            )
+
             if tail:
                 logger.error("Aggregation execution failed: %s\n--- subprocess stderr tail ---\n%s", e, tail)
             else:
                 logger.error("Aggregation execution failed: %s", e)
+
             # Process might be dead, remove it
             process.terminate()
             # Can't reliably remove by digest when force_fresh_venv is True
@@ -692,6 +755,12 @@ class WarmProcessManager:
                 if proc is process:
                     del self._processes[key]
                     break
+
+            # Raise OOM-specific error if detected - this should NOT be retried
+            if oom_msg:
+                logger.error(f"OOM detected during aggregation: {oom_msg}")
+                raise OutOfMemoryError(oom_msg) from e
+
             raise
 
     def shutdown_all(self):
