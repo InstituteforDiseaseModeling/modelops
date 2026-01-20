@@ -96,7 +96,7 @@ class LocalFileBackend:
                 while parent != self.base_path and not any(parent.iterdir()):
                     parent.rmdir()
                     parent = parent.parent
-            except:
+            except (OSError, StopIteration):
                 pass  # Ignore errors when cleaning up directories
 
         except KeyError:

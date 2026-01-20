@@ -83,8 +83,9 @@ def push_bundle(bundle_dir: Path, registry: str) -> str:
     env = os.environ.copy()
     env["MODELOPS_BUNDLE_REGISTRY"] = registry
 
-    # Use modelops-bundle's Python directly
-    bundle_python = "/Users/vsb/projects/work/modelops-bundle/.venv/bin/python"
+    # Use the current Python interpreter (modelops-bundle should be installed in same env)
+    import sys
+    bundle_python = sys.executable
 
     # Check if already initialized (has .modelops-bundle directory)
     if not (bundle_dir / ".modelops-bundle").exists():
@@ -364,7 +365,7 @@ def smoke_test(
                     if result == 0:
                         success("Port-forward established successfully")
                         break
-                except:
+                except (OSError, socket.error):
                     pass
             else:
                 error("Port-forward failed to establish after 10 seconds")

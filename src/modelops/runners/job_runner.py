@@ -32,6 +32,35 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class MissingEnvironmentVariableError(Exception):
+    """Raised when a required environment variable is missing."""
+
+    pass
+
+
+def _get_required_env(name: str, description: str) -> str:
+    """Get a required environment variable with helpful error message.
+
+    Args:
+        name: Environment variable name
+        description: Human-readable description of what this variable is for
+
+    Returns:
+        Environment variable value
+
+    Raises:
+        MissingEnvironmentVariableError: If variable is not set
+    """
+    value = os.environ.get(name)
+    if not value:
+        raise MissingEnvironmentVariableError(
+            f"Required environment variable {name} is not set.\n"
+            f"Purpose: {description}\n"
+            f"This variable should be set by the Kubernetes Job configuration."
+        )
+    return value
+
+
 def load_job_from_blob() -> Job:
     """Download and deserialize job from blob storage.
 
@@ -39,11 +68,15 @@ def load_job_from_blob() -> Job:
         Deserialized Job object (SimJob or CalibrationJob)
 
     Raises:
+        MissingEnvironmentVariableError: If required environment variables are missing
         Exception: If download or deserialization fails
     """
-    # Get configuration from environment
-    blob_key = os.environ["JOB_BLOB_KEY"]
-    conn_str = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
+    # Get configuration from environment with validation
+    blob_key = _get_required_env("JOB_BLOB_KEY", "Blob storage key for the job specification")
+    conn_str = _get_required_env(
+        "AZURE_STORAGE_CONNECTION_STRING",
+        "Azure Storage connection string for accessing job blobs",
+    )
 
     logger.info(f"Downloading job from blob: {blob_key}")
 

@@ -77,7 +77,7 @@ class RegistryService(BaseService):
                     role_assignment = registry.setup_cluster_pull_permissions(infra_ref)
                     if role_assignment:
                         pulumi.export("cluster_pull_configured", pulumi.Output.from_input(True))
-                except:
+                except Exception:
                     pulumi.export("cluster_pull_configured", pulumi.Output.from_input(False))
 
             # Export outputs at stack level for StackReference access

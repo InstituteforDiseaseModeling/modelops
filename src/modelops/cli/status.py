@@ -84,12 +84,12 @@ def get_all_stacks(env: str | None = None) -> dict[str, list[dict[str, Any]]]:
                                 info_dict["outputs"] = outputs
                             else:
                                 info_dict["status"] = "⚠ Not deployed"
-                        except:
+                        except Exception:
                             # Keep Unknown status if we can't get outputs
                             pass
 
                         stack_infos.append(info_dict)
-                    except:
+                    except (ValueError, KeyError):
                         # If we can't parse the stack name, skip it
                         continue
 

@@ -1,12 +1,15 @@
 """Unified infrastructure orchestration service."""
 
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..components.specs.infra import UnifiedInfraSpec
+
+logger = logging.getLogger(__name__)
 from .base import ComponentState, ComponentStatus, InfraResult
 from .cluster_service import ClusterService
 from .registry_service import RegistryService
@@ -116,12 +119,11 @@ class InfrastructureService:
             return result
 
         # Provision in dependency order
-        if verbose:
-            print(f"[DEBUG] provision_order: {provision_order}")
-            print(f"[DEBUG] spec.registry: {spec.registry}")
-            print(f"[DEBUG] spec.storage: {spec.storage}")
-            print(f"[DEBUG] spec.cluster: {spec.cluster}")
-            print(f"[DEBUG] spec.workspace: {spec.workspace}")
+        logger.debug(f"provision_order: {provision_order}")
+        logger.debug(f"spec.registry: {spec.registry}")
+        logger.debug(f"spec.storage: {spec.storage}")
+        logger.debug(f"spec.cluster: {spec.cluster}")
+        logger.debug(f"spec.workspace: {spec.workspace}")
 
         for component in provision_order:
             print(f"\n→ Provisioning {component}...")
@@ -157,8 +159,7 @@ class InfrastructureService:
                     )
 
                 elif component == "registry" and spec.registry:
-                    if verbose:
-                        print("[DEBUG] Provisioning registry component...")
+                    logger.debug("Provisioning registry component...")
                     # Registry needs Azure settings - inherit from cluster if available
                     registry_config = spec.registry.copy()
                     if spec.cluster:
@@ -184,19 +185,15 @@ class InfrastructureService:
                         verbose=verbose,
                     )
 
-                    if verbose:
-                        import json
-
-                        print(
-                            f"[DEBUG] Registry outputs from create(): {json.dumps(outputs, indent=2, default=str)}"
-                        )
+                    logger.debug(
+                        f"Registry outputs from create(): {json.dumps(outputs, indent=2, default=str)}"
+                    )
 
                 elif component == "cluster" and spec.cluster:
                     outputs = self.cluster_service.provision(config=spec.cluster, verbose=verbose)
 
                 elif component == "storage" and spec.storage:
-                    if verbose:
-                        print("[DEBUG] Provisioning storage component...")
+                    logger.debug("Provisioning storage component...")
                     # Storage should be standalone if cluster isn't being provisioned
                     standalone_storage = "cluster" not in components or not spec.cluster
                     outputs = self.storage_service.provision(
@@ -486,7 +483,7 @@ class InfrastructureService:
             try:
                 outputs = automation.outputs(component, self.env, refresh=False)
                 return get_safe_outputs(outputs, show_secrets) if outputs else {}
-            except:
+            except Exception:
                 return {}
 
         # Get all outputs
@@ -496,7 +493,7 @@ class InfrastructureService:
                 outputs = automation.outputs(comp, self.env, refresh=False)
                 if outputs:
                     all_outputs[comp] = get_safe_outputs(outputs, show_secrets)
-            except:
+            except Exception:
                 pass
 
         return all_outputs
@@ -554,5 +551,5 @@ class InfrastructureService:
                         indent=2,
                     )
                 )
-            except:
+            except (OSError, IOError):
                 pass  # Don't fail on log writing errors

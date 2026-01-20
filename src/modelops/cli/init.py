@@ -159,7 +159,7 @@ def init(
         if result.returncode == 0:
             version = result.stdout.strip()
             info(f"  • Azure CLI: found ({version})")
-    except:
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired, OSError):
         info("  • Azure CLI: found")
 
     # Get logged-in user
@@ -205,7 +205,7 @@ def init(
         versions = get_aks_versions(subscription["id"], location)
         if versions:
             k8s_version = versions[0]
-    except:
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
         pass
 
     info("\n✓ Using defaults:")
@@ -235,7 +235,7 @@ def init(
                 k8s_version = typer.prompt("  Kubernetes version", default=versions[0])
             else:
                 k8s_version = typer.prompt("  Kubernetes version", default=k8s_version)
-        except:
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
             k8s_version = typer.prompt("  Kubernetes version", default=k8s_version)
 
         # Worker configuration

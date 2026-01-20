@@ -168,27 +168,96 @@ def list_environments() -> list[str]:
     return sorted(envs)
 
 
+class LocalDevConfigError(Exception):
+    """Raised when local development configuration is missing required settings."""
+
+    pass
+
+
+def _require_env(name: str, purpose: str) -> str:
+    """Get a required environment variable or raise with helpful message.
+
+    Args:
+        name: Environment variable name
+        purpose: Human-readable description of what this variable is for
+
+    Returns:
+        Environment variable value
+
+    Raises:
+        LocalDevConfigError: If variable is not set
+    """
+    value = os.environ.get(name)
+    if not value:
+        raise LocalDevConfigError(
+            f"Required environment variable {name} is not set.\n"
+            f"Purpose: {purpose}\n\n"
+            f"For local development with Azurite, set these environment variables:\n"
+            f"  export AZURITE_CONNECTION_STRING='DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=<your-key>;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1'\n\n"
+            f"Or run 'make start' in the modelops directory to start local services with proper configuration."
+        )
+    return value
+
+
+def _get_azurite_connection_string() -> str:
+    """Get Azurite connection string from environment.
+
+    Requires AZURITE_CONNECTION_STRING to be explicitly set.
+    No hardcoded defaults - configuration must be explicit.
+
+    Returns:
+        Connection string for Azurite
+
+    Raises:
+        LocalDevConfigError: If connection string is not configured
+    """
+    return _require_env(
+        "AZURITE_CONNECTION_STRING",
+        "Azure Storage connection string for local Azurite emulator",
+    )
+
+
 def create_local_dev_config() -> Path:
     """Create local development config with Docker registry and Azurite.
 
-    This is called when local Docker containers are detected.
+    Requires explicit configuration via environment variables.
+    No hardcoded defaults are used.
+
+    Required environment variables:
+        - AZURITE_CONNECTION_STRING: Full connection string for Azurite
+        - LOCAL_REGISTRY: Registry URL (e.g., localhost:5555)
 
     Returns:
         Path to created config file
+
+    Raises:
+        LocalDevConfigError: If required configuration is missing
     """
-    # Create local dev config using contract models
-    registry = RegistryConfig(provider="docker", login_server="localhost:5555", requires_auth=False)
+    # Require explicit configuration - no hardcoded defaults
+    local_registry = _require_env("LOCAL_REGISTRY", "Docker registry URL for local development")
+    connection_string = _get_azurite_connection_string()
+
+    # Parse connection string to extract endpoint info
+    # Format: DefaultEndpointsProtocol=http;AccountName=X;AccountKey=Y;BlobEndpoint=Z
+    endpoint = None
+    for part in connection_string.split(";"):
+        if part.startswith("BlobEndpoint="):
+            endpoint = part.split("=", 1)[1]
+            break
+
+    if not endpoint:
+        raise LocalDevConfigError(
+            "AZURITE_CONNECTION_STRING must contain BlobEndpoint.\n"
+            "Expected format: DefaultEndpointsProtocol=http;AccountName=X;AccountKey=Y;BlobEndpoint=http://host:port/account"
+        )
+
+    registry = RegistryConfig(provider="docker", login_server=local_registry, requires_auth=False)
 
     storage = StorageConfig(
         provider="azure",  # Azurite is Azure-compatible
         container="bundle-blobs",
-        connection_string=(
-            "DefaultEndpointsProtocol=http;"
-            "AccountName=devstoreaccount1;"
-            "AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;"
-            "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1"
-        ),
-        endpoint="http://127.0.0.1:10000/devstoreaccount1",
+        connection_string=connection_string,
+        endpoint=endpoint,
     )
 
     config = BundleEnvironment(
@@ -236,7 +305,8 @@ def detect_local_containers() -> bool:
             has_registry = any("registry" in c.lower() for c in containers)
             has_azurite = any("azurite" in c.lower() for c in containers)
             return has_registry or has_azurite
-    except:
+    except (subprocess.SubprocessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # Docker not available or command failed - this is expected in many environments
         pass
 
     return False

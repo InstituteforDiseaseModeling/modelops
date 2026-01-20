@@ -357,7 +357,7 @@ def download(
             try:
                 config = ModelOpsConfig.load()
                 actual_env = env or config.environment or "dev"
-            except:
+            except (FileNotFoundError, ValueError, AttributeError):
                 actual_env = env or "dev"
 
             # Try to get from storage component

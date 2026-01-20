@@ -147,6 +147,12 @@ class DaskWorkspace(pulumi.ComponentResource):
                 per_process_value = float(value) / worker_processes
                 memory_limit = f"{per_process_value:.1f}{unit}"
 
+        # Scheduler replicas - NOTE: Dask scheduler is NOT designed for multi-replica HA.
+        # Multiple scheduler replicas would cause workers to connect to different schedulers,
+        # breaking job coordination. For HA, we use PodDisruptionBudget instead.
+        # Only set replicas > 1 if using a custom HA-aware scheduler setup.
+        scheduler_replicas = scheduler_config.get("replicas", 1)
+
         # Node selectors
         scheduler_node_selector = scheduler_config.get("nodeSelector", {})
         worker_node_selector = workers_config.get("nodeSelector", {})
@@ -355,6 +361,11 @@ class DaskWorkspace(pulumi.ComponentResource):
             worker_annotations["checksum/bundle-credentials"] = secret_checksum
 
         # Create Dask scheduler deployment
+        # NOTE: Dask's built-in scheduler is stateful and single-instance by design.
+        # For true HA, consider:
+        # 1. PodDisruptionBudget (implemented below) to prevent eviction during maintenance
+        # 2. Fast restart via liveness/readiness probes
+        # 3. Persistent state with Redis backend (requires additional setup)
         scheduler = k8s.apps.v1.Deployment(
             f"{name}-scheduler",
             metadata=k8s.meta.v1.ObjectMetaArgs(
@@ -363,7 +374,7 @@ class DaskWorkspace(pulumi.ComponentResource):
                 labels={"modelops.io/component": "scheduler", "app": "dask-scheduler"},
             ),
             spec=k8s.apps.v1.DeploymentSpecArgs(
-                replicas=1,
+                replicas=scheduler_replicas,
                 selector=k8s.meta.v1.LabelSelectorArgs(match_labels={"app": "dask-scheduler"}),
                 template=k8s.core.v1.PodTemplateSpecArgs(
                     metadata=k8s.meta.v1.ObjectMetaArgs(

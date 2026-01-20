@@ -285,7 +285,7 @@ class StackNaming:
 
             config = ModelOpsConfig.get_instance()
             org = config.pulumi.organization
-        except:
+        except (ImportError, AttributeError, FileNotFoundError):
             # Config not available, use default
             pass
 

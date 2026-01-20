@@ -43,7 +43,7 @@ def atomic_write(path: str | Path, content: bytes) -> None:
             # Clean up temp file on failure
             try:
                 tmp_path.unlink()
-            except:
+            except OSError:
                 pass
             raise
 

@@ -249,7 +249,7 @@ class WorkspaceService(BaseService):
                 stack_name = s.name
                 try:
                     stack_env = StackNaming.parse_stack_name(stack_name)["env"]
-                except:
+                except (ValueError, KeyError):
                     stack_env = stack_name
 
                 status = "Unknown"
@@ -269,7 +269,7 @@ class WorkspaceService(BaseService):
                         resources = state.deployment.get("resources", [])
                         has_real = any(r.get("type") != "pulumi:pulumi:Stack" for r in resources)
                         status = "Deployed" if has_real else "Not deployed"
-                except:
+                except Exception:
                     pass
 
                 workspaces.append({"env": stack_env, "stack": stack_name, "status": status})

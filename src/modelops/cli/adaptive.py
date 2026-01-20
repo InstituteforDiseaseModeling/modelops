@@ -91,7 +91,7 @@ def up(
         try:
             # Try to reference storage stack if it exists
             storage_ref = StackNaming.ref("storage", env)
-        except:
+        except (ValueError, FileNotFoundError, AttributeError):
             # Storage stack doesn't exist, adaptive will run without storage integration
             pass
 

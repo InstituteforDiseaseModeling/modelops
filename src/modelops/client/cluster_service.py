@@ -58,7 +58,7 @@ class ClusterService(BaseService):
                             registry_id = pulumi.Output.from_input(registry_id_val["value"])
                         else:
                             registry_id = pulumi.Output.from_input(registry_id_val)
-                except:
+                except Exception:
                     # Registry doesn't exist yet or has no outputs
                     pulumi.log.warn(
                         "Registry stack not found or has no outputs, ACR permissions will be skipped"
@@ -148,7 +148,7 @@ class ClusterService(BaseService):
             outputs = automation.outputs("infra", self.env, refresh=False)
             if outputs:
                 cluster_name = get_output_value(outputs, "cluster_name")
-        except:
+        except Exception:
             pass  # Ignore errors getting outputs
 
         # State manager handles:
@@ -268,7 +268,7 @@ class ClusterService(BaseService):
                     outputs = automation.outputs(component, self.env, refresh=False)
                     if outputs:
                         dependent.append(component)
-                except:
+                except Exception:
                     pass
         return dependent
 
@@ -309,7 +309,7 @@ class ClusterService(BaseService):
                 return result.returncode == 0
             finally:
                 os.unlink(temp_path)
-        except:
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired, OSError, IOError):
             return False
 
     def _update_kubeconfig(self, resource_group: str, cluster_name: str):

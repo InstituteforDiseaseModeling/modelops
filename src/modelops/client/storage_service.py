@@ -175,7 +175,7 @@ class StorageService(BaseService):
             if conn_str:
                 return conn_str if show_secrets else "****"
             return None
-        except:
+        except Exception:
             return None
 
     def get_info(self) -> dict[str, Any]:
@@ -207,7 +207,7 @@ class StorageService(BaseService):
                 "containers": container_names,
                 "environment": self.env,
             }
-        except:
+        except Exception:
             return {}
 
     def export_env_vars(self, output_file: str | None = None) -> str:

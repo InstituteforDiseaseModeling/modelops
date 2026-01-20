@@ -209,7 +209,8 @@ def namespace_exists(namespace: str, env: str) -> bool:
     try:
         v1.read_namespace(name=namespace)
         return True
-    except:
+    except Exception:
+        # Namespace doesn't exist or API error - either way, treat as not existing
         return False
     finally:
         cleanup_temp_kubeconfig(temp_path)

@@ -272,7 +272,7 @@ class SubprocessRunner:
             os.close(temp_fd)
             # Atomic rename (on same filesystem)
             os.replace(temp_path, path)
-        except:
+        except (OSError, IOError):
             os.close(temp_fd)
             os.unlink(temp_path)
             raise
