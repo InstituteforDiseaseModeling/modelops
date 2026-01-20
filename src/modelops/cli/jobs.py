@@ -1061,12 +1061,12 @@ def _perform_sync(
                         if k8s_status == JobStatus.SUCCEEDED and validate:
                             # Transition to VALIDATING if currently RUNNING
                             if job.status == JobStatus.RUNNING:
-                                registry.update_job_status(job.job_id, JobStatus.VALIDATING)
+                                registry.update_status(job.job_id, JobStatus.VALIDATING)
                                 # Note: A separate validation process will handle the actual validation
                                 if verbose:
                                     info(f"  {job.job_id}: {job.status.value} → validating")
                         else:
-                            registry.update_job_status(job.job_id, k8s_status)
+                            registry.update_status(job.job_id, k8s_status)
                             if verbose:
                                 info(f"  {job.job_id}: {job.status.value} → {k8s_status.value}")
 
@@ -1077,8 +1077,8 @@ def _perform_sync(
                                 )
                         updated_count += 1
                     except Exception as e:
-                        if verbose:
-                            warning(f"  Failed to update {job.job_id}: {e}")
+                        # Always warn on update failures - silent failures are dangerous
+                        warning(f"  Failed to update {job.job_id}: {e}")
 
         except Exception as e:
             # Check if it's a 404 (job doesn't exist)
@@ -1088,16 +1088,16 @@ def _perform_sync(
                 # Mark as failed if it was running but now missing
                 if job.status == JobStatus.RUNNING and not dry_run:
                     try:
-                        registry.update_job_status(job.job_id, JobStatus.FAILED)
+                        registry.update_status(job.job_id, JobStatus.FAILED)
                         if verbose:
                             info("    → marked as failed")
                         updated_count += 1
                     except Exception as update_e:
-                        if verbose:
-                            warning(f"  Failed to update {job.job_id}: {update_e}")
+                        # Always warn on update failures
+                        warning(f"  Failed to update {job.job_id}: {update_e}")
             else:
-                if verbose:
-                    warning(f"  Error checking {job.job_id}: {e}")
+                # Always warn on K8s errors
+                warning(f"  Error checking {job.job_id}: {e}")
 
     return updated_count
 
