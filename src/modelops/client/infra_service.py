@@ -213,8 +213,6 @@ class InfrastructureService:
                 result.outputs[component] = outputs or {}
 
                 if verbose:
-                    import json
-
                     print(
                         f"[DEBUG] Storing outputs for {component}: {json.dumps(outputs or {}, indent=2, default=str)}"
                     )
