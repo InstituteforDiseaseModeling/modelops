@@ -638,16 +638,12 @@ def submit(
             if postgres_url:
                 import re
                 info("\n Optuna Dashboard (for calibration monitoring):")
-                info(f"  # Terminal 1: port-forward PostgreSQL")
-                info(f"  kubectl -n modelops-adaptive-{env}-default port-forward svc/postgres 5433:5432")
-                info(f"  # Terminal 2: run dashboard")
+                info(f"  kubectl -n modelops-adaptive-{env}-default port-forward svc/postgres 5433:5432 &")
                 local_url = re.sub(r'@[^:]+:\d+/', '@localhost:5433/', postgres_url)
                 info(f'  uvx --with psycopg2-binary optuna-dashboard "{local_url}"')
             else:
                 info("\n Optuna storage: in-memory (PostgreSQL not available)")
                 info("  To enable persistent storage: mops adaptive up optuna-infra.yaml")
-
-        success(f"\n✓ {'Calibration' if is_calibration else 'Simulation'} job submitted")
 
     except Exception as e:
         error(f"Job submission failed: {e}")
