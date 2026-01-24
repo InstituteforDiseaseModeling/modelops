@@ -597,35 +597,10 @@ def submit(
 
     try:
         if is_calibration:
-            # Submit calibration job
-            import uuid
-
-            from modelops_contracts import CalibrationJob, TargetSpec
-
-            # Create target spec from calibration spec
-            target_spec = TargetSpec(
-                data=job_obj.target_data,
-                loss_function="default",
-                metadata={"targets": job_obj.target_data.get("target_entrypoints", [])},
+            # Submit calibration job using proper client method
+            job_id = client.submit_calibration_job(
+                spec=job_obj, bundle_strategy="explicit", bundle_ref=bundle_ref
             )
-
-            # Create calibration job
-            # Add model and scenario to algorithm_config for the runner
-            algorithm_config = job_obj.algorithm_config.copy()
-            algorithm_config["model"] = job_obj.model
-            algorithm_config["scenario"] = job_obj.scenario
-
-            calib_job = CalibrationJob(
-                job_id=f"calib-{uuid.uuid4().hex[:8]}",
-                algorithm=job_obj.algorithm,
-                bundle_ref=bundle_ref,
-                target_spec=target_spec,
-                max_iterations=job_obj.max_iterations,
-                convergence_criteria=job_obj.convergence_criteria,
-                algorithm_config=algorithm_config,
-            )
-
-            job_id = client.submit_job(calib_job)
         else:
             # Submit simulation job
             job_id = client.submit_sim_job(
@@ -656,6 +631,23 @@ def submit(
         info("\n To scale workers (if needed for large jobs):")
         info(f"  kubectl scale deployment dask-workers --replicas=20 -n modelops-dask-{env}")
         info("  # Adjust replica count (20) based on your needs and cluster capacity")
+
+        # Show Optuna dashboard info for calibration jobs
+        if is_calibration:
+            postgres_url = client._get_postgres_url()
+            if postgres_url:
+                import re
+                info("\n Optuna Dashboard (for calibration monitoring):")
+                info(f"  # Terminal 1: port-forward PostgreSQL")
+                info(f"  kubectl -n modelops-adaptive-{env}-default port-forward svc/postgres 5433:5432")
+                info(f"  # Terminal 2: run dashboard")
+                local_url = re.sub(r'@[^:]+:\d+/', '@localhost:5433/', postgres_url)
+                info(f'  uvx --with psycopg2-binary optuna-dashboard "{local_url}"')
+            else:
+                info("\n Optuna storage: in-memory (PostgreSQL not available)")
+                info("  To enable persistent storage: mops adaptive up optuna-infra.yaml")
+
+        success(f"\n✓ {'Calibration' if is_calibration else 'Simulation'} job submitted")
 
     except Exception as e:
         error(f"Job submission failed: {e}")
