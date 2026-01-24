@@ -65,7 +65,7 @@ BUILD_CONTEXT = .
 
 # === Development Targets ===
 
-.PHONY: help install test lint workspace-up workspace-down workspace-status rebuild-deploy infra-restart workspace-restart
+.PHONY: help install test lint workspace-up workspace-down workspace-status rebuild-deploy
 
 ## Display help
 help:
@@ -85,8 +85,6 @@ help:
 	@echo "  make benchmark-venv    # Benchmark warm pool vs fresh venv performance"
 	@echo ""
 	@echo "Deployment Commands:"
-	@echo "  make infra-restart    # Restart workspace + adaptive (full restart)"
-	@echo "  make workspace-restart # Restart workspace only"
 	@echo "  make rollout-images   # Force K8s to re-pull and deploy latest images"
 	@echo "  make show-deployed    # Show currently deployed versions"
 	@echo "  make verify-deploy    # Verify deployed images match expected"
@@ -751,41 +749,6 @@ azure-clean:
 	done
 	@echo "✓ Deletion initiated. Resources will be removed in the background."
 	@echo "Run 'make azure-check' in a few minutes to verify cleanup."
-
-# === Infrastructure Restart ===
-
-## Restart all infrastructure (workspace + adaptive)
-infra-restart:
-	@echo "Restarting all infrastructure for environment: $(ENV)"
-	@echo ""
-	@echo "Step 1: Bringing down adaptive infrastructure..."
-	@$(MOPS) adaptive down --env $(ENV) --yes 2>/dev/null || echo "  (adaptive not running or already down)"
-	@echo ""
-	@echo "Step 2: Bringing down workspace..."
-	@$(MOPS) workspace down --env $(ENV) --yes 2>/dev/null || echo "  (workspace not running or already down)"
-	@echo ""
-	@echo "Step 3: Bringing up workspace..."
-	@$(MOPS) workspace up --env $(ENV)
-	@echo ""
-	@echo "Step 4: Bringing up adaptive infrastructure..."
-	@if [ -f optuna-infra.yaml ]; then \
-		$(MOPS) adaptive up optuna-infra.yaml --env $(ENV); \
-	elif [ -f ../typhoidsim-calib-modelops/optuna-infra.yaml ]; then \
-		$(MOPS) adaptive up ../typhoidsim-calib-modelops/optuna-infra.yaml --env $(ENV); \
-	else \
-		echo "  ⚠️  No optuna-infra.yaml found, skipping adaptive"; \
-	fi
-	@echo ""
-	@echo "✓ Infrastructure restart complete"
-	@kubectl get pods -n $(NAMESPACE)
-
-## Restart workspace only (no adaptive)
-workspace-restart:
-	@echo "Restarting workspace for environment: $(ENV)"
-	@$(MOPS) workspace down --env $(ENV) --yes 2>/dev/null || true
-	@$(MOPS) workspace up --env $(ENV)
-	@echo "✓ Workspace restart complete"
-	@kubectl get pods -n $(NAMESPACE)
 
 ## Quick cleanup for common dev issues
 dev-cleanup:
