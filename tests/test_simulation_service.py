@@ -175,12 +175,11 @@ class TestDaskSimulationService:
     @patch.dict(
         os.environ, {"MODELOPS_BUNDLE_SOURCE": "file", "MODELOPS_BUNDLES_DIR": "/tmp/test_bundles"}
     )
+    @patch("modelops.services.dask_simulation.wait")
     @patch("dask.distributed.Client")
-    def test_dask_service_gather(self, mock_client_class):
+    def test_dask_service_gather(self, mock_client_class, mock_wait):
         """Test DaskSimulationService gather."""
         mock_client = Mock()
-        mock_results = [{"r1": b"1"}, {"r2": b"2"}]
-        mock_client.gather.return_value = mock_results
         mock_client_class.return_value = mock_client
 
         # Mock the client to avoid connection attempts
@@ -192,8 +191,16 @@ class TestDaskSimulationService:
         service.config = RuntimeConfig.from_env()
         service._plugin_installed = True  # Skip plugin installation
 
+        # Create mock futures with status and result
+        mock_results = [{"r1": b"1"}, {"r2": b"2"}]
+        mock_futures = []
+        for result in mock_results:
+            f = Mock()
+            f.status = "finished"
+            f.result.return_value = result
+            mock_futures.append(f)
+
         # Create DaskFutureAdapter wrappers
-        mock_futures = [Mock(), Mock()]
         wrapped_futures = []
         for f in mock_futures:
             adapter = Mock()
@@ -202,8 +209,9 @@ class TestDaskSimulationService:
 
         results = service.gather(wrapped_futures)
 
-        # Verify client.gather was called with unwrapped futures
-        mock_client.gather.assert_called_once_with(mock_futures)
+        # Verify wait was called with unwrapped futures
+        mock_wait.assert_called_once_with(mock_futures)
+        # Verify results match (gathered via .result() calls)
         assert results == mock_results
 
     @patch.dict(
