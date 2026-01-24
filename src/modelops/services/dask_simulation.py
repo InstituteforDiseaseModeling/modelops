@@ -24,7 +24,7 @@ completed - a consistent pattern indicating thread starvation.
 
 import logging
 
-from dask.distributed import Client, get_worker
+from dask.distributed import Client, get_worker, wait
 from dask.distributed import Future as DaskFuture
 from modelops_contracts import SimReturn, SimTask
 from modelops_contracts.ports import Future, SimulationService
@@ -250,28 +250,36 @@ class DaskSimulationService(SimulationService):
 
         return DaskFutureAdapter(dask_future)
 
-    def gather(self, futures: list[Future[SimReturn]]) -> list[SimReturn]:
+    def gather(self, futures: list[Future[SimReturn]]) -> list[SimReturn | Exception]:
         """Gather results from submitted tasks.
+
+        Waits for all futures in parallel, then collects results.
+        Failed tasks return their Exception object instead of raising,
+        allowing callers to handle partial failures gracefully.
 
         Args:
             futures: List of futures from submit()
 
         Returns:
-            List of simulation results in the same order as futures.
-            Failed tasks return their Exception object instead of raising.
+            List of results in same order as input futures.
+            Failed futures return Exception objects as values.
         """
-        # Extract Dask futures
         dask_futures = [f.wrapped for f in futures]
 
-        # Gather individually to return exceptions as values instead of raising.
-        # This allows callers to handle partial failures gracefully.
-        results = []
-        for future in dask_futures:
-            try:
-                results.append(future.result())
-            except Exception as e:
-                # Return exception as value so caller can handle it
-                results.append(e)
+        # Wait for ALL futures to complete (parallel wait)
+        # This is critical for performance - don't call .result() sequentially!
+        wait(dask_futures)
+
+        # All futures are now done - collect results (non-blocking)
+        results: list[SimReturn | Exception] = []
+        for f in dask_futures:
+            if getattr(f, "status", None) == "error":
+                results.append(f.exception())
+            else:
+                try:
+                    results.append(f.result())
+                except Exception as e:
+                    results.append(e)
         return results
 
     def submit_batch(self, tasks: list[SimTask]) -> list[Future[SimReturn]]:
