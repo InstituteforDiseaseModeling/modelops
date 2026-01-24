@@ -257,13 +257,22 @@ class DaskSimulationService(SimulationService):
             futures: List of futures from submit()
 
         Returns:
-            List of simulation results in the same order as futures
+            List of simulation results in the same order as futures.
+            Failed tasks return their Exception object instead of raising.
         """
         # Extract Dask futures
         dask_futures = [f.wrapped for f in futures]
 
-        # Gather all at once (preserves order)
-        return self.client.gather(dask_futures)
+        # Gather individually to return exceptions as values instead of raising.
+        # This allows callers to handle partial failures gracefully.
+        results = []
+        for future in dask_futures:
+            try:
+                results.append(future.result())
+            except Exception as e:
+                # Return exception as value so caller can handle it
+                results.append(e)
+        return results
 
     def submit_batch(self, tasks: list[SimTask]) -> list[Future[SimReturn]]:
         """Submit multiple tasks efficiently.
