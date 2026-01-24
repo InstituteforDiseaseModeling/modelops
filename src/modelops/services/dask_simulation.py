@@ -83,6 +83,10 @@ def _worker_run_task(task: SimTask) -> SimReturn:
     Returns:
         Simulation result
     """
+    import logging
+    import time
+
+    logger = logging.getLogger(__name__)
     worker = get_worker()
 
     if not hasattr(worker, "modelops_runtime"):
@@ -91,7 +95,18 @@ def _worker_run_task(task: SimTask) -> SimReturn:
             "Ensure ModelOpsWorkerPlugin is registered with the client."
         )
 
-    return worker.modelops_runtime.execute(task)
+    start = time.perf_counter()
+    result = worker.modelops_runtime.execute(task)
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    # Diagnostic: sim task timing
+    logger.info(
+        f"SIM_TIMING: param_id={task.params.param_id[:8]} "
+        f"seed={task.seed} duration_ms={duration_ms:.1f} "
+        f"worker={worker.address}"
+    )
+
+    return result
 
 
 def _worker_run_aggregation(task: AggregationTask) -> AggregationReturn:
@@ -114,7 +129,24 @@ def _worker_run_aggregation(task: AggregationTask) -> AggregationReturn:
     return worker.modelops_exec_env.run_aggregation(task)
 
 
-def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
+def _inline_bytes(sim_returns):
+    """Compute total inline bytes across all SimReturn outputs (cheap, no pickle)."""
+    total = 0
+    n_outputs = 0
+    max_single = 0
+    for sr in sim_returns:
+        if getattr(sr, "outputs", None):
+            for art in sr.outputs.values():
+                n_outputs += 1
+                b = getattr(art, "inline", None)
+                if b:
+                    size = len(b)
+                    total += size
+                    max_single = max(max_single, size)
+    return total, n_outputs, max_single
+
+
+def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref, run_id=None, param_id=None):
     """Aggregate results directly without gather to avoid deadlock.
 
     This function fixes a critical deadlock that occurred when aggregation tasks
@@ -129,37 +161,26 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
         *sim_returns: Materialized SimReturn objects (Dask passes these)
         target_ep: Target entrypoint string
         bundle_ref: Bundle reference
+        run_id: Optional run identifier for diagnostic correlation
+        param_id: Optional param identifier for diagnostic correlation
 
     Returns:
         AggregationReturn with computed loss
     """
     import logging
-    import os
+    import time
     from modelops_contracts.simulation import AggregationTask
 
     logger = logging.getLogger(__name__)
+    worker = get_worker()
+    start = time.perf_counter()
 
-    # Memory diagnostics: log worker RSS before aggregation
-    try:
-        import psutil
-        proc = psutil.Process(os.getpid())
-        mem_info = proc.memory_info()
-        rss_mb = mem_info.rss / (1024 * 1024)
-        logger.info(
-            f"Aggregation starting: {len(sim_returns)} sim_returns, "
-            f"worker PID={os.getpid()}, RSS={rss_mb:.1f} MB"
-        )
-    except Exception as e:
-        logger.debug(f"Could not get memory info: {e}")
+    # Extract target suffix for logging
+    target_suffix = target_ep.split('/')[-1] if target_ep else "unknown"
 
-    # Diagnostic logging to understand serialization issues
-    logger.info(f"Aggregation received {len(sim_returns)} sim_returns")
-    for idx, sr in enumerate(sim_returns):
-        if hasattr(sr, 'outputs'):
-            output_keys = list(sr.outputs.keys()) if sr.outputs else []
-            logger.info(f"  sim_return[{idx}]: outputs={output_keys}")
-        else:
-            logger.warning(f"  sim_return[{idx}]: NO OUTPUTS ATTRIBUTE - type={type(sr)}")
+    # Cheap payload size accounting (no cloudpickle, just inline bytes)
+    total_bytes, n_outputs, max_single = _inline_bytes(sim_returns)
+    total_mb = total_bytes / (1024 * 1024)
 
     # sim_returns are already materialized by Dask
     agg_task = AggregationTask(
@@ -168,7 +189,19 @@ def _worker_run_aggregation_direct(*sim_returns, target_ep, bundle_ref):
         sim_returns=list(sim_returns),
     )
 
-    return _worker_run_aggregation(agg_task)
+    result = _worker_run_aggregation(agg_task)
+    duration_ms = (time.perf_counter() - start) * 1000
+
+    # Diagnostic: aggregation timing, payload size, and locality
+    logger.info(
+        f"AGG_TIMING: run_id={run_id or 'N/A'} param_id={(param_id or 'N/A')[:8]} "
+        f"target={target_suffix} n_sim_returns={len(sim_returns)} "
+        f"n_outputs={n_outputs} total_inline_mb={total_mb:.2f} "
+        f"max_single_kb={max_single/1024:.1f} duration_ms={duration_ms:.1f} "
+        f"worker={worker.address}"
+    )
+
+    return result
 
 
 class DaskFutureAdapter:
@@ -480,6 +513,8 @@ class DaskSimulationService(SimulationService):
             *dask_futures,
             target_ep=target_entrypoint,
             bundle_ref=bundle_ref,
+            run_id=run_id,
+            param_id=param_id,
             key=agg_key,
             **submit_kwargs,
         )
