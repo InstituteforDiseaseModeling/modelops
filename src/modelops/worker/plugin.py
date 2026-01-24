@@ -5,12 +5,16 @@ from outside ports (modelops-bundle,
 
 """
 
+import logging
+import os
 from pathlib import Path
 
 from dask.distributed import WorkerPlugin
 from modelops_contracts.ports import BundleRepository, ExecutionEnvironment
 
 from .config import RuntimeConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ModelOpsWorkerPlugin(WorkerPlugin):
@@ -39,6 +43,16 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         Args:
             worker: The Dask worker instance
         """
+        # Configure logging for modelops modules on worker
+        # This ensures SIM_TIMING/AGG_TIMING logs are captured
+        log_level = os.environ.get("MODELOPS_LOG_LEVEL", "INFO").upper()
+        logging.basicConfig(
+            level=getattr(logging, log_level, logging.INFO),
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+        # Ensure modelops loggers are at least INFO level
+        logging.getLogger("modelops").setLevel(getattr(logging, log_level, logging.INFO))
+
         # Workers ALWAYS read from their own environment
         # This ensures MODELOPS_EXECUTOR_TYPE is read from the worker pod, not the runner
         config = RuntimeConfig.from_env()
@@ -65,11 +79,11 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         # Also store exec_env for clean shutdown
         worker.modelops_exec_env = exec_env
 
-        print(f"ModelOps runtime initialized on worker {worker.id}")
-        print(f"  Executor: {config.executor_type}")
-        print(f"  Bundle source: {config.bundle_source}")
+        logger.info(f"ModelOps runtime initialized on worker {worker.id}")
+        logger.info(f"  Executor: {config.executor_type}")
+        logger.info(f"  Bundle source: {config.bundle_source}")
         if config.executor_type == "cold":
-            print(f"  Fresh venv per task: {config.force_fresh_venv}")
+            logger.info(f"  Fresh venv per task: {config.force_fresh_venv}")
 
     def teardown(self, worker):
         """Teardown hook called when worker is shutting down.
@@ -79,7 +93,7 @@ class ModelOpsWorkerPlugin(WorkerPlugin):
         Args:
             worker: The Dask worker instance
         """
-        print(f"Shutting down ModelOps runtime on worker {worker.id}")
+        logger.info(f"Shutting down ModelOps runtime on worker {worker.id}")
 
         # Clean shutdown via the runtime (which delegates to exec_env)
         if hasattr(worker, "modelops_runtime"):
