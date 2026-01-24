@@ -369,7 +369,9 @@ class DaskSimulationService(SimulationService):
             results_future = self.client.submit(gather_results, replicate_futures, pure=False)
             return DaskFutureAdapter(results_future)
 
-    def submit_replicates(self, replicate_set: ReplicateSet) -> list[Future[SimReturn]]:
+    def submit_replicates(
+        self, replicate_set: ReplicateSet, run_id: str | None = None
+    ) -> list[Future[SimReturn]]:
         """Submit replicates without aggregation, returning individual simulation futures.
 
         This method is designed for multi-target workflows where the same simulation
@@ -378,18 +380,23 @@ class DaskSimulationService(SimulationService):
         artifact size limits when the same replicate set would otherwise be submitted
         multiple times.
 
-        TODO: Add integration tests for multi-target workflows using this method
-        combined with submit_aggregation().
-
         Args:
             replicate_set: Set of replicates to run
+            run_id: Unique identifier for this submission to prevent key collisions.
+                    If not provided, one will be generated.
 
         Returns:
             List of futures, one per replicate
         """
+        import uuid
+
+        if run_id is None:
+            run_id = uuid.uuid4().hex[:10]
+
         tasks = replicate_set.tasks()
         param_id = replicate_set.base_task.params.param_id
-        keys = [TaskKeys.sim_key(param_id, i) for i in range(replicate_set.n_replicates)]
+        # Include run_id in keys to prevent collisions across concurrent submissions
+        keys = [f"sim-{run_id}-{param_id}-{i}" for i in range(replicate_set.n_replicates)]
 
         # Submit all replicates as individual tasks
         replicate_futures = self.client.map(
@@ -407,6 +414,7 @@ class DaskSimulationService(SimulationService):
         target_entrypoint: str,
         bundle_ref: str,
         param_id: str,
+        run_id: str | None = None,
     ) -> Future[AggregationReturn]:
         """Submit aggregation task for given simulation results and target.
 
@@ -419,10 +427,17 @@ class DaskSimulationService(SimulationService):
             target_entrypoint: Target entrypoint to evaluate
             bundle_ref: Bundle reference for the aggregation task
             param_id: Parameter set ID for task naming
+            run_id: Unique identifier for this submission to prevent key collisions.
+                    Should match the run_id used in submit_replicates().
 
         Returns:
             Future containing aggregated result with target loss
         """
+        import uuid
+
+        if run_id is None:
+            run_id = uuid.uuid4().hex[:10]
+
         # Unwrap DaskFutureAdapter to get raw Dask futures
         dask_futures = [f.wrapped for f in sim_futures]
 
@@ -444,6 +459,10 @@ class DaskSimulationService(SimulationService):
         except Exception:
             logger.debug("Could not check for aggregation resources")
 
+        # Include run_id in key to prevent collisions across concurrent submissions
+        target_suffix = target_entrypoint.split('/')[-1]
+        agg_key = f"agg-{run_id}-{param_id}-{target_suffix}"
+
         # Submit aggregation with futures as dependencies
         # Dask will materialize them before calling the function
         agg_future = self.client.submit(
@@ -451,7 +470,7 @@ class DaskSimulationService(SimulationService):
             *dask_futures,
             target_ep=target_entrypoint,
             bundle_ref=bundle_ref,
-            key=f"{TaskKeys.agg_key(param_id)}-{target_entrypoint.split('/')[-1]}",
+            key=agg_key,
             **submit_kwargs,
         )
 
