@@ -4,12 +4,14 @@ This module runs on the user's workstation and handles the workflow
 of submitting simulation and calibration jobs to the cluster.
 """
 
+import base64
 import json
 import os
 import uuid
 from pathlib import Path
 
 from kubernetes import client as k8s_client
+from kubernetes.client.rest import ApiException
 
 # TODO: Integrate modelops-bundle service when available
 # from modelops_bundle.bundle_service import BundleService
@@ -142,6 +144,54 @@ class JobSubmissionClient:
             "  mops storage up examples/storage.yaml\n"
             "Or set AZURE_STORAGE_CONNECTION_STRING environment variable."
         )
+
+    def _get_postgres_url(self) -> str | None:
+        """Read POSTGRES_DSN from adaptive infrastructure if available.
+
+        The adaptive plane provisions PostgreSQL and stores the connection
+        string in a secret in the adaptive namespace. This method reads
+        that secret and returns the DSN for use by calibration jobs.
+
+        Returns:
+            PostgreSQL connection URL, or None if not available
+        """
+        adaptive_ns = f"modelops-adaptive-{self.env}-default"
+        try:
+            v1, _, temp_path = get_k8s_client(self.env)
+            try:
+                secret = v1.read_namespaced_secret("run-secrets", adaptive_ns)
+                dsn_b64 = secret.data.get("POSTGRES_DSN")
+                if dsn_b64:
+                    return base64.b64decode(dsn_b64).decode()
+            finally:
+                cleanup_temp_kubeconfig(temp_path)
+        except ApiException as e:
+            if e.status == 404:
+                # Adaptive infrastructure not provisioned - this is normal
+                pass
+            else:
+                # Log but don't fail - job can still run without Optuna persistence
+                print(f"Warning: Failed to read adaptive secrets: {e}")
+        except Exception as e:
+            # Unexpected error - log but don't fail
+            print(f"Warning: Could not check for PostgreSQL URL: {e}")
+        return None
+
+    def _get_postgres_env_vars(self) -> list:
+        """Get POSTGRES_URL env var for K8s job if available.
+
+        Returns:
+            List containing POSTGRES_URL env var, or empty list if not available
+        """
+        postgres_url = self._get_postgres_url()
+        if postgres_url:
+            return [
+                k8s_client.V1EnvVar(
+                    name="POSTGRES_URL",
+                    value=postgres_url,
+                )
+            ]
+        return []
 
     def submit_job(self, job: Job) -> str:
         """Submit any job type to the cluster.
@@ -533,7 +583,8 @@ class JobSubmissionClient:
                                             name="MODELOPS_BUNDLE_REGISTRY",
                                             value=self._get_registry_url(),
                                         ),
-                                    ],
+                                    ]
+                                    + self._get_postgres_env_vars(),
                                     resources=k8s_client.V1ResourceRequirements(
                                         requests={"cpu": "1", "memory": "2Gi"},
                                         limits={"cpu": "2", "memory": "4Gi"},

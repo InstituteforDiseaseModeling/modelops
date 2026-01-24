@@ -593,9 +593,29 @@ if len(sig.parameters) == 0 or (len(sig.parameters) == 1 and "data_paths" in sig
         # Evaluate the Target
         target_eval = target_obj.evaluate(sim_outputs)
 
+    # Extract loss from result - handle both TargetLossResult and TargetLikelihoodResult
+    if hasattr(target_eval, "loss"):
+        # TargetLossResult - use loss directly
+        loss = float(target_eval.loss)
+    elif hasattr(target_eval, "loglik_per_rep"):
+        # TargetLikelihoodResult - compute loss as negative log-mean-exp
+        # loss = -log_marginal = -(logsumexp(loglik_per_rep) - log(R))
+        import numpy as np
+        from scipy.special import logsumexp
+
+        loglik = target_eval.loglik_per_rep
+        R = len(loglik)
+        log_marginal = logsumexp(loglik) - np.log(R)
+        loss = -float(log_marginal)
+    else:
+        raise AttributeError(
+            f"Target evaluation result has neither 'loss' nor 'loglik_per_rep'. "
+            f"Got {{type(target_eval).__name__}} with attributes: {{dir(target_eval)}}"
+        )
+
     # Build result
     result = {{
-        "loss": float(target_eval.loss),
+        "loss": loss,
         "diagnostics": {{
             "target_type": type(target_obj).__name__,
             "model_output": target_obj.model_output,
