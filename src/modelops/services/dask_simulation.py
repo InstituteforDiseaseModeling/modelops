@@ -445,19 +445,12 @@ class DaskSimulationService(SimulationService):
         # before calling _worker_run_aggregation_direct. No need to scatter
         # since futures are already references to distributed data.
 
-        # Check for aggregation resources
+        # NOTE: We intentionally do NOT apply the aggregation resource constraint here.
+        # With direct dependency passing (*dask_futures), Dask materializes sim results
+        # BEFORE calling the aggregation function, so deadlock risk is eliminated.
+        # Omitting the constraint lets Dask's scheduler pick workers with better locality
+        # (workers that already hold the simulation data), avoiding costly data transfers.
         submit_kwargs = {"pure": False}
-        try:
-            info = self.client.scheduler_info()
-            has_aggregation_resource = any(
-                "aggregation" in worker.get("resources", {})
-                for worker in info.get("workers", {}).values()
-            )
-            if has_aggregation_resource:
-                submit_kwargs["resources"] = {"aggregation": 1}
-                logger.debug("Using aggregation resource constraint")
-        except Exception:
-            logger.debug("Could not check for aggregation resources")
 
         # Include run_id in key to prevent collisions across concurrent submissions
         target_suffix = target_entrypoint.split('/')[-1]
