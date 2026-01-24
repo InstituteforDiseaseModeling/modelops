@@ -344,7 +344,49 @@ class JobSubmissionClient:
         )
 
         # Submit the job
-        return self.submit_job(job)
+        job_id = self.submit_job(job)
+
+        # Print dashboard access info for calibration jobs
+        self._print_calibration_info(job_id)
+
+        return job_id
+
+    def _print_calibration_info(self, job_id: str) -> None:
+        """Print helpful info for monitoring calibration jobs."""
+        postgres_url = self._get_postgres_url()
+
+        print("\n" + "─" * 60)
+        print("Calibration Job Submitted")
+        print("─" * 60)
+        print(f"Job ID: {job_id}")
+        print(f"Namespace: {self.namespace}")
+        print()
+        print("Monitor logs:")
+        print(f"  kubectl -n {self.namespace} logs -f job/{job_id}")
+        print()
+
+        if postgres_url:
+            # Mask password in display
+            import re
+            display_url = re.sub(r':([^:@]+)@', r':***@', postgres_url)
+            print(f"Optuna storage: {display_url}")
+            print()
+            print("Optuna Dashboard:")
+            print(f"  # Terminal 1: port-forward PostgreSQL")
+            print(f"  kubectl -n modelops-adaptive-{self.env}-default port-forward svc/postgres 5433:5432")
+            print()
+            print(f"  # Terminal 2: run dashboard")
+            local_url = re.sub(
+                r'@[^:]+:\d+/',
+                '@localhost:5433/',
+                postgres_url
+            )
+            print(f"  uvx --with psycopg2-binary optuna-dashboard \"{local_url}\"")
+        else:
+            print("Optuna storage: in-memory (no PostgreSQL available)")
+            print("  To enable persistent storage, run: mops adaptive up optuna-infra.yaml")
+
+        print("─" * 60 + "\n")
 
     def _resolve_bundle(
         self,
