@@ -78,10 +78,18 @@ def write_job_view(
 
         for i, result in enumerate(target_results):
             if not isinstance(result, AggregationReturn):
+                # Log more details about the error
+                error_details = ""
+                if hasattr(result, "message"):
+                    error_details = f" Error: {result.message}"
+                elif isinstance(result, Exception):
+                    error_details = f" Error: {result}"
+                if hasattr(result, "data") and result.data:
+                    error_details += f" Data: {result.data}"
                 logger.error(
-                    f"Expected AggregationReturn but got {type(result).__name__} at index {i}. "
-                    f"This indicates a bug in job submission logic."
+                    f"Expected AggregationReturn but got {type(result).__name__} at index {i}.{error_details}"
                 )
+                failed_count += 1
                 continue
 
             # Get param_id from corresponding task group
