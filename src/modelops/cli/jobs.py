@@ -481,23 +481,8 @@ def submit(
                     info(f"  Target set: {resolved.target_set}")
 
     else:
-        # Parse SimulationStudy
-        # Extract just the parameter dictionaries (not UniqueParameterSet objects)
-        parameter_sets = [
-            ps["params"] if isinstance(ps, dict) and "params" in ps else ps
-            for ps in spec_data.get("parameter_sets", [])
-        ]
-
-        study = SimulationStudy(
-            model=spec_data["model"],
-            scenario=spec_data["scenario"],
-            parameter_sets=parameter_sets,
-            sampling_method=spec_data["sampling_method"],
-            n_replicates=spec_data.get("n_replicates", 1),
-            outputs=spec_data.get("outputs"),
-            targets=spec_data.get("targets"),  # From JSON spec
-            metadata=spec_data.get("metadata", {}),
-        )
+        # Parse SimulationStudy using from_dict for proper ParameterSetEntry handling
+        study = SimulationStudy.from_dict(spec_data)
 
         # Resolve targets using unified function
         resolved = _resolve_targets_for_job(
@@ -631,6 +616,9 @@ def submit(
         info("\n To scale workers (if needed for large jobs):")
         info(f"  kubectl scale deployment dask-workers --replicas=20 -n modelops-dask-{env}")
         info("  # Adjust replica count (20) based on your needs and cluster capacity")
+
+        info("\n To delete/restart the job:")
+        info(f"  kubectl -n modelops-dask-{env} delete job/{job_id}")
 
         # Show Optuna dashboard info for calibration jobs
         if is_calibration:
