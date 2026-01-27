@@ -17,7 +17,7 @@ from modelops.services.storage.memory import InMemoryVersionedStore
 from modelops.services.job_registry import JobRegistry
 from modelops.services.job_state import JobStatus
 from modelops.client.job_submission import JobSubmissionClient
-from modelops_contracts import SimulationStudy
+from modelops_contracts import SimulationStudy, ParameterSetEntry
 
 
 def test_job_submission_with_registry():
@@ -65,7 +65,10 @@ def test_job_submission_with_registry():
                 study = SimulationStudy(
                     model="test_module.test_model",
                     scenario="test_scenario",
-                    parameter_sets=[{"param1": 1.0}, {"param2": 2.0}],
+                    parameter_sets=[
+                        ParameterSetEntry(params={"param1": 1.0}),
+                        ParameterSetEntry(params={"param2": 2.0}),
+                    ],
                     sampling_method="grid",
                     n_replicates=1,
                 )
