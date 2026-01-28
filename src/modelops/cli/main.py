@@ -182,10 +182,23 @@ except ImportError:
 
 @app.command()
 def version():
-    """Show ModelOps version."""
-    from .. import __version__
+    """Show ModelOps version and build information."""
+    from .. import get_version_info
 
-    info(f"ModelOps version: {__version__}")
+    version_info = get_version_info()
+    info(f"ModelOps version: {version_info['full']}")
+
+    if version_info["git_hash"]:
+        info(f"  Git commit: {version_info['git_hash']}")
+
+    # Also show key dependency versions for debugging
+    try:
+        from importlib.metadata import version as pkg_version
+
+        contracts_ver = pkg_version("modelops-contracts")
+        info(f"  modelops-contracts: {contracts_ver}")
+    except Exception:
+        pass
 
 
 def main():
