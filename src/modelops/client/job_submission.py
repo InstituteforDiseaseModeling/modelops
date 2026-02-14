@@ -177,6 +177,24 @@ class JobSubmissionClient:
             print(f"Warning: Could not check for PostgreSQL URL: {e}")
         return None
 
+    def _get_runner_env_overrides(self) -> list:
+        """Forward MODELOPS_JOB_* env vars from submitter to runner pod.
+
+        Allows the submitter to configure runner behavior (e.g., batch size)
+        by setting environment variables locally before submission.
+
+        Supported variables:
+            MODELOPS_JOB_BATCH_SIZE: Number of parameter sets per batch (default: 200)
+
+        Returns:
+            List of V1EnvVar for any MODELOPS_JOB_* vars set in the submitter's env
+        """
+        env_vars = []
+        for key, value in os.environ.items():
+            if key.startswith("MODELOPS_JOB_"):
+                env_vars.append(k8s_client.V1EnvVar(name=key, value=value))
+        return env_vars
+
     def _get_postgres_env_vars(self) -> list:
         """Get POSTGRES_URL env var for K8s job if available.
 
@@ -589,6 +607,7 @@ class JobSubmissionClient:
                                             value=self._get_registry_url(),
                                         ),
                                     ]
+                                    + self._get_runner_env_overrides()
                                     + self._get_postgres_env_vars(),
                                     resources=k8s_client.V1ResourceRequirements(
                                         requests={"cpu": "1", "memory": "2Gi"},
