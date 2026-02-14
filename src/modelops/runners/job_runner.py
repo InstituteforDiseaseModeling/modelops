@@ -8,6 +8,7 @@ Handles both SimJob (batch simulation) and CalibrationJob (adaptive).
 
 import json
 import logging
+import math
 import os
 import sys
 from typing import Any
@@ -184,9 +185,19 @@ def deserialize_job(data: dict[str, Any]) -> Job:
 
 
 def run_simulation_job(job: SimJob, client: Client) -> None:
-    """Execute a simulation job.
+    """Execute a simulation job using batched submission.
 
-    Processes all tasks using DaskSimulationService.
+    Submits parameter sets in configurable batches to prevent Dask distributed
+    memory accumulation and scheduler overload. Each batch's results are gathered
+    and written before moving to the next, so Dask can free worker memory
+    between batches.
+
+    Without batching, all sim futures are held for the entire job duration,
+    preventing Dask from freeing any SimReturn from distributed memory. When
+    workers OOM-kill, completed results stored on those workers are lost and
+    must be recomputed — causing progress to go backwards.
+
+    Configure batch size via MODELOPS_JOB_BATCH_SIZE environment variable.
 
     Args:
         job: SimJob to execute
@@ -202,7 +213,8 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
 
     # Group tasks by parameter ID for replicate handling
     task_groups = job.get_task_groups()
-    logger.info(f"Processing {len(task_groups)} parameter sets with replicates")
+    total_params = len(task_groups)
+    logger.info(f"Processing {total_params} parameter sets with replicates")
 
     # Check if we have targets for aggregation
     target_entrypoints = []
@@ -210,100 +222,146 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
         target_entrypoints = job.target_spec.data["target_entrypoints"]
         logger.info(f"Will evaluate {len(target_entrypoints)} targets: {target_entrypoints}")
 
-    # Submit replicate sets - run simulations once, then evaluate each target
-    # This avoids redundant computation and Dask serialization limits
+    # Configurable batch size — tune based on model output size and worker memory.
+    # Smaller batches reduce peak distributed memory and blast radius from worker
+    # death, but add small gaps between batches for gathering.
+    batch_size = int(os.environ.get("MODELOPS_JOB_BATCH_SIZE", "200"))
+    task_groups_list = list(task_groups.items())
+    n_batches = math.ceil(total_params / batch_size)
+    logger.info(
+        f"Batch size: {batch_size} (set MODELOPS_JOB_BATCH_SIZE to change), "
+        f"{n_batches} batch(es)"
+    )
+
     from modelops_contracts import ReplicateSet
 
-    futures = []
-    sim_futures_by_param = {}  # Store sim futures for model outputs collection
+    # Accumulate results across batches (small — just loss + diagnostics per param)
+    all_results_by_target: dict[str, list] = {}
+    all_default_results: list = []
+    # Accumulate model outputs across batches for Parquet writing.
+    # Each SimReturn output is small (Arrow IPC bytes). For models with very large
+    # outputs, this could be replaced with per-batch Parquet file writing.
+    all_raw_sim_returns: dict[str, list] = {}
+    completed_params = 0
+    oom_kill_count = 0
 
-    for param_id, replicate_tasks in task_groups.items():
-        base_task = replicate_tasks[0]
-        replicate_set = ReplicateSet(
-            base_task=base_task,
-            n_replicates=len(replicate_tasks),
-            seed_offset=0,  # Seeds already set in tasks
+    for batch_idx in range(n_batches):
+        batch_start = batch_idx * batch_size
+        batch_end = min(batch_start + batch_size, total_params)
+        batch = task_groups_list[batch_start:batch_end]
+        batch_len = len(batch)
+
+        logger.info(
+            f"--- Batch {batch_idx + 1}/{n_batches}: "
+            f"params {batch_start + 1}-{batch_end} of {total_params} ---"
         )
 
-        # Submit simulations ONCE per parameter set
-        sim_futures = sim_service.submit_replicates(replicate_set)
-        sim_futures_by_param[param_id] = sim_futures  # Store for later gathering
-        logger.info(f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]}")
+        # Submit this batch's simulations and aggregations
+        sim_futures_batch: dict[str, list] = {}
+        agg_futures_batch: list[tuple[str, str | None, Any]] = []
 
-        # Evaluate EACH target on the same simulation results
-        if target_entrypoints:
-            for target in target_entrypoints:
-                agg_future = sim_service.submit_aggregation(
-                    sim_futures,
-                    target,
-                    bundle_ref=base_task.bundle_ref,
-                    param_id=param_id,
-                )
-                futures.append((param_id, target, agg_future))
-                logger.info(f"    Evaluating target {target} on param {param_id[:8]}")
-        else:
-            # No targets - return raw simulation results
-            # Wrap in a future that gathers them
-            def gather_sims(*sims):
-                # Return list of SimReturns (already materialized by Dask)
-                return list(sims)
-
-            # Submit a task that depends on all sim futures
-            gathered_future = sim_service.client.submit(
-                gather_sims,
-                *[f.wrapped for f in sim_futures],
-                pure=False,
+        for param_id, replicate_tasks in batch:
+            base_task = replicate_tasks[0]
+            replicate_set = ReplicateSet(
+                base_task=base_task,
+                n_replicates=len(replicate_tasks),
+                seed_offset=0,
             )
-            from modelops.services.dask_simulation import DaskFutureAdapter
 
-            futures.append((param_id, None, DaskFutureAdapter(gathered_future)))
+            sim_futures = sim_service.submit_replicates(replicate_set)
+            sim_futures_batch[param_id] = sim_futures
+            logger.info(
+                f"  Submitted {len(replicate_tasks)} replicate(s) for param {param_id[:8]}"
+            )
 
-    # Gather results
-    param_futures_list = futures  # Save the (param_id, future) pairs
-    results = sim_service.gather([f for *_, f in futures])
-    logger.info(f"Job complete: {len(results)} results")
-
-    # Gather raw simulation outputs for model_outputs collection
-    logger.info("Gathering raw simulation outputs for model outputs...")
-    raw_sim_returns_by_param = {}
-    for param_id, sim_futures in sim_futures_by_param.items():
-        sim_returns = sim_service.gather(sim_futures)
-        raw_sim_returns_by_param[param_id] = sim_returns
-    logger.info(f"Gathered {len(raw_sim_returns_by_param)} parameter sets with simulation outputs")
-
-    # Build results by target
-    results_by_target = {}
-    default_results = []
-
-    for (param_id, target, _), result in zip(param_futures_list, results):
-        if target:
-            target_name = target.split("/")[-1] if "/" in target else target
-            results_by_target.setdefault(target_name, []).append(result)
-        else:
-            # When no target, result is a list[SimReturn] from gather_sims
-            # Extend default_results with all sim returns
-            if isinstance(result, list):
-                default_results.extend(result)
+            if target_entrypoints:
+                for target in target_entrypoints:
+                    agg_future = sim_service.submit_aggregation(
+                        sim_futures,
+                        target,
+                        bundle_ref=base_task.bundle_ref,
+                        param_id=param_id,
+                    )
+                    agg_futures_batch.append((param_id, target, agg_future))
+                    logger.info(f"    Evaluating target {target} on param {param_id[:8]}")
             else:
-                default_results.append(result)
+                def gather_sims(*sims):
+                    return list(sims)
+
+                from modelops.services.dask_simulation import DaskFutureAdapter
+
+                gathered_future = sim_service.client.submit(
+                    gather_sims,
+                    *[f.wrapped for f in sim_futures],
+                    pure=False,
+                )
+                agg_futures_batch.append(
+                    (param_id, None, DaskFutureAdapter(gathered_future))
+                )
+
+        # Gather aggregation results for this batch
+        batch_results = sim_service.gather([f for *_, f in agg_futures_batch])
+
+        # Check for OOM errors in results
+        for result in batch_results:
+            if isinstance(result, Exception):
+                error_str = str(result)
+                if "OOM" in error_str or "exit code 137" in error_str:
+                    oom_kill_count += 1
+
+        # Accumulate aggregation results by target
+        for (param_id, target, _), result in zip(agg_futures_batch, batch_results):
+            if target:
+                target_name = target.split("/")[-1] if "/" in target else target
+                all_results_by_target.setdefault(target_name, []).append(result)
+            else:
+                if isinstance(result, list):
+                    all_default_results.extend(result)
+                else:
+                    all_default_results.append(result)
+
+        # Gather raw SimReturns for model outputs (instant — sims already completed)
+        if target_entrypoints:
+            for param_id, sim_futs in sim_futures_batch.items():
+                sim_returns = sim_service.gather(sim_futs)
+                all_raw_sim_returns[param_id] = sim_returns
+
+        completed_params += batch_len
+        logger.info(
+            f"--- Batch {batch_idx + 1}/{n_batches} complete: "
+            f"{completed_params}/{total_params} params gathered ---"
+        )
+
+        # Release batch references — Dask can now free all SimReturns and
+        # AggregationReturns from distributed worker memory for this batch.
+        sim_futures_batch.clear()
+        agg_futures_batch.clear()
+
+    # Report OOM detections
+    if oom_kill_count > 0:
+        logger.warning(
+            f"OOM kills detected: {oom_kill_count} task(s) failed with out-of-memory errors. "
+            f"Current MODELOPS_JOB_BATCH_SIZE={batch_size}. "
+            f"Consider reducing to MODELOPS_JOB_BATCH_SIZE={max(10, batch_size // 2)} "
+            f"or increasing worker memory."
+        )
+
+    logger.info(f"All batches complete: {completed_params} parameter sets processed")
 
     # Log results summary
     if target_entrypoints:
         for target in target_entrypoints:
             target_name = target.split("/")[-1] if "/" in target else target
-            target_results = results_by_target.get(target_name, [])
-            logger.info(f"Results available for target: {target_name} ({len(target_results)})")
+            target_results = all_results_by_target.get(target_name, [])
+            logger.info(f"Results for target {target_name}: {len(target_results)}")
             for i, result in enumerate(target_results[:3]):
                 if hasattr(result, "loss"):
                     logger.info(f"  Param set {i} loss for {target_name}: {result.loss}")
     else:
-        logger.info(f"=== Job completed without targets ===")
-        logger.info(f"Collected {len(default_results)} raw simulation results")
-        logger.info(f"No targets were specified - simulation data was generated but not evaluated against any targets")
-        logger.info(f"To evaluate results, resubmit with target_spec or use the results for further analysis")
+        logger.info(f"Collected {len(all_default_results)} raw simulation results (no targets)")
 
-    # Write Parquet views for post-job analysis (only for jobs with targets)
-    if target_entrypoints and results_by_target:
+    # Write Parquet views for post-job analysis
+    if target_entrypoints and all_results_by_target:
         try:
             from pathlib import Path
 
@@ -312,7 +370,6 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
 
             logger.info("Writing job results to Parquet views...")
 
-            # Initialize ProvenanceStore with Azure backend if connection string is available
             prov_store = None
             conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
             if conn_str:
@@ -330,13 +387,17 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                     prov_store = None
 
             view_path = write_job_view(
-                job, results_by_target, prov_store=prov_store, raw_sim_returns=raw_sim_returns_by_param
+                job,
+                all_results_by_target,
+                prov_store=prov_store,
+                raw_sim_returns=all_raw_sim_returns if all_raw_sim_returns else None,
             )
             logger.info(f"Job view written to: {view_path}")
 
-            # Write per-replicate view if we have the data
             try:
-                replicates_path = write_replicates_view(job, results_by_target, prov_store=prov_store)
+                replicates_path = write_replicates_view(
+                    job, all_results_by_target, prov_store=prov_store
+                )
                 if replicates_path:
                     logger.info(f"Per-replicate view written to: {replicates_path}")
             except Exception as e:
@@ -345,17 +406,14 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             logger.warning(f"Could not write job views (missing dependency): {e}")
         except Exception as e:
             logger.error(f"Failed to write job views: {e}")
-            # Don't fail the job if view writing fails
     elif not target_entrypoints:
-        logger.warning("Skipping view generation: write_job_view requires aggregated results with targets")
-        logger.info("Raw simulation data was collected but no views were written")
-        logger.info("TODO: Implement write_sim_results_view() for jobs without targets")
+        logger.warning("Skipping view generation: no targets specified")
 
     if not target_entrypoints and job.target_spec:
-        # Fallback: evaluate targets on client side if not done on worker
         logger.info("Evaluating targets on client side...")
         try:
-            trial_results = evaluate_results(results, job.target_spec)
+            all_results = all_default_results
+            trial_results = evaluate_results(all_results, job.target_spec)
             logger.info(f"Target evaluation complete: {len(trial_results)} trials evaluated")
             for i, tr in enumerate(trial_results[:3]):
                 if hasattr(tr, "loss"):
@@ -364,12 +422,6 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             logger.warning("Target evaluation not yet implemented")
         except Exception as e:
             logger.error(f"Target evaluation failed: {e}")
-
-    # TODO: Upload results to blob storage
-    # For now, just log success
-    for i, result in enumerate(results[:3]):  # Log first 3
-        if hasattr(result, "outputs"):
-            logger.info(f"  Task {i}: {list(result.outputs.keys())}")
 
     logger.info(f"Job {job.job_id} completed successfully")
 
