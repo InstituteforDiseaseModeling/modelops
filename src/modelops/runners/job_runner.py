@@ -560,7 +560,10 @@ def main():
         scheduler_addr = os.environ.get("DASK_SCHEDULER_ADDRESS", "tcp://dask-scheduler:8786")
         logger.info(f"Connecting to Dask scheduler at {scheduler_addr}")
 
-        client = Client(scheduler_addr)
+        client = Client(
+            scheduler_addr,
+            config={"distributed.scheduler.worker-saturation": 1.0},
+        )
         logger.info(
             f"Connected to Dask cluster with {len(client.scheduler_info()['workers'])} workers"
         )
