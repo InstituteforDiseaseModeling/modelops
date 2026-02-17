@@ -111,11 +111,12 @@ class TestInvalidationSchemas:
 
         bundle_digest = make_test_digest("bundle123")
         param_id = make_test_digest("params456")
+        entrypoint = "model:Sim/scenario_a"
 
-        path = schema.sim_path(bundle_digest=bundle_digest, param_id=param_id, seed=42)
+        path = schema.sim_path(bundle_digest=bundle_digest, entrypoint=entrypoint, param_id=param_id, seed=42)
 
-        # Should have bundle/v1 prefix
-        assert "bundle/v1/sims" in path
+        # Should have bundle/v2 prefix (v2 includes entrypoint in cache key)
+        assert "bundle/v2/sims" in path
         # Should use bundle digest directly (not double-hashed)
         assert bundle_digest[:12] in path
         # Should have sharded param_id (shard function hashes first)
@@ -124,17 +125,22 @@ class TestInvalidationSchemas:
         # Should have seed
         assert "seed_42" in path
 
+        # Different entrypoints must produce different paths (fix for #27)
+        path_b = schema.sim_path(bundle_digest=bundle_digest, entrypoint="model:Sim/scenario_b", param_id=param_id, seed=42)
+        assert path != path_b, "Different entrypoints must produce different cache paths"
+
     def test_token_invalidation_schema(self):
         """Test TOKEN_INVALIDATION_SCHEMA structure."""
         schema = TOKEN_INVALIDATION_SCHEMA
 
         model_digest = make_test_digest("model789")
         param_id = make_test_digest("params456")
+        entrypoint = "model:Sim/scenario_a"
 
-        path = schema.sim_path(model_digest=model_digest, param_id=param_id, seed=42)
+        path = schema.sim_path(model_digest=model_digest, entrypoint=entrypoint, param_id=param_id, seed=42)
 
-        # Should have token/v1 prefix
-        assert "token/v1/sims" in path
+        # Should have token/v2 prefix (v2 includes entrypoint in cache key)
+        assert "token/v2/sims" in path
         # Should use model digest directly (not double-hashed)
         assert model_digest[:12] in path
         # Should have seed
@@ -149,23 +155,25 @@ class TestInvalidationSchemas:
         """Verify different schemas produce different paths for same inputs."""
         param_id = make_test_digest("params")
         seed = 42
+        entrypoint = "model:Sim/run"
 
         # Bundle schema uses bundle_digest
         bundle_path = BUNDLE_INVALIDATION_SCHEMA.sim_path(
-            bundle_digest="digest1", param_id=param_id, seed=seed
+            bundle_digest="digest1", entrypoint=entrypoint, param_id=param_id, seed=seed
         )
 
         # Token schema uses model_digest
         token_path = TOKEN_INVALIDATION_SCHEMA.sim_path(
             model_digest="digest1",  # Same value but different param name
+            entrypoint=entrypoint,
             param_id=param_id,
             seed=seed,
         )
 
         # Paths should differ due to different schema names
         assert bundle_path != token_path
-        assert "bundle/v1" in bundle_path
-        assert "token/v1" in token_path
+        assert "bundle/v2" in bundle_path
+        assert "token/v2" in token_path
 
 
 class TestAggregationPaths:

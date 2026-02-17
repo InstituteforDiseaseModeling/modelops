@@ -487,6 +487,7 @@ class ProvenanceStore:
 
         context = {
             "bundle_digest": bundle_digest,  # Already a digest, don't hash again!
+            "entrypoint": str(task.entrypoint) if task.entrypoint else "default",
             "param_id": task.params.param_id,
             "seed": task.seed,
         }

@@ -16,6 +16,19 @@ from modelops_contracts.simulation import AggregationTask
 from .provenance_schema import ProvenanceSchema
 
 
+def _get_job_entrypoint(job: SimJob | CalibrationJob) -> str:
+    """Extract entrypoint from job's first task, defaulting to 'default'.
+
+    Note: this returns the entrypoint from the first task only. For jobs
+    with mixed entrypoints (multi-scenario), callers iterating individual
+    tasks should use task.entrypoint directly instead.
+    """
+    tasks = getattr(job, "tasks", None)
+    if tasks and len(tasks) > 0:
+        return str(getattr(tasks[0], "entrypoint", "default"))
+    return "default"
+
+
 @dataclass
 class OutputSpec:
     """Specification for an expected output.
@@ -69,6 +82,7 @@ def generate_output_manifest(job: SimJob, provenance_schema: ProvenanceSchema) -
                 "schema_name": provenance_schema.name,
                 "version": provenance_schema.version,
                 "bundle_digest": bundle_digest,
+                "entrypoint": _get_job_entrypoint(job),
                 "param_id": param_id,
                 "seed": seed,
             }
@@ -125,6 +139,7 @@ def generate_calibration_manifest(
                 "schema_name": provenance_schema.name,
                 "version": provenance_schema.version,
                 "bundle_digest": bundle_digest,
+                "entrypoint": _get_job_entrypoint(job),
                 "param_id": param_id,
                 "seed": seed,
             }
