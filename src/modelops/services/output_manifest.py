@@ -69,6 +69,7 @@ def generate_output_manifest(job: SimJob, provenance_schema: ProvenanceSchema) -
                 "schema_name": provenance_schema.name,
                 "version": provenance_schema.version,
                 "bundle_digest": bundle_digest,
+                "entrypoint": getattr(getattr(job, "tasks", [None])[0], "entrypoint", "default") if getattr(job, "tasks", None) else "default",
                 "param_id": param_id,
                 "seed": seed,
             }
@@ -125,6 +126,7 @@ def generate_calibration_manifest(
                 "schema_name": provenance_schema.name,
                 "version": provenance_schema.version,
                 "bundle_digest": bundle_digest,
+                "entrypoint": getattr(getattr(job, "tasks", [None])[0], "entrypoint", "default") if getattr(job, "tasks", None) else "default",
                 "param_id": param_id,
                 "seed": seed,
             }

@@ -381,11 +381,11 @@ class TestFileStructure:
 
         store.put_sim(task, sim_return)
 
-        # Check that bundle/v1/sims structure exists
-        assert (temp_dir / "bundle" / "v1" / "sims").exists()
+        # Check that bundle/v2/sims structure exists (v2 includes entrypoint in cache key)
+        assert (temp_dir / "bundle" / "v2" / "sims").exists()
 
         # Check for sharding directories
-        bundle_dirs = list((temp_dir / "bundle" / "v1" / "sims").iterdir())
+        bundle_dirs = list((temp_dir / "bundle" / "v2" / "sims").iterdir())
         assert len(bundle_dirs) > 0
 
         # Find the metadata.json file
