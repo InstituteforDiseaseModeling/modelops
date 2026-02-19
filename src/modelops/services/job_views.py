@@ -376,7 +376,11 @@ def _write_model_outputs(
     if first_sim_return is None:
         logger.warning("Could not read first SimReturn from provenance store")
         return
-    output_names = list(first_sim_return.outputs.keys())
+    # Filter to tabular outputs only (skip JSON metadata artifacts)
+    output_names = [
+        name for name in first_sim_return.outputs.keys()
+        if name != "metadata"
+    ]
 
     logger.info(f"Collecting {len(output_names)} model outputs: {output_names}")
 
