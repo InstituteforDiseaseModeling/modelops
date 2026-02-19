@@ -358,19 +358,25 @@ def _write_model_outputs(
         logger.error("polars not installed. Cannot write model outputs.")
         raise
 
-    # Determine what outputs exist by looking at first SimReturn
+    # Determine what outputs exist by finding the first successful SimReturn.
+    # gather() returns list[SimReturn | Exception], so we must skip failures.
     if not raw_sim_returns_by_param:
         logger.warning("No raw simulation returns to write")
         return
 
-    first_param_id = next(iter(raw_sim_returns_by_param.keys()))
-    first_sim_returns = raw_sim_returns_by_param[first_param_id]
+    first_sim_return = None
+    for param_id, sim_returns in raw_sim_returns_by_param.items():
+        for sr in sim_returns:
+            if hasattr(sr, "outputs") and sr.outputs:
+                first_sim_return = sr
+                break
+        if first_sim_return:
+            break
 
-    if not first_sim_returns:
-        logger.warning(f"No SimReturns for param_id {first_param_id}")
+    if first_sim_return is None:
+        logger.warning("No successful SimReturns found (all failed?)")
         return
 
-    first_sim_return = first_sim_returns[0]
     output_names = list(first_sim_return.outputs.keys())
 
     logger.info(f"Collecting {len(output_names)} model outputs: {output_names}")
@@ -381,6 +387,10 @@ def _write_model_outputs(
 
         for param_id, sim_returns in raw_sim_returns_by_param.items():
             for replicate_idx, sim_return in enumerate(sim_returns):
+                # Skip failed replicates (gather returns Exception for failures)
+                if not hasattr(sim_return, "outputs"):
+                    continue
+
                 if output_name not in sim_return.outputs:
                     logger.warning(
                         f"Missing output {output_name} for param {param_id}, replicate {replicate_idx}"
