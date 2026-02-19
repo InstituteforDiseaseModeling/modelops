@@ -24,7 +24,7 @@ def write_job_view(
     results: list[AggregationReturn] | dict[str, list[AggregationReturn]],
     output_dir: Path = Path("/tmp/modelops/provenance/token/v1/views/jobs"),
     prov_store: Any | None = None,
-    raw_sim_returns: dict[str, list[Any]] | None = None,
+    task_groups: dict[str, list[Any]] | None = None,
 ) -> Path:
     """Write job results to Parquet for post-job analysis.
 
@@ -38,6 +38,7 @@ def write_job_view(
                 or a dict mapping target names to lists of AggregationReturn
         output_dir: Base directory for job views
         prov_store: Optional ProvenanceStore for Azure uploads
+        task_groups: Optional dict mapping param_id to list of SimTasks
 
     Returns:
         Path to the created view directory
@@ -73,8 +74,8 @@ def write_job_view(
         available_count = 0
         failed_count = 0
 
-        # Get task groups once for mapping
-        task_groups = list(job.get_task_groups().items())
+        # Get task groups once for mapping results to params
+        indexed_task_groups = list(job.get_task_groups().items())
 
         for i, result in enumerate(target_results):
             if not isinstance(result, AggregationReturn):
@@ -93,8 +94,8 @@ def write_job_view(
                 continue
 
             # Get param_id from corresponding task group
-            if i < len(task_groups):
-                param_id, tasks = task_groups[i]
+            if i < len(indexed_task_groups):
+                param_id, tasks = indexed_task_groups[i]
                 first_task = tasks[0]
             else:
                 logger.warning(f"No task group for result {i}")
@@ -199,16 +200,18 @@ def write_job_view(
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    # Write model outputs if available
-    if raw_sim_returns:
+    # Write model outputs if available (read from provenance store, not memory)
+    if task_groups and prov_store:
         try:
             model_outputs_dir = job_dir / "model_outputs"
             model_outputs_dir.mkdir(parents=True, exist_ok=True)
-            _write_model_outputs(model_outputs_dir, raw_sim_returns, job)
+            _write_model_outputs(model_outputs_dir, task_groups, prov_store, job)
             logger.info("Wrote model outputs to Parquet")
         except Exception as e:
             logger.error(f"Failed to write model outputs: {e}")
             # Continue without model outputs
+    elif task_groups:
+        logger.warning("Skipping model outputs: no provenance store available")
 
     # Upload to Azure if ProvenanceStore is available
     if prov_store and hasattr(prov_store, "supports_remote_uploads") and prov_store.supports_remote_uploads():
@@ -339,17 +342,22 @@ def write_replicates_view(
 
 def _write_model_outputs(
     output_dir: Path,
-    raw_sim_returns_by_param: dict[str, list[Any]],
-    job: SimJob
+    task_groups: dict[str, list[Any]],
+    prov_store: Any,
+    job: SimJob,
 ) -> None:
     """Write raw model outputs to Parquet files.
 
     Creates one Parquet file per output name (incidence, prevalence, etc.)
     with all replicates concatenated. Adds param_id, seed, replicate_idx columns.
 
+    Reads SimReturns from the provenance store one task at a time, avoiding
+    holding all results in memory simultaneously.
+
     Args:
         output_dir: Directory to write model_outputs/*.parquet files
-        raw_sim_returns_by_param: Dict mapping param_id to list of SimReturns
+        task_groups: Dict mapping param_id to list of SimTasks
+        prov_store: ProvenanceStore to read SimReturns from
         job: The SimJob being executed
     """
     try:
@@ -358,19 +366,16 @@ def _write_model_outputs(
         logger.error("polars not installed. Cannot write model outputs.")
         raise
 
-    # Determine what outputs exist by looking at first SimReturn
-    if not raw_sim_returns_by_param:
-        logger.warning("No raw simulation returns to write")
+    if not task_groups:
+        logger.warning("No task groups to write")
         return
 
-    first_param_id = next(iter(raw_sim_returns_by_param.keys()))
-    first_sim_returns = raw_sim_returns_by_param[first_param_id]
-
-    if not first_sim_returns:
-        logger.warning(f"No SimReturns for param_id {first_param_id}")
+    # Discover output names from the first task's result
+    first_task = next(iter(task_groups.values()))[0]
+    first_sim_return = prov_store.get_sim(first_task)
+    if first_sim_return is None:
+        logger.warning("Could not read first SimReturn from provenance store")
         return
-
-    first_sim_return = first_sim_returns[0]
     output_names = list(first_sim_return.outputs.keys())
 
     logger.info(f"Collecting {len(output_names)} model outputs: {output_names}")
@@ -379,11 +384,18 @@ def _write_model_outputs(
     for output_name in output_names:
         all_dfs = []
 
-        for param_id, sim_returns in raw_sim_returns_by_param.items():
-            for replicate_idx, sim_return in enumerate(sim_returns):
+        for param_id, replicate_tasks in task_groups.items():
+            for replicate_idx, task in enumerate(replicate_tasks):
+                sim_return = prov_store.get_sim(task)
+                if sim_return is None:
+                    logger.warning(
+                        f"Missing provenance result for param {param_id[:8]}, seed {task.seed}"
+                    )
+                    continue
+
                 if output_name not in sim_return.outputs:
                     logger.warning(
-                        f"Missing output {output_name} for param {param_id}, replicate {replicate_idx}"
+                        f"Missing output {output_name} for param {param_id[:8]}, replicate {replicate_idx}"
                     )
                     continue
 
@@ -391,7 +403,7 @@ def _write_model_outputs(
                 artifact = sim_return.outputs[output_name]
                 if not artifact.inline:
                     logger.warning(
-                        f"No inline data for {output_name}, param {param_id}, replicate {replicate_idx}"
+                        f"No inline data for {output_name}, param {param_id[:8]}, replicate {replicate_idx}"
                     )
                     continue
 
@@ -408,7 +420,7 @@ def _write_model_outputs(
                     all_dfs.append(df)
                 except Exception as e:
                     logger.error(
-                        f"Failed to read {output_name} for param {param_id}, "
+                        f"Failed to read {output_name} for param {param_id[:8]}, "
                         f"replicate {replicate_idx}: {e}"
                     )
                     continue
@@ -423,7 +435,7 @@ def _write_model_outputs(
                 concatenated.write_parquet(
                     output_path,
                     compression="zstd",
-                    compression_level=3
+                    compression_level=3,
                 )
 
                 file_size = output_path.stat().st_size

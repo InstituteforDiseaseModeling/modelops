@@ -99,20 +99,30 @@ def create_test_results(job):
     return results_by_target
 
 
-def create_test_sim_returns(job):
-    """Create test SimReturn objects with realistic DataFrame outputs."""
+class MockProvenanceStore:
+    """Mock provenance store that returns pre-built SimReturns by task."""
+
+    def __init__(self):
+        self._store = {}  # keyed by (param_id, seed)
+
+    def put_sim(self, task, sim_return):
+        self._store[(task.params.param_id, task.seed)] = sim_return
+
+    def get_sim(self, task):
+        return self._store.get((task.params.param_id, task.seed))
+
+
+def create_test_prov_store(job):
+    """Create a MockProvenanceStore populated with realistic SimReturn data."""
     import polars as pl
     import hashlib
     from io import BytesIO
+    from modelops_contracts import SimReturn
 
-    raw_sim_returns_by_param = {}
-
-    # Group tasks by parameter ID
+    prov_store = MockProvenanceStore()
     task_groups = job.get_task_groups()
 
     for param_id, replicate_tasks in task_groups.items():
-        sim_returns = []
-
         for replicate_idx, task in enumerate(replicate_tasks):
             # Create realistic time series data
             days = list(range(60))
@@ -152,21 +162,19 @@ def create_test_sim_returns(job):
                     checksum=checksum
                 )
 
-            # Create SimReturn
-            from modelops_contracts import SimReturn
+            # Create SimReturn and store in provenance
             sim_return = SimReturn(
                 task_id=f"task-{param_id[:8]}-{replicate_idx}",
                 outputs=outputs
             )
-            sim_returns.append(sim_return)
+            prov_store.put_sim(task, sim_return)
 
-        raw_sim_returns_by_param[param_id] = sim_returns
         logger.info(
-            f"Created {len(sim_returns)} SimReturns for param {param_id[:8]} "
-            f"with outputs: {list(sim_returns[0].outputs.keys())}"
+            f"Stored {len(replicate_tasks)} SimReturns for param {param_id[:8]} "
+            f"in mock provenance store"
         )
 
-    return raw_sim_returns_by_param
+    return prov_store
 
 
 def test_direct_writing():
@@ -184,9 +192,10 @@ def test_direct_writing():
     results_by_target = create_test_results(job)
     logger.info(f"Created results for {len(results_by_target)} targets")
 
-    # Create test SimReturns with model outputs
-    raw_sim_returns = create_test_sim_returns(job)
-    logger.info(f"Created SimReturns for {len(raw_sim_returns)} parameter sets")
+    # Create mock provenance store with SimReturns
+    prov_store = create_test_prov_store(job)
+    task_groups = job.get_task_groups()
+    logger.info(f"Created mock provenance store for {len(task_groups)} parameter sets")
 
     # Use a temporary directory for output
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -196,8 +205,8 @@ def test_direct_writing():
         logger.info(f"\nWriting to: {output_dir}")
 
         try:
-            # Call the write function with multiple targets AND model outputs
-            view_path = write_job_view(job, results_by_target, output_dir, raw_sim_returns=raw_sim_returns)
+            # Call the write function with task_groups + prov_store (reads from provenance)
+            view_path = write_job_view(job, results_by_target, output_dir, prov_store=prov_store, task_groups=task_groups)
             logger.info(f"✓ Successfully wrote job view to: {view_path}")
 
             # Check what was created
