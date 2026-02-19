@@ -64,9 +64,15 @@ class RuntimeConfig:
         )
 
         # Storage configuration
-        config.upload_to_azure = (
-            os.environ.get("MODELOPS_UPLOAD_TO_AZURE", "false").lower() == "true"
-        )
+        # Auto-enable Azure uploads when connection string is available,
+        # unless explicitly disabled. This ensures model outputs are accessible
+        # from the runner via provenance store.
+        has_azure_conn = bool(os.environ.get("AZURE_STORAGE_CONNECTION_STRING"))
+        upload_env = os.environ.get("MODELOPS_UPLOAD_TO_AZURE")
+        if upload_env is not None:
+            config.upload_to_azure = upload_env.lower() == "true"
+        else:
+            config.upload_to_azure = has_azure_conn
         config.azure_storage_account = os.environ.get(
             "MODELOPS_AZURE_STORAGE_ACCOUNT", config.azure_storage_account
         )

@@ -205,8 +205,15 @@ def write_job_view(
         try:
             model_outputs_dir = job_dir / "model_outputs"
             model_outputs_dir.mkdir(parents=True, exist_ok=True)
-            _write_model_outputs(model_outputs_dir, task_groups, prov_store, job)
-            logger.info("Wrote model outputs to Parquet")
+            wrote_any = _write_model_outputs(model_outputs_dir, task_groups, prov_store, job)
+            if wrote_any:
+                logger.info("Wrote model outputs to Parquet")
+            else:
+                logger.warning(
+                    "No model outputs written — provenance store may be empty. "
+                    "Check that workers have MODELOPS_UPLOAD_TO_AZURE=true or "
+                    "AZURE_STORAGE_CONNECTION_STRING set."
+                )
         except Exception as e:
             logger.error(f"Failed to write model outputs: {e}")
             # Continue without model outputs
@@ -345,7 +352,7 @@ def _write_model_outputs(
     task_groups: dict[str, list[Any]],
     prov_store: Any,
     job: SimJob,
-) -> None:
+) -> bool:
     """Write raw model outputs to Parquet files.
 
     Creates one Parquet file per output name (incidence, prevalence, etc.)
@@ -359,6 +366,9 @@ def _write_model_outputs(
         task_groups: Dict mapping param_id to list of SimTasks
         prov_store: ProvenanceStore to read SimReturns from
         job: The SimJob being executed
+
+    Returns:
+        True if any model output Parquet files were written, False otherwise
     """
     try:
         import polars as pl
@@ -368,14 +378,14 @@ def _write_model_outputs(
 
     if not task_groups:
         logger.warning("No task groups to write")
-        return
+        return False
 
     # Discover output names from the first task's result
     first_task = next(iter(task_groups.values()))[0]
     first_sim_return = prov_store.get_sim(first_task)
     if first_sim_return is None:
         logger.warning("Could not read first SimReturn from provenance store")
-        return
+        return False
     # Filter to tabular outputs only (skip JSON metadata artifacts)
     output_names = [
         name for name in first_sim_return.outputs.keys()
@@ -385,6 +395,7 @@ def _write_model_outputs(
     logger.info(f"Collecting {len(output_names)} model outputs: {output_names}")
 
     # For each output name, concatenate across all param_ids and replicates
+    wrote_any = False
     for output_name in output_names:
         all_dfs = []
 
@@ -447,10 +458,13 @@ def _write_model_outputs(
                     f"Wrote {output_name}.parquet: {len(concatenated):,} rows, "
                     f"{file_size:,} bytes"
                 )
+                wrote_any = True
             except Exception as e:
                 logger.error(f"Failed to write {output_name}.parquet: {e}")
         else:
             logger.warning(f"No data collected for output {output_name}")
+
+    return wrote_any
 
 
 def _serialize_target_spec(spec: TargetSpec | None) -> dict[str, Any] | None:
