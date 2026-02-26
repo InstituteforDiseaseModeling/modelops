@@ -362,11 +362,26 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
 
                 logger.info(f"Writing {len(default_results)} simulation results (no targets)...")
                 # Group SimReturn outputs by output name
+                # SimReturn.outputs is Mapping[str, TableArtifact] where
+                # TableArtifact contains Arrow IPC bytes (inline) or a ref
                 outputs_by_name: dict[str, list] = {}
                 for sim_return in default_results:
-                    if hasattr(sim_return, "outputs") and sim_return.outputs:
-                        for output_name, output_df in sim_return.outputs.items():
-                            outputs_by_name.setdefault(output_name, []).append(output_df)
+                    if not hasattr(sim_return, "outputs") or not sim_return.outputs:
+                        continue
+                    for output_name, artifact in sim_return.outputs.items():
+                        try:
+                            if hasattr(artifact, "inline") and artifact.inline:
+                                df = pl.read_ipc(artifact.inline)
+                                outputs_by_name.setdefault(output_name, []).append(df)
+                            elif hasattr(artifact, "ref") and artifact.ref:
+                                # External ref — read from provenance store
+                                local = prov_store.download(artifact.ref)
+                                df = pl.read_ipc(local)
+                                outputs_by_name.setdefault(output_name, []).append(df)
+                            else:
+                                logger.warning(f"  {output_name}: no inline or ref in artifact")
+                        except Exception as e:
+                            logger.warning(f"  {output_name}: failed to read artifact: {e}")
 
                 for output_name, dfs in outputs_by_name.items():
                     combined = pl.concat(dfs)
@@ -376,6 +391,9 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                     combined.write_parquet(local_path)
                     prov_store.upload(local_path, output_path)
                     logger.info(f"  Wrote {output_name}: {len(combined)} rows -> {output_path}")
+
+                if not outputs_by_name:
+                    logger.warning("No outputs found in simulation results")
             else:
                 logger.warning("No ProvenanceStore available or no results to write")
         except Exception as e:
