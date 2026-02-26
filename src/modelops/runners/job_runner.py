@@ -337,9 +337,48 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
             logger.error(f"Failed to write job views: {e}")
             # Don't fail the job if view writing fails
     elif not target_entrypoints:
-        logger.warning("Skipping view generation: write_job_view requires aggregated results with targets")
-        logger.info("Raw simulation data was collected but no views were written")
-        logger.info("TODO: Implement write_sim_results_view() for jobs without targets")
+        # Write model outputs for simulation-only jobs (no targets)
+        try:
+            from modelops.services.provenance_store import ProvenanceStore
+
+            prov_store = None
+            conn_str = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+            if conn_str:
+                try:
+                    prov_store = ProvenanceStore(
+                        storage_dir=Path("/tmp/modelops/provenance"),
+                        azure_backend={
+                            "container": "results",
+                            "connection_string": conn_str,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not initialize ProvenanceStore: {e}")
+
+            if prov_store and default_results:
+                import polars as pl
+
+                logger.info(f"Writing {len(default_results)} simulation results (no targets)...")
+                # Group SimReturn outputs by output name
+                outputs_by_name: dict[str, list] = {}
+                for sim_return in default_results:
+                    if hasattr(sim_return, "outputs") and sim_return.outputs:
+                        for output_name, output_df in sim_return.outputs.items():
+                            outputs_by_name.setdefault(output_name, []).append(output_df)
+
+                for output_name, dfs in outputs_by_name.items():
+                    combined = pl.concat(dfs)
+                    output_path = f"jobs/{job.job_id}/model_outputs/{output_name}.parquet"
+                    local_path = Path(f"/tmp/modelops/{job.job_id}/model_outputs/{output_name}.parquet")
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    combined.write_parquet(local_path)
+                    prov_store.upload(local_path, output_path)
+                    logger.info(f"  Wrote {output_name}: {len(combined)} rows -> {output_path}")
+            else:
+                logger.warning("No ProvenanceStore available or no results to write")
+        except Exception as e:
+            logger.error(f"Failed to write simulation results: {e}")
+            # Don't fail the job
 
     if not target_entrypoints and job.target_spec:
         # Fallback: evaluate targets on client side if not done on worker
