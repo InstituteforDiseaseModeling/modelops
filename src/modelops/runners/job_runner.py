@@ -361,6 +361,17 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
                 import polars as pl
 
                 logger.info(f"Writing {len(default_results)} simulation results (no targets)...")
+                # Debug: log what type of objects we have
+                if default_results:
+                    sample = default_results[0]
+                    logger.info(f"  Result type: {type(sample).__name__}")
+                    logger.info(f"  Result attrs: {[a for a in dir(sample) if not a.startswith('_')][:15]}")
+                    if hasattr(sample, "outputs"):
+                        logger.info(f"  outputs type: {type(sample.outputs).__name__}, len={len(sample.outputs) if sample.outputs else 0}")
+                        if sample.outputs:
+                            for k, v in list(sample.outputs.items())[:2]:
+                                logger.info(f"    {k}: type={type(v).__name__}, attrs={[a for a in dir(v) if not a.startswith('_')][:10]}")
+
                 # Group SimReturn outputs by output name
                 # SimReturn.outputs is Mapping[str, TableArtifact] where
                 # TableArtifact contains Arrow IPC bytes (inline) or a ref
