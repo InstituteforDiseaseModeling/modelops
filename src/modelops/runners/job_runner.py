@@ -339,6 +339,8 @@ def run_simulation_job(job: SimJob, client: Client) -> None:
     elif not target_entrypoints:
         # Write model outputs for simulation-only jobs (no targets)
         try:
+            from pathlib import Path
+
             from modelops.services.provenance_store import ProvenanceStore
 
             prov_store = None
